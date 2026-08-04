@@ -661,7 +661,8 @@ class TestBatchStartPlaceholder(TmpDirCase):
 
         sql = runner._expand_sql(
             "SELECT * FROM T_ORDER WHERE LAST_UPDATE >= '{batch_start}'")
-        self.assertIn("'2026-08-05 09:15:22.123'", sql)
+        # 言語設定に依存しない ISO 8601（T 区切り）で埋め込む
+        self.assertIn("'2026-08-05T09:15:22.123'", sql)
         self.assertNotIn("{batch_start}", sql)
 
     def test_falls_back_to_local_time_when_db_time_unavailable(self):
@@ -739,3 +740,115 @@ class TestServerNowParsing(unittest.TestCase):
         client = OnlyGetdate()
         self.assertIsNotNone(db_mod.server_now(client))
         self.assertTrue(any("GETDATE" in c for c in client.calls))
+
+
+# =============================================================================
+# 日付リテラルの書式（SQLSTATE 22007 / エラー 241 の回避）
+# =============================================================================
+class TestSqlDatetimeLiteral(unittest.TestCase):
+    """datetime リテラルは言語設定に依存しない書式で埋め込むこと。
+
+    'yyyy-mm-dd hh:mi:ss'（空白区切り）は datetime 型では SET LANGUAGE /
+    DATEFORMAT の影響を受け、環境によっては変換エラー（241）になる。
+    ISO 8601 の T 区切りは言語設定に依存しない。
+    """
+
+    def test_uses_iso8601_t_separator(self):
+        import datetime as _dt
+        from autotest import db as db_mod
+        got = db_mod.format_sql_datetime(_dt.datetime(2026, 8, 5, 0, 40, 47, 872000))
+        self.assertEqual(got, "2026-08-05T00:40:47.872")
+        self.assertNotIn(" ", got, "空白区切りは言語設定に依存するため使わない")
+
+    def test_conversion_error_is_diagnosed(self):
+        from autotest import db as db_mod
+        msg = ("('22007', '[22007] [Microsoft][ODBC Driver 17 for SQL Server]"
+               "文字列から日付と時刻、またはそのいずれかへの変換中に、変換が失敗しました。"
+               "(241) (SQLExecDirectW)')")
+        hints = " ".join(db_mod.diagnose_connection_error(Exception(msg)))
+        self.assertIn("日付時刻", hints)
+        self.assertIn("batch_start:%Y%m%d", hints, "char 列向けの書式指定を案内すること")
+
+
+class TestBatchStartFormatting(TmpDirCase):
+    def _runner(self):
+        from autotest.orchestrator import CaseRunner
+        return CaseRunner(self.write_settings({"log_dir": str(self.tmp)}), self.tmp)
+
+    def test_default_is_iso8601(self):
+        import datetime as _dt
+        r = self._runner()
+        r._batch_start_mark = _dt.datetime(2026, 8, 5, 0, 40, 47, 872000)
+        self.assertIn("'2026-08-05T00:40:47.872'",
+                      r._expand_sql("WHERE UPDATED_AT >= '{batch_start}'"))
+
+    def test_custom_format_for_char_columns(self):
+        """日付が char(8) に 'yyyyMMdd' で入っている列にも合わせられること。"""
+        import datetime as _dt
+        r = self._runner()
+        r._batch_start_mark = _dt.datetime(2026, 8, 5, 0, 40, 47)
+        self.assertIn("'20260805'",
+                      r._expand_sql("WHERE UPDATE_YMD >= '{batch_start:%Y%m%d}'"))
+
+    def test_custom_format_with_slashes(self):
+        import datetime as _dt
+        r = self._runner()
+        r._batch_start_mark = _dt.datetime(2026, 8, 5, 0, 40, 47)
+        self.assertIn("'2026/08/05 00:40:47'",
+                      r._expand_sql("WHERE UPD >= '{batch_start:%Y/%m/%d %H:%M:%S}'"))
+
+
+class TestQueryErrorIncludesSql(unittest.TestCase):
+    """クエリ失敗時、実際に送った SQL がエラーに含まれること。
+
+    含まれないと、プレースホルダがどう展開されたか分からず原因に辿り着けない。
+    """
+
+    def test_sql_is_in_error_message(self):
+        import sys as _sys
+        from types import ModuleType
+
+        class FailingCursor:
+            description = None
+
+            def execute(self, sql, params=None):
+                raise RuntimeError("22007 conversion failed")
+
+            def close(self):
+                pass
+
+        class FakeConn:
+            def cursor(self):
+                return FailingCursor()
+
+            def rollback(self):
+                pass
+
+            def close(self):
+                pass
+
+        fake = ModuleType("pyodbc")
+        fake.connect = lambda *a, **k: FakeConn()
+        fake.drivers = lambda: []
+        saved = _sys.modules.get("pyodbc")
+        _sys.modules["pyodbc"] = fake
+        try:
+            from autotest.db import DbError, PyodbcClient
+
+            os.environ["UT_PW2"] = "pw"
+            settings = Settings(
+                raw={"batch": {"exe_path": "x"},
+                     "database": {"server": "s", "database": "d", "user": "u",
+                                  "password_env": "UT_PW2"},
+                     "paths": {"a": "/tmp"}},
+                source=Path("s.yaml"), project_root=Path("/tmp"))
+            client = PyodbcClient(settings)
+            with self.assertRaises(DbError) as ctx:
+                client.query("SELECT * FROM T WHERE UPD >= '2026-08-05T00:40:47.872'")
+            self.assertIn("2026-08-05T00:40:47.872", str(ctx.exception),
+                          "展開後の SQL がエラーに含まれていない")
+        finally:
+            if saved is not None:
+                _sys.modules["pyodbc"] = saved
+            else:
+                _sys.modules.pop("pyodbc", None)

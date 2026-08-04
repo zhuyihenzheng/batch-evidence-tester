@@ -9,6 +9,7 @@
   - フォルダ一覧は「投入直後」と「実行後」の 2 時点を撮る。差が証跡になる。
 """
 
+import re
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,9 @@ from . import compare, db as db_mod, fsops, logs, render, screenshot
 from .config import ConfigError, Settings, TestCase
 from .models import NG, OK, SKIP, CaseResult, CheckResult, ImageEvidence, Table
 from .runner import _resolve_exe, run_batch
+
+# {batch_start} / {batch_start:%Y%m%d} の両方を受ける
+_BATCH_START_PLACEHOLDER = re.compile(r"\{batch_start(?::(?P<fmt>[^}]+))?\}")
 
 
 def preflight_case(settings: Settings, case: TestCase) -> List[str]:
@@ -418,19 +422,28 @@ class CaseRunner:
     def _expand_sql(self, sql: str) -> str:
         """スナップショット SQL のプレースホルダを展開する。
 
-        {batch_start} … batch 起動直前に DB サーバから取得した時刻。
-                        「今回の実行で更新された行だけ」を抽出するのに使う。
-        {date} 系      … 業務日付（paths や引数と同じ規則）
+        {batch_start}            … batch 起動直前に DB サーバから取得した時刻。
+                                   ISO 8601（T 区切り）で埋め込む。datetime 列と
+                                   比較する場合はこれをそのまま使う。
+        {batch_start:%Y%m%d}     … 書式指定。日付が char/varchar 列に
+                                   'yyyyMMdd' 等で入っている場合に合わせる。
+        {date} 系                 … 業務日付（paths や引数と同じ規則）
         """
         sql = self.settings.expand(sql)
-        if "{batch_start}" in sql:
-            mark = getattr(self, "_batch_start_mark", None)
-            if mark is None:
-                # DB から時刻を取れない場合（offline 等）はテスト機の時刻で代用する。
-                # 時計ずれの影響を受けるため、実 DB では server_now を優先している。
-                mark = datetime.now()
-            sql = sql.replace("{batch_start}", db_mod.format_sql_datetime(mark))
-        return sql
+        if "{batch_start" not in sql:
+            return sql
+
+        mark = getattr(self, "_batch_start_mark", None)
+        if mark is None:
+            # DB から時刻を取れない場合（offline 等）はテスト機の時刻で代用する。
+            # 時計ずれの影響を受けるため、実 DB では server_now を優先している。
+            mark = datetime.now()
+
+        def replace(m):
+            fmt = m.group("fmt")
+            return mark.strftime(fmt) if fmt else db_mod.format_sql_datetime(mark)
+
+        return _BATCH_START_PLACEHOLDER.sub(replace, sql)
 
     # ------------------------------------------------------------------
     def _log_dir_for(self, batch_name: Optional[str]) -> Path:

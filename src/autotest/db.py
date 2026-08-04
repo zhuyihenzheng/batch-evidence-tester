@@ -292,8 +292,15 @@ def server_now(client: "DbClient") -> Optional[dt.datetime]:
 
 
 def format_sql_datetime(value: dt.datetime) -> str:
-    """SQL Server のリテラルとして埋め込める形式にする（ミリ秒まで）。"""
-    return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    """SQL Server のリテラルとして埋め込める形式にする（ミリ秒まで）。
+
+    ISO 8601 の T 区切り（yyyy-mm-ddThh:mi:ss.mmm）を使う。
+    空白区切りの 'yyyy-mm-dd hh:mi:ss' は datetime 型では
+    SET LANGUAGE / DATEFORMAT の影響を受け、環境によっては
+    「文字列から日付への変換に失敗（SQLSTATE 22007 / エラー 241）」になる。
+    T 区切りは言語設定に依存しない。
+    """
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
 
 
 def list_installed_drivers() -> List[str]:
@@ -448,6 +455,12 @@ def diagnose_connection_error(exc: Exception) -> List[str]:
     elif "timeout" in text.lower() or "HYT00" in text:
         hints.append("接続がタイムアウトしました。到達できないホストか、"
                      "ファイアウォールがパケットを破棄している可能性があります。")
+    elif "22007" in text or "(241)" in text:
+        hints.append("日付時刻の文字列を DB 側で変換できませんでした。")
+        hints.append("  - 比較対象の列が datetime 型か確認してください。")
+        hints.append("    char/varchar に 'yyyyMMdd' 等で入っている場合は、書式を合わせます:")
+        hints.append("      WHERE UPDATE_YMD >= '{batch_start:%Y%m%d}'")
+        hints.append("  - 実際に送られた SQL は run.log と証跡 Excel に記録されています。")
     elif "SSL" in text or "certificate" in text.lower():
         hints.append("TLS 証明書の検証で失敗しています。"
                      "検証環境なら database.trust_server_certificate: true を試してください。")
