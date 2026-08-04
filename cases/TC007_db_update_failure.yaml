@@ -1,0 +1,72 @@
+# =============================================================================
+# TC007 異常系: DB 更新失敗（一意制約違反）
+#
+#   DB エラーの起こし方は 3 通りある。環境の制約に合わせて選ぶこと。
+#     A) 衝突データを置く（このケース）… スキーマも権限も触らない。最も安全で再現性が高い
+#     B) 権限を剥奪する（sql/TC008_setup_permission_denied.sql 参照）
+#        … 権限変更が許される環境でのみ。teardown で必ず戻すこと
+#     C) 対象テーブルを一時リネーム … 影響範囲が大きく、途中で落ちると復旧が面倒
+#
+#   ★このケースは実 DB 前提。--offline では setup SQL が実行されないため
+#     エラーが発生せず判定できない。enabled: false にしてある。
+#     実環境へ接続したら enabled: true にして使うこと。
+# =============================================================================
+id: TC007_db_update_failure
+name: "異常系：DB更新失敗（一意制約違反）"
+description: "DB 更新が失敗した場合、batch が異常終了し、ファイルをエラーフォルダへ退避し、DB がロールバックされていること"
+tags: [異常系, DB]
+enabled: false          # ← 実 DB へ接続したら true にする
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  sql:
+    - file: sql/TC007_setup_constraint_violation.sql
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: >
+        SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS, UPDATED_AT
+        FROM T_ORDER ORDER BY ORDER_ID
+
+execute:
+  args: ["--mode", "daily", "--date", "20260803"]
+
+collect:
+  files:
+    - dir: error_dir
+      pattern: "*.csv"
+      preview: true
+
+assert:
+  exit_code: 1
+
+  db:
+    # 更新が失敗したのだから、DB は setup 直後の状態から変化していないこと。
+    # ここが「ロールバックされているか」の検証になる（部分コミットの検出）
+    - table: T_ORDER
+      expected: "expected/TC007_db_update_failure/db_T_ORDER.csv"
+      key: [ORDER_ID]
+      ignore_columns: [UPDATED_AT]
+
+  files:
+    - name: "エラーフォルダへの退避"
+      exists: {dir: error_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "処理済フォルダへ移動していないこと"
+      exists: {dir: processed_dir, pattern: "*", count: 0}
+    - name: "結果ファイルが出力されないこと"
+      exists: {dir: output_dir, pattern: "RESULT_*.csv", count: 0}
+
+  log:
+    # 実際の batch が出すメッセージに合わせて調整すること
+    must_contain: ["処理異常終了"]
+    must_not_contain: ["処理正常終了"]
+
+# 注入したダミーデータを片付ける。teardown を書かないと後続ケースが
+# 「既にデータがある」状態から始まってしまう
+teardown:
+  sql:
+    - file: sql/TC007_teardown.sql

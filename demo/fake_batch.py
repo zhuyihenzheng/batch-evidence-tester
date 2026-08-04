@@ -31,11 +31,23 @@ def main() -> int:
     root = Path(args.root)
     in_dir, processed_dir = root / "in", root / "processed"
     error_dir, out_dir, log_dir = root / "error", root / "out", root / "log"
-    for d in (in_dir, processed_dir, error_dir, out_dir, log_dir):
-        d.mkdir(parents=True, exist_ok=True)
 
+    # ログフォルダだけは自前で作る（作れないとエラーも記録できないため）
+    log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"batch_{args.date}.log"
     log(log_path, f"処理開始 mode={args.mode} date={args.date}")
+
+    # 入出力フォルダは「あるはず」の前提で動く。無ければ異常終了する。
+    # 実際の batch でもフォルダ不在は環境不備として異常終了させる作りが多い
+    for label, d in (("入力", in_dir), ("出力", out_dir),
+                     ("処理済", processed_dir), ("エラー", error_dir)):
+        if not d.is_dir():
+            msg = f"{label}フォルダが存在しません: {d}"
+            print(f"[ERROR] {msg}", file=sys.stderr)
+            with log_path.open("a", encoding="utf-8") as lf:
+                lf.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} [ERROR] {msg}\n")
+                lf.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} [INFO] 処理異常終了\n")
+            return 2
 
     targets = sorted(in_dir.glob("*.csv"))
     log(log_path, f"対象ファイル数={len(targets)}")

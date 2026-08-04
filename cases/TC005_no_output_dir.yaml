@@ -1,0 +1,39 @@
+# =============================================================================
+# TC005 異常系: 出力フォルダが存在しない
+#   環境不備の再現。setup.remove_dirs でフォルダごと消してから batch を起動する。
+#   通常 paths のフォルダは自動作成されるが、remove_dirs に挙げたものは
+#   自動作成の対象外になる。
+# =============================================================================
+id: TC005_no_output_dir
+name: "異常系：出力フォルダが存在しない"
+description: "出力先フォルダが無い状態で起動した場合、ファイルを出力せず異常終了し、ログにフォルダ不在を記録すること"
+tags: [異常系, 環境不備]
+enabled: true
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir]
+  remove_dirs: [output_dir]          # ← フォルダごと削除（自動作成もされない）
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+
+execute:
+  args: ["--mode", "daily", "--date", "20260803"]
+
+collect:
+  # 出力フォルダは存在しない想定なので、証跡は投入フォルダ側だけ撮る
+  folder_evidence: [input_dir, processed_dir, error_dir]
+
+assert:
+  exit_code: 2                       # フォルダ不在は終了コード 2 で異常終了する仕様
+
+  files:
+    # 異常終了なので、投入ファイルは処理されず投入フォルダに残ったままであること
+    - name: "投入ファイルが未処理のまま残ること"
+      exists: {dir: input_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "処理済フォルダへ移動していないこと"
+      exists: {dir: processed_dir, pattern: "*", count: 0}
+
+  log:
+    must_contain: ["出力フォルダが存在しません", "処理異常終了"]
+    must_not_contain: ["処理正常終了"]

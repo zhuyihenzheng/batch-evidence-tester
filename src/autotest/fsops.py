@@ -212,6 +212,37 @@ def ensure_dirs(settings: Settings, aliases: List[str]) -> None:
         settings.resolve_dir(alias).mkdir(parents=True, exist_ok=True)
 
 
+def remove_dir(settings: Settings, alias: str, dry_run: bool = False) -> bool:
+    """フォルダ自体を削除する。「出力先フォルダが無い」異常系の再現に使う。
+
+    clear_dir が中身だけ消すのに対し、こちらはフォルダごと消す。
+    削除可否の判定は clear_dir と同じ安全チェックを通す。
+    戻り値は実際に削除したか（元から無ければ False）。
+    """
+    aliases = settings.path_aliases
+    if alias not in aliases:
+        raise ConfigError(
+            "削除対象 '%s' は settings.paths に未定義です。定義済み: %s"
+            % (alias, sorted(aliases))
+        )
+    directory = aliases[alias]
+    assert_safe_to_clear(directory, settings.project_root)
+
+    if not directory.exists():
+        return False
+    if dry_run:
+        return True
+    try:
+        _rmtree(directory)
+    except OSError as exc:
+        raise ConfigError(
+            "%s の削除に失敗しました: %s\n"
+            "  batch 本体・エクスプローラー・エディタが掴んでいないか確認してください。"
+            % (directory, exc)
+        ) from exc
+    return True
+
+
 def put_input_files(
     settings: Settings,
     case_dir: Path,

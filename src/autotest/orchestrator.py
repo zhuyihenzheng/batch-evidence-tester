@@ -54,15 +54,27 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
 
     aliases = settings.path_aliases
 
-    # --- clean_dirs: 論理名の存在と、解決後パスの安全性 ---------------------
-    for alias in (case.setup or {}).get("clean_dirs", []):
-        if alias not in aliases:
-            problems.append("setup.clean_dirs の論理名が paths に未定義です: %s" % alias)
-            continue
-        try:
-            fsops.assert_safe_to_clear(aliases[alias], settings.project_root)
-        except ConfigError as exc:
-            problems.append(str(exc))
+    # --- clean_dirs / remove_dirs: 論理名の存在と、解決後パスの安全性 --------
+    for key in ("clean_dirs", "remove_dirs"):
+        for alias in (case.setup or {}).get(key, []):
+            if alias not in aliases:
+                problems.append("setup.%s の論理名が paths に未定義です: %s" % (key, alias))
+                continue
+            try:
+                fsops.assert_safe_to_clear(aliases[alias], settings.project_root)
+            except ConfigError as exc:
+                problems.append(str(exc))
+
+    # remove_dirs で消すフォルダへファイルを投入すると、投入時に再作成されて
+    # 「フォルダが無い」状態を作れない。設定の矛盾として先に弾く
+    removing = set((case.setup or {}).get("remove_dirs", []))
+    for spec in (case.setup or {}).get("input_files", []):
+        dest = spec.get("dest_dir", "input_dir")
+        if dest in removing:
+            problems.append(
+                "setup.remove_dirs に %s があるのに、同じフォルダへ input_files を投入しています。"
+                "投入時にフォルダが再作成されるため「フォルダ無し」の再現になりません。" % dest
+            )
 
     # --- setup の資材 -------------------------------------------------------
     for sql_spec in (case.setup or {}).get("sql", []):
@@ -188,10 +200,17 @@ class CaseRunner:
     def _setup(self, case: TestCase, client: db_mod.DbClient) -> None:
         setup = case.setup or {}
 
-        fsops.ensure_dirs(self.settings, list(self.settings.path_aliases))
+        # remove_dirs で「フォルダが存在しない」状態を作る異常系があるため、
+        # そのフォルダは自動作成の対象から外す（作った直後に消すのは無駄で紛らわしい）
+        removing = set(setup.get("remove_dirs", []))
+        fsops.ensure_dirs(self.settings, [a for a in self.settings.path_aliases if a not in removing])
 
         for alias in setup.get("clean_dirs", []):
             fsops.clear_dir(self.settings, alias, dry_run=self.dry_run)
+
+        # フォルダごと削除。batch が「出力先が無い」ときにどう振る舞うかを試す
+        for alias in setup.get("remove_dirs", []):
+            fsops.remove_dir(self.settings, alias, dry_run=self.dry_run)
 
         for sql_spec in setup.get("sql", []):
             if isinstance(sql_spec, str):

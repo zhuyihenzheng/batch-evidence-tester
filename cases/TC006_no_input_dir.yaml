@@ -1,0 +1,33 @@
+# =============================================================================
+# TC006 異常系: 入力フォルダが存在しない
+#   remove_dirs で入力フォルダごと削除する。
+#   ※ 同じフォルダへ input_files を投入すると投入時に再作成されてしまうため、
+#     このケースでは input_files を書かない（preflight が矛盾として検出する）。
+# =============================================================================
+id: TC006_no_input_dir
+name: "異常系：入力フォルダが存在しない"
+description: "入力フォルダが無い状態で起動した場合、異常終了しログにフォルダ不在を記録すること"
+tags: [異常系, 環境不備]
+enabled: true
+
+setup:
+  clean_dirs: [processed_dir, error_dir, output_dir]
+  remove_dirs: [input_dir]
+  # input_files は書かない（投入するとフォルダが再作成されてしまう）
+
+execute:
+  args: ["--mode", "daily", "--date", "20260803"]
+
+collect:
+  folder_evidence: [processed_dir, error_dir, output_dir]
+
+assert:
+  exit_code: 2
+
+  files:
+    - name: "結果ファイルが出力されないこと"
+      exists: {dir: output_dir, pattern: "RESULT_*.csv", count: 0}
+
+  log:
+    must_contain: ["入力フォルダが存在しません", "処理異常終了"]
+    must_not_contain: ["処理正常終了"]
