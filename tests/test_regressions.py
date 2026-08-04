@@ -359,3 +359,45 @@ class TestConnectionDiagnosis(unittest.TestCase):
         self.assertIn("s3cr3t-value", conn_str)      # 実際の接続には使う
         self.assertNotIn("s3cr3t-value", shown)      # 表示には出さない
         self.assertIn("PWD=********", shown)
+
+
+# =============================================================================
+# 接続先文字列の解釈（SQL Server 特有の記法）
+# =============================================================================
+class TestServerStringParsing(unittest.TestCase):
+    """SQL Server の接続先はポート区切りがコロンではなくカンマ。
+
+    ここを取り違えると、到達確認が誤ったホスト/ポートを見て
+    「繋がらない理由」を誤診断してしまう。
+    """
+
+    def _parse(self, text):
+        from autotest import db as db_mod
+        return db_mod.parse_server(text)
+
+    def test_bare_host_uses_default_port(self):
+        self.assertEqual(self._parse("SQLSRV01"), ("SQLSRV01", 1433, None))
+
+    def test_explicit_port(self):
+        self.assertEqual(self._parse("SQLSRV01,14330"), ("SQLSRV01", 14330, None))
+
+    def test_named_instance_has_dynamic_port(self):
+        host, port, inst = self._parse("SQLSRV01\\SQLEXPRESS")
+        self.assertEqual((host, inst), ("SQLSRV01", "SQLEXPRESS"))
+        self.assertIsNone(port, "名前付きインスタンスのポートを 1433 と決めつけてはいけない")
+
+    def test_named_instance_with_explicit_port(self):
+        self.assertEqual(self._parse("SQLSRV01\\SQLEXPRESS,49172"),
+                         ("SQLSRV01", 49172, "SQLEXPRESS"))
+
+    def test_rds_endpoint(self):
+        host, port, inst = self._parse("db1.abc123.ap-northeast-1.rds.amazonaws.com,1433")
+        self.assertEqual(port, 1433)
+        self.assertTrue(host.endswith("rds.amazonaws.com"))
+        self.assertIsNone(inst)
+
+    def test_colon_is_not_a_port_separator(self):
+        """コロン区切りは SQL Server の記法ではない。ホスト名の一部として扱われる。"""
+        host, port, _inst = self._parse("SQLSRV01:1433")
+        self.assertEqual(host, "SQLSRV01:1433")
+        self.assertEqual(port, 1433, "既定ポートが補われること（実際の接続は失敗する想定）")

@@ -274,6 +274,60 @@ def list_installed_drivers() -> List[str]:
         return []
 
 
+def parse_server(server: str) -> Tuple[str, Optional[int], Optional[str]]:
+    """SQL Server の接続先文字列を (ホスト, ポート, 名前付きインスタンス) に分解する。
+
+    SQL Server の記法はポート区切りがコロンではなくカンマ:
+        SQLSRV01              -> 既定インスタンス。既定ポート 1433
+        SQLSRV01,1433         -> ポート明示
+        SQLSRV01\\SQLEXPRESS  -> 名前付きインスタンス。ポートは動的で、
+                                 SQL Server Browser (UDP 1434) 経由で解決される
+    """
+    text = str(server).strip()
+    instance = None
+    port = None
+
+    if "," in text:
+        text, port_text = text.split(",", 1)
+        try:
+            port = int(port_text.strip())
+        except ValueError:
+            port = None
+    if "\\" in text:
+        text, instance = text.split("\\", 1)
+
+    host = text.strip()
+    if port is None and instance is None:
+        port = 1433  # 既定インスタンスの既定ポート
+    return host, port, instance
+
+
+def check_tcp_reachable(host: str, port: int, timeout_sec: float = 5.0) -> Tuple[bool, str]:
+    """TCP レベルで到達できるかを確認する。
+
+    ODBC のエラーメッセージは原因が読み取りにくいため、先に素の TCP で
+    「そもそもネットワークが通っているか」を切り分ける。ここが NG なら
+    ドライバや認証情報をいくら見直しても無駄だと分かる。
+    """
+    import socket  # noqa: PLC0415
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout_sec)
+    try:
+        sock.connect((host, port))
+        return True, ""
+    except socket.timeout:
+        return False, "タイムアウト（%.0f 秒）: パケットが破棄されている可能性（ファイアウォール/セキュリティグループ）" % timeout_sec
+    except socket.gaierror as exc:
+        return False, "ホスト名を解決できません: %s" % exc
+    except ConnectionRefusedError:
+        return False, "接続を拒否されました: ホストには届いているが、そのポートで待ち受けていない"
+    except OSError as exc:
+        return False, str(exc)
+    finally:
+        sock.close()
+
+
 def build_connection_string(settings: Settings, timeout_sec: Optional[int] = None) -> Tuple[str, str]:
     """(接続文字列, パスワードを伏せた表示用文字列) を返す。"""
     db = settings.database

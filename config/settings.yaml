@@ -77,7 +77,15 @@ folder_evidence:
 #   例) setx AUTOTEST_DB_PASSWORD "xxxxx"
 # -----------------------------------------------------------------------------
 database:
+  # 端末に入っているドライバ名と一致させること（dbcheck が一覧を出す）。
+  # 古い環境では "ODBC Driver 17 for SQL Server" のことが多い
   driver: "ODBC Driver 18 for SQL Server"
+  # ★ ポート区切りはコロンではなくカンマ。既定インスタンスの既定ポートは 1433
+  #     既定インスタンス      : "SQLSRV01"  または "SQLSRV01,1433"
+  #     ポート変更済み        : "SQLSRV01,14330"
+  #     名前付きインスタンス   : "SQLSRV01\\SQLEXPRESS"（UDP 1434 が通る必要あり）
+  #     名前付き＋固定ポート   : "SQLSRV01,49172"（Browser に依存せず確実）
+  #     AWS RDS              : "xxx.xxxx.ap-northeast-1.rds.amazonaws.com,1433"
   server: "localhost,1433"
   database: "BATCH_DB"
   auth: "sql"                    # sql | windows

@@ -85,6 +85,29 @@ def _dbcheck(settings, timeout_sec: int = 10) -> int:
     print("  認証方式   : %s" % ("Windows 認証" if auth == "windows" else "SQL Server 認証（ユーザー: %s）" % db.get("user")))
     print("  ドライバ   : %s" % db.get("driver"))
 
+    # --- TCP 到達性を先に見る -----------------------------------------------
+    # ODBC のエラーは原因が読み取りにくいので、ネットワークの問題かどうかを
+    # ここで切り分けておく。ここが NG ならドライバも認証情報も関係ない。
+    host, port, instance = db_mod.parse_server(str(db.get("server", "")))
+    if instance and port is None:
+        print("\n  名前付きインスタンス '%s' はポートが動的です。" % instance)
+        print("  SQL Server Browser (UDP 1434) 経由で解決されるため、TCP 事前確認は省略します。")
+        print("  接続が不安定な場合は固定ポートを割り当て、server: \"%s,<ポート>\" と書く方が確実です。" % host)
+    elif host and port:
+        print("\n  TCP 到達確認 : %s:%d" % (host, port))
+        ok, reason = db_mod.check_tcp_reachable(host, port, timeout_sec=min(5, timeout_sec))
+        if ok:
+            print("    [OK] ポートまで到達できています")
+        else:
+            print("    [NG] %s" % reason)
+            print("\n  ネットワーク層で止まっています。次を確認してください:")
+            print("    - サーバ名 / ポートの誤り（SQL Server はコロンではなくカンマ区切り: host,1433）")
+            print("    - セキュリティグループ / ファイアウォールで %d 番が開いているか" % port)
+            print("    - SQL Server 側で TCP/IP プロトコルが有効か")
+            print("    - Windows 側からは次で追加確認できます:")
+            print("        Test-NetConnection -ComputerName %s -Port %d" % (host, port))
+            return 1
+
     # --- pyodbc の有無 ------------------------------------------------------
     try:
         import pyodbc  # noqa: F401,PLC0415
