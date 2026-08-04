@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from PIL import Image as PILImage
 
-from .models import ERROR, NG, OK, SKIP, CaseResult, RunResult, Table
+from .models import ERROR, NG, OK, REVIEW, SKIP, CaseResult, RunResult, Table
 
 # XML に書けない制御文字。DB 値やログに \x00 等が混ざっていると openpyxl が
 # IllegalCharacterError を投げ、証跡簿全体が生成できなくなるため置換する
@@ -59,6 +59,8 @@ FILL_LABEL = PatternFill("solid", fgColor="F2F2F2")
 FILL_ERROR = PatternFill("solid", fgColor="FFD6D6")
 FILL_WARN = PatternFill("solid", fgColor="FFF0CC")
 FILL_HIT = PatternFill("solid", fgColor="DDEBF7")
+FILL_REVIEW = PatternFill("solid", fgColor="FFE4B5")   # 人の確認待ち
+FILL_INPUT = PatternFill("solid", fgColor="FFFFCC")    # 人が書き込む欄
 
 # Table.cell_marks の値 -> セル塗り
 MARK_FILL = {
@@ -72,12 +74,13 @@ MARK_FILL = {
 FONT_OK = Font(name="Meiryo UI", size=9, bold=True, color="006100")
 FONT_NG = Font(name="Meiryo UI", size=9, bold=True, color="9C0006")
 FONT_SKIP = Font(name="Meiryo UI", size=9, bold=True, color="808080")
+FONT_REVIEW = Font(name="Meiryo UI", size=9, bold=True, color="9C5700")
 
 _thin = Side(style="thin", color="BFBFBF")
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
-VERDICT_FILL = {OK: FILL_OK, NG: FILL_NG, ERROR: FILL_NG, SKIP: FILL_SKIP}
-VERDICT_FONT = {OK: FONT_OK, NG: FONT_NG, ERROR: FONT_NG, SKIP: FONT_SKIP}
+VERDICT_FILL = {OK: FILL_OK, NG: FILL_NG, ERROR: FILL_NG, SKIP: FILL_SKIP, REVIEW: FILL_REVIEW}
+VERDICT_FONT = {OK: FONT_OK, NG: FONT_NG, ERROR: FONT_NG, SKIP: FONT_SKIP, REVIEW: FONT_REVIEW}
 
 MAX_COL_WIDTH = 60
 PX_PER_ROW = 19  # 既定行高 (pt) をピクセル換算した概算。画像の占有行数計算に使う
@@ -137,7 +140,7 @@ def _write_summary_sheet(ws: Worksheet, run: RunResult, sheet_names: Dict[str, s
         ("終了日時", run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-"),
         ("実行対象", run.filter_description or "全ケース（絞り込みなし）"),
         ("実行ケース数", _case_count_text(run)),
-        ("OK / NG", f"{run.ok_count} / {run.ng_count}"),
+        ("OK / NG / 要確認", f"{run.ok_count} / {run.ng_count} / {run.review_count}"),
     ]
     row = 3
     for label, value in meta:
@@ -160,7 +163,7 @@ def _write_summary_sheet(ws: Worksheet, run: RunResult, sheet_names: Dict[str, s
     v.border = BORDER
 
     row += 2
-    headers = ["No", "ケースID", "ケース名", "区分", "判定", "NG件数", "終了コード", "所要(秒)", "実行日時", "証跡シート"]
+    headers = ["No", "ケースID", "ケース名", "区分", "判定", "NG件数", "要確認", "終了コード", "所要(秒)", "実行日時", "証跡シート"]
     _write_header_row(ws, row, headers)
     row += 1
 
@@ -173,6 +176,7 @@ def _write_summary_sheet(ws: Worksheet, run: RunResult, sheet_names: Dict[str, s
             " / ".join(case.tags),
             case.verdict,
             case.ng_count,
+            case.review_count,
             "TIMEOUT" if exec_info.timed_out else (exec_info.exit_code if exec_info.exit_code is not None else "-"),
             round(exec_info.elapsed_sec, 2),
             exec_info.started_at.strftime("%m-%d %H:%M:%S") if exec_info.started_at else "-",
@@ -188,15 +192,15 @@ def _write_summary_sheet(ws: Worksheet, run: RunResult, sheet_names: Dict[str, s
         verdict_cell.font = VERDICT_FONT[case.verdict]
         verdict_cell.alignment = Alignment(horizontal="center")
 
-        link_cell = ws.cell(row, 10)
+        link_cell = ws.cell(row, 11)
         sheet = sheet_names.get(case.case_id)
         if sheet:
             link_cell.hyperlink = f"#'{sheet}'!A1"
             link_cell.font = F_LINK
         row += 1
 
-    ws.auto_filter.ref = f"A{row - len(run.cases) - 1}:J{row - 1}"
-    _set_widths(ws, [5, 14, 38, 14, 8, 8, 11, 10, 16, 14])
+    ws.auto_filter.ref = f"A{row - len(run.cases) - 1}:K{row - 1}"
+    _set_widths(ws, [5, 14, 38, 14, 8, 8, 8, 11, 10, 16, 14])
     if (cfg or {}).get("freeze_header", True):
         ws.freeze_panes = ws.cell(row - len(run.cases), 1)
 
@@ -261,7 +265,12 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
 
     # --- 判定明細 ---------------------------------------------------------
     row = _section(ws, row, section_no.next("判定明細"))
-    _write_header_row(ws, row, ["No", "確認項目", "分類", "判定", "内容"])
+    # 要確認の項目がある場合だけ、人が書き込む欄を用意する
+    has_review = any(c.needs_review for c in case.checks)
+    headers = ["No", "確認項目", "分類", "自動判定", "内容"]
+    if has_review:
+        headers += ["確認結果", "確認者", "確認日"]
+    _write_header_row(ws, row, headers)
     row += 1
     for i, check in enumerate(case.checks, start=1):
         for col, value in enumerate([i, check.name, check.category, check.verdict, check.detail], start=1):
@@ -273,9 +282,25 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
         vc.fill = VERDICT_FILL.get(check.verdict, FILL_SKIP)
         vc.font = VERDICT_FONT.get(check.verdict, FONT_SKIP)
         vc.alignment = Alignment(horizontal="center")
+
+        if has_review:
+            # 要確認の行だけ記入欄を色付けする。自動判定済みの行は塗らない
+            for col in range(6, 9):
+                cell = ws.cell(row, col, "")
+                cell.border = BORDER
+                if check.needs_review:
+                    cell.fill = FILL_INPUT
         row += 1
     if not case.checks:
         ws.cell(row, 1, "（判定項目なし: 証跡採取のみ）").font = F_BODY
+        row += 1
+    if has_review:
+        note = ws.cell(row, 1,
+                       "※「要確認」の項目は自動判定では確定しません。"
+                       "下の証跡（DB スナップショット・実行ログ・証跡画像）を確認のうえ、"
+                       "黄色の欄に確認結果（OK/NG）・確認者・確認日を記入してください。")
+        note.font = Font(name="Meiryo UI", size=9, color="9C5700")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
         row += 1
     row += 1
 

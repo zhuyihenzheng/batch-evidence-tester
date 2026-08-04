@@ -354,9 +354,16 @@ def restore_files(replaced: List[ReplacedFile]) -> List[str]:
     problems: List[str] = []
     for item in replaced:
         try:
-            if item.backup is not None and item.backup.exists():
+            if item.existed:
+                # 元ファイルがあったなら、退避から必ず書き戻す。
+                # 退避が失われていたら黙って諦めず、変更が残っている事実を報告する
+                if item.backup is None or not item.backup.exists():
+                    problems.append(
+                        "%s の退避ファイルが見つからず復元できませんでした（差し替えたまま残っています）"
+                        % item.dest)
+                    continue
                 shutil.copy2(item.backup, item.dest)
-            elif not item.existed and item.dest.exists():
+            elif item.dest.exists():
                 # 元々無かったファイルなので、差し替えで作った分を消す
                 item.dest.unlink()
         except OSError as exc:

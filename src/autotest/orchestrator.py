@@ -17,7 +17,7 @@ from typing import List, Optional, Tuple
 
 from . import compare, db as db_mod, fsops, logs, render, screenshot
 from .config import ConfigError, Settings, TestCase
-from .models import NG, OK, SKIP, CaseResult, CheckResult, ImageEvidence, Table
+from .models import NG, OK, REVIEW, SKIP, CaseResult, CheckResult, ImageEvidence, Table
 from .runner import _resolve_exe, run_batch
 
 # {batch_start} / {batch_start:%Y%m%d} の両方を受ける
@@ -165,6 +165,19 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
             problems.append("assert.files の dir 論理名が paths に未定義です: %s" % actual_spec.get("dir"))
 
     return problems
+
+
+def _apply_manual(check: CheckResult, manual: bool) -> CheckResult:
+    """manual 指定なら、自動判定が OK でも確定させず「要確認」にする。
+
+    自動比較の結果は detail に残すので、人はそれを踏まえて判断できる。
+    NG はそのまま NG（人の確認を待たずに問題として扱う）。
+    """
+    if not manual or check.verdict != OK:
+        return check
+    check.verdict = REVIEW
+    check.detail = "自動比較は一致（%s）。最終判定は目視で行ってください。" % check.detail
+    return check
 
 
 class CaseRunner:
@@ -652,19 +665,27 @@ class CaseRunner:
                     )
                 )
                 continue
+            manual = bool(item.get("manual"))
+
+            # 期待値なしで manual: true の場合、自動比較はせず証跡だけ残して人が見る
+            if manual and not item.get("expected"):
+                checks.append(CheckResult(
+                    f"DB確認: {table_name}", "db", REVIEW,
+                    "自動判定なし。実行前後のスナップショットを目視で確認してください。"))
+                continue
+
             expected_path = self.settings.project_root / item["expected"]
             try:
                 expected = db_mod.read_expected_csv(expected_path)
             except ConfigError as exc:
                 checks.append(CheckResult(f"DB照合: {table_name}", "db", NG, str(exc)))
                 continue
-            checks.append(
-                compare.compare_db_table(
-                    table_name, actual, expected,
-                    keys=list(item.get("key") or []),
-                    ignore_columns=list(item.get("ignore_columns") or []),
-                )
+            result_check = compare.compare_db_table(
+                table_name, actual, expected,
+                keys=list(item.get("key") or []),
+                ignore_columns=list(item.get("ignore_columns") or []),
             )
+            checks.append(_apply_manual(result_check, manual))
         return checks
 
     def _assert_files(self, spec: dict) -> List[CheckResult]:
@@ -700,16 +721,24 @@ class CaseRunner:
                 )
                 continue
             actual_path = matches[0]
+            manual = bool(item.get("manual"))
+
+            # 期待値なしで manual: true の場合、内容を証跡に残して人が判断する
+            if manual and not item.get("expected"):
+                checks.append(CheckResult(
+                    f"ファイル確認: {name}", "file", REVIEW,
+                    f"自動判定なし。出力内容を目視で確認してください: {actual_path.name}"))
+                continue
+
             expected_path = self.settings.project_root / item["expected"]
             encoding = item.get("encoding", "utf-8")
             actual_text = fsops.read_text_file(actual_path, encoding, ["cp932", "utf-8"])
-            checks.append(
+            checks.append(_apply_manual(
                 compare.compare_text_file(
                     name, actual_path, expected_path,
                     actual_text=actual_text,
                     ignore_line_patterns=item.get("ignore_line_patterns"),
-                )
-            )
+                ), manual))
         return checks
 
     def _assert_file_exists(self, name: str, exists_spec: dict) -> CheckResult:

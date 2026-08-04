@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from .config import ConfigError, load_cases, load_settings
 from .excel import build_workbook
-from .models import OK, RunResult
+from .models import OK, REVIEW, RunResult
 from .orchestrator import CaseRunner
 from .runner import _resolve_exe
 
@@ -475,12 +475,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"実行ログ : {run_dir / 'run.log'}")
         return 1 if failed else 0
 
-    print(f"総合判定 : {run.verdict}   OK {run.ok_count} / NG {run.ng_count}")
+    print(f"総合判定 : {run.verdict}   OK {run.ok_count} / NG {run.ng_count} / 要確認 {run.review_count}")
     if run.verdict == "SKIP":
         print("※ 実際に判定されたケースがありません（全件 SKIP）。終了コードは 1 になります。")
+    if run.review_count:
+        print(f"※ {run.review_count} 件が人の確認待ちです。証跡 Excel の黄色い欄に")
+        print("   確認結果を記入してください。確認が済むまで合格とはしません（終了コード 3）。")
     print(f"証跡Excel: {excel_path}")
     print(f"証跡画像 : {run_dir / 'evidence'}")
     print(f"回収物   : {run_dir / 'artifacts'}")
+    # 要確認は「まだ確定していない」状態。NG（1）とも成功（0）とも区別できるよう
+    # 専用の終了コードにする。CI 側で「人の確認待ち」を検知できる
+    if run.verdict == REVIEW:
+        return 3
     return 0 if run.verdict == OK else 1
 
 

@@ -16,6 +16,9 @@ OK = "OK"
 NG = "NG"
 SKIP = "SKIP"
 ERROR = "ERROR"
+# 自動判定だけでは確定させず、人が証跡を見て最終判定する項目。
+# 自動比較の結果があっても OK にはせず、確認待ちとして残す。
+REVIEW = "要確認"
 
 
 class Table:
@@ -76,6 +79,10 @@ class CheckResult:
     @property
     def is_ng(self) -> bool:
         return self.verdict in (NG, ERROR)
+
+    @property
+    def needs_review(self) -> bool:
+        return self.verdict == REVIEW
 
 
 class ExecutionInfo:
@@ -140,6 +147,9 @@ class CaseResult:
             return SKIP
         if any(c.is_ng for c in self.checks):
             return NG
+        # 人の確認待ちが 1 つでもあれば、ケース全体を確定させない
+        if any(c.needs_review for c in self.checks):
+            return REVIEW
         if all(c.verdict == SKIP for c in self.checks):
             return SKIP
         return OK
@@ -147,6 +157,10 @@ class CaseResult:
     @property
     def ng_count(self) -> int:
         return sum(1 for c in self.checks if c.is_ng)
+
+    @property
+    def review_count(self) -> int:
+        return sum(1 for c in self.checks if c.needs_review)
 
 
 class RunResult:
@@ -200,6 +214,13 @@ class RunResult:
             return NG
         if not self.cases:
             return SKIP
+        # 確認待ちが残っている間は合格にしない（人が見て初めて確定する）
+        if any(c.verdict == REVIEW for c in self.cases):
+            return REVIEW
         if all(c.verdict == SKIP for c in self.cases):
             return SKIP
         return OK
+
+    @property
+    def review_count(self) -> int:
+        return sum(1 for c in self.cases if c.verdict == REVIEW)

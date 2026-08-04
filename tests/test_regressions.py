@@ -977,6 +977,9 @@ class TestReplaceFiles(TmpDirCase):
         problems = fsops.restore_files(replaced)
         self.assertEqual((batch_dir / "second.config").read_text(encoding="utf-8"), "ORIG2",
                          "2 件目が戻っていない")
+        # 戻せなかった事実を黙って握りつぶさないこと（環境が変更されたまま残る）
+        self.assertTrue(problems, "復元失敗が報告されていない")
+        self.assertIn("OrderBatch.exe.config", " ".join(problems))
 
     def test_preflight_rejects_cleaning_the_replace_target(self):
         """差し替え先を clean_dirs に入れる矛盾を検出すること。"""
@@ -1185,3 +1188,96 @@ class TestFilteredRunEvidence(TmpDirCase):
         self.assertNotIn("/", slug)
         self.assertNotIn("\\\\", slug)
         self.assertIn("tag-", slug)
+
+
+# =============================================================================
+# 人による最終確認（manual: true）
+# =============================================================================
+class TestManualReview(unittest.TestCase):
+    """自動判定だけで確定させず、人が証跡を見て判定する項目を扱えること。"""
+
+    def _check(self, verdict, detail="d"):
+        return compare.CheckResult("c", "db", verdict, detail)
+
+    def test_ok_becomes_review_when_manual(self):
+        from autotest.models import REVIEW
+        from autotest.orchestrator import _apply_manual
+        got = _apply_manual(self._check(OK, "2 件一致"), manual=True)
+        self.assertEqual(got.verdict, REVIEW)
+        self.assertIn("2 件一致", got.detail, "自動比較の結果は残すこと")
+        self.assertIn("目視", got.detail)
+
+    def test_ng_stays_ng_even_when_manual(self):
+        """NG は人の確認を待たずに問題として扱うこと。"""
+        from autotest.orchestrator import _apply_manual
+        self.assertEqual(_apply_manual(self._check(NG), manual=True).verdict, NG)
+
+    def test_untouched_when_not_manual(self):
+        from autotest.orchestrator import _apply_manual
+        self.assertEqual(_apply_manual(self._check(OK), manual=False).verdict, OK)
+
+    def test_case_verdict_is_review_when_any_check_pending(self):
+        from autotest.models import REVIEW
+        case = CaseResult(case_id="T", name="T")
+        case.checks.append(self._check(OK))
+        case.checks.append(self._check(REVIEW))
+        self.assertEqual(case.verdict, REVIEW)
+        self.assertEqual(case.review_count, 1)
+
+    def test_ng_takes_precedence_over_review(self):
+        """NG と要確認が混在したら NG。合格でないことを優先して示す。"""
+        from autotest.models import REVIEW
+        case = CaseResult(case_id="T", name="T")
+        case.checks.append(self._check(REVIEW))
+        case.checks.append(self._check(NG))
+        self.assertEqual(case.verdict, NG)
+
+    def test_run_verdict_is_review(self):
+        from autotest.models import REVIEW, RunResult
+        run = RunResult(run_id="r", started_at=datetime.now())
+        ok_case = CaseResult(case_id="A", name="A")
+        ok_case.checks.append(self._check(OK))
+        pending = CaseResult(case_id="B", name="B")
+        pending.checks.append(self._check(REVIEW))
+        run.cases.extend([ok_case, pending])
+        self.assertEqual(run.verdict, REVIEW, "確認待ちが残る間は合格にしない")
+        self.assertEqual(run.review_count, 1)
+
+    def test_review_run_is_not_ok(self):
+        from autotest.models import REVIEW
+        self.assertNotEqual(REVIEW, OK)
+
+
+class TestManualReviewExcel(TmpDirCase):
+    def _build(self, verdicts):
+        from openpyxl import load_workbook
+        from autotest.excel import build_workbook
+        from autotest.models import RunResult
+
+        run = RunResult(run_id="ut", started_at=datetime.now(), finished_at=datetime.now())
+        case = CaseResult(case_id="TC", name="TC")
+        for v in verdicts:
+            case.checks.append(compare.CheckResult("chk-" + v, "db", v, "detail"))
+        run.cases.append(case)
+        out = self.tmp / "e.xlsx"
+        build_workbook(run, out, {})
+        return load_workbook(out)["TC"]
+
+    def test_input_columns_added_when_review_exists(self):
+        from autotest.models import REVIEW
+        ws = self._build([OK, REVIEW])
+        headers = {c.value for row in ws.iter_rows() for c in row
+                   if c.value in ("確認結果", "確認者", "確認日")}
+        self.assertEqual(headers, {"確認結果", "確認者", "確認日"})
+
+    def test_no_input_columns_without_review(self):
+        ws = self._build([OK, OK])
+        headers = [c.value for row in ws.iter_rows() for c in row if c.value == "確認結果"]
+        self.assertEqual(headers, [], "確認待ちが無いのに記入欄を出さないこと")
+
+    def test_guidance_note_present(self):
+        from autotest.models import REVIEW
+        ws = self._build([REVIEW])
+        texts = [str(c.value) for row in ws.iter_rows() for c in row
+                 if isinstance(c.value, str) and "要確認" in c.value and "記入" in c.value]
+        self.assertTrue(texts, "確認手順の案内が出ていない")
