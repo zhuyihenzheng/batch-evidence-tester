@@ -7,6 +7,8 @@
 """
 
 import os
+import re
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -15,6 +17,32 @@ import yaml
 
 class ConfigError(Exception):
     """設定不備。実行前に検出してメッセージだけ出して終了させる。"""
+
+
+# 日付プレースホルダ。batch が日付ごとのフォルダ（Backup/20260803 等）を
+# 使う構成に対応するためのもの。
+#   {date}            -> 20260803        （業務日付。既定は本日）
+#   {date:%Y/%m/%d}   -> 2026/08/03      （strftime 書式を指定）
+#   {date-1}          -> 20260802        （業務日付の 1 日前）
+#   {date+1:%Y%m}     -> 202609          （日数オフセット + 書式）
+_DATE_PLACEHOLDER = re.compile(r"\{date(?P<offset>[+-]\d+)?(?::(?P<fmt>[^}]+))?\}")
+
+
+def expand_date_placeholders(text: str, base_date: date) -> str:
+    """文字列中の日付プレースホルダを展開する。
+
+    パス・実行引数・ファイル名パターンで共通に使う。プレースホルダが
+    無ければ元の文字列をそのまま返すので、無条件に通してよい。
+    """
+    if "{date" not in text:
+        return text
+
+    def replace(m) -> str:
+        offset = int(m.group("offset") or 0)
+        fmt = m.group("fmt") or "%Y%m%d"
+        return (base_date + timedelta(days=offset)).strftime(fmt)
+
+    return _DATE_PLACEHOLDER.sub(replace, text)
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -34,6 +62,36 @@ class Settings:
         self.raw = raw
         self.source = source
         self.project_root = project_root
+        # パス等の {date} を展開するときの基準日。既定は本日。
+        # --date で実行単位に、ケースの execute.date でケース単位に上書きできる。
+        # ケースは直列実行されるため、ケースごとの差し替えで競合は起きない。
+        self.base_date = date.today()
+
+    def set_base_date(self, value: Union[str, date, None]) -> None:
+        """基準日を設定する。文字列は YYYYMMDD または YYYY-MM-DD を受け付ける。"""
+        if value is None:
+            self.base_date = date.today()
+            return
+        if isinstance(value, datetime):
+            self.base_date = value.date()
+            return
+        if isinstance(value, date):
+            self.base_date = value
+            return
+        text = str(value).strip()
+        for fmt in ("%Y%m%d", "%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                self.base_date = datetime.strptime(text, fmt).date()
+                return
+            except ValueError:
+                continue
+        raise ConfigError(
+            "日付として解釈できません: %r（YYYYMMDD / YYYY-MM-DD 形式で指定してください）" % value
+        )
+
+    def expand(self, text: str) -> str:
+        """文字列中の {date} 系プレースホルダを基準日で展開する。"""
+        return expand_date_placeholders(str(text), self.base_date)
 
     # --- section accessors -------------------------------------------------
     @property
@@ -112,9 +170,9 @@ class Settings:
         """相対パスはプロジェクトルート基準にする。
 
         カレントフォルダに依存すると、タスクスケジューラ起動時と手動起動時で
-        参照先が変わってしまうため。
+        参照先が変わってしまうため。{date} 等のプレースホルダもここで展開する。
         """
-        path = Path(raw)
+        path = Path(self.expand(raw))
         return path if path.is_absolute() else (self.project_root / path).resolve()
 
     def db_password(self) -> str:

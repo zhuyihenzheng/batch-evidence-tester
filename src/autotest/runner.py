@@ -43,8 +43,9 @@ def run_batch(
         )
 
     exe_path = _resolve_exe(str(batch["exe_path"]), settings.project_root)
-    common_args = [str(a) for a in (batch.get("common_args") or [])]
-    full_args = common_args + [str(a) for a in args]
+    # 引数にも {date} を使えるようにする（--date 20260803 のような業務日付指定は頻出）
+    common_args = [settings.expand(str(a)) for a in (batch.get("common_args") or [])]
+    full_args = common_args + [settings.expand(str(a)) for a in args]
     command = subprocess.list2cmdline([str(exe_path), *full_args])
 
     info = ExecutionInfo(command=command, started_at=datetime.now())

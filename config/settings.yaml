@@ -52,6 +52,15 @@ batch:
 #
 #   ケース定義の中では input_dir / processed_dir のような「論理名」で参照する。
 #   フォルダを増やしたい場合はここに追記するだけでよい。
+#
+#   ★ 日付ごとのフォルダ（Backup/20260803 等）には {date} プレースホルダを使う:
+#       {date}            -> 20260803      基準日。既定は本日
+#       {date:%Y/%m/%d}   -> 2026/08/03    strftime 書式を指定
+#       {date-1}          -> 20260802      基準日の 1 日前（前日データ参照など）
+#       {date+1:%Y%m}     -> 202609        オフセット + 書式
+#     基準日は  --date 20260803  で実行単位に、ケースの execute.date で
+#     ケース単位に指定できる。paths / execute.args / ファイル名パターン /
+#     input_files.rename のいずれでも使える。
 # -----------------------------------------------------------------------------
 paths:
   input_dir:     "C:/app/batch/in"          # 投入フォルダ（テストデータをここに置く）
@@ -60,6 +69,10 @@ paths:
   output_dir:    "C:/app/batch/out"         # 出力フォルダ（成果ファイルの取得元）
   log_dir:       "C:/app/batch/log"         # ログフォルダ
   work_dir:      "C:/app/batch/work"        # 一時作業フォルダ（任意）
+  # 日付別フォルダの例（batch が日付でフォルダを切る構成の場合）
+  # receive_dir:   "D:/Test/TAS/Receive/{date}"
+  # backup_dir:    "D:/Test/TAS/Receive/Backup/{date}"
+  # backup_prev:   "D:/Test/TAS/Receive/Backup/{date-1}"   # 前日分
 
 # 証跡としてフォルダ一覧画像を撮る対象と、その表示順
 folder_evidence:

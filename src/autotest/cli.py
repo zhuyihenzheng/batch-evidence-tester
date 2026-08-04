@@ -60,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--offline", action="store_true", help="SQL Server の代わりに fixtures/ の CSV を使う")
     parser.add_argument("--dry-run", action="store_true",
                         help=".exe も DB 接続も行わず、流れと設定だけを確認する")
+    parser.add_argument("--date", default=None,
+                        help="パス・引数の {date} を展開する基準日（YYYYMMDD。既定は本日）")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="各工程の開始を逐次表示する（処理が止まる箇所の切り分け用）")
     # 注: NG が出ても後続ケースは常に実行する（全 NG を一度に把握するため）。
@@ -291,6 +293,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         settings = load_settings(config_path, project_root=project_root)
+        settings.set_base_date(args.date)   # {date} の既定基準日
         cases = load_cases(cases_dir, only=args.cases, tags=args.tags)
     except ConfigError as exc:
         print(f"[設定エラー] {exc}", file=sys.stderr)
@@ -346,7 +349,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"実行ログ : {log_path}")
 
     try:
-        runner = CaseRunner(settings, run_dir, offline=args.offline, dry_run=args.dry_run)
+        runner = CaseRunner(settings, run_dir, offline=args.offline,
+                            dry_run=args.dry_run, default_date=args.date)
         for i, case in enumerate(cases, start=1):
             head = f"[{i}/{len(cases)}] {case.case_id} {case.name}"
             print(head + " ... ", end="" if not args.verbose else "\n", flush=True)

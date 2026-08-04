@@ -126,8 +126,9 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
 
 class CaseRunner:
     def __init__(self, settings: Settings, run_dir: Path, offline: bool = False,
-                 dry_run: bool = False, progress=None):
+                 dry_run: bool = False, progress=None, default_date=None):
         self.settings = settings
+        self._default_date = default_date
         self.run_dir = run_dir
         self.offline = offline
         self.dry_run = dry_run
@@ -144,6 +145,11 @@ class CaseRunner:
         evidence_dir = self.run_dir / "evidence" / case.case_id
         artifact_dir = self.run_dir / "artifacts" / case.case_id
         renderer = render.Renderer(self.settings.evidence, evidence_dir)
+
+        # このケースの基準日を確定する。ケースが execute.date を持つならそれを、
+        # 無ければ実行単位の既定（--date か本日）を使う。パス・引数・パターンの
+        # {date} は以降この日付で展開される。ケースは直列実行のため競合しない。
+        self.settings.set_base_date(case.execute.get("date") or self._default_date)
 
         # 破壊的操作（クリア・SQL）より前に、実行に必要な資材を全部確認する。
         # ここで弾けば「フォルダを空にした後で exe が無いと判明」が起きない。
@@ -507,12 +513,13 @@ class CaseRunner:
 
             actual_spec = item.get("actual") or {}
             directory = self.settings.resolve_dir(actual_spec.get("dir", "output_dir"))
-            matches = fsops.find_files(directory, actual_spec.get("pattern", "*"))
+            pattern = self.settings.expand(actual_spec.get("pattern", "*"))
+            matches = fsops.find_files(directory, pattern)
             if not matches:
                 checks.append(
                     CheckResult(
                         f"ファイル照合: {name}", "file", NG,
-                        f"{directory} に {actual_spec.get('pattern', '*')} が出力されていません",
+                        f"{directory} に {pattern} が出力されていません",
                     )
                 )
                 continue
@@ -522,7 +529,7 @@ class CaseRunner:
                 checks.append(
                     CheckResult(
                         f"ファイル照合: {name}", "file", NG,
-                        f"パターン {actual_spec.get('pattern')} に {len(matches)} 件が一致し曖昧です: "
+                        f"パターン {pattern} に {len(matches)} 件が一致し曖昧です: "
                         f"{[m.name for m in matches[:5]]}（パターンを絞るか、余分な出力を調査してください）",
                     )
                 )
@@ -542,7 +549,7 @@ class CaseRunner:
 
     def _assert_file_exists(self, name: str, exists_spec: dict) -> CheckResult:
         directory = self.settings.resolve_dir(exists_spec.get("dir", "output_dir"))
-        pattern = exists_spec.get("pattern", "*")
+        pattern = self.settings.expand(exists_spec.get("pattern", "*"))
         expected_count = exists_spec.get("count")
         matches = fsops.find_files(directory, pattern)
         actual_count = len(matches)

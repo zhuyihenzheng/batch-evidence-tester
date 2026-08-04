@@ -521,3 +521,62 @@ class TestPyodbcCursorApi(unittest.TestCase):
                 _sys.modules["pyodbc"] = saved
             else:
                 _sys.modules.pop("pyodbc", None)
+
+
+# =============================================================================
+# 日付プレースホルダ（batch が日付別フォルダを使う構成への対応）
+# =============================================================================
+class TestDatePlaceholders(unittest.TestCase):
+    """Backup/20260803 のような日付別フォルダを設定で表現できること。"""
+
+    def _settings(self, paths, base=None):
+        s = Settings(raw={"batch": {"exe_path": "x"},
+                          "database": {"server": "s", "database": "d"},
+                          "paths": paths},
+                     source=Path("s.yaml"), project_root=Path("/tmp/proj"))
+        s.set_base_date(base)
+        return s
+
+    def test_date_expands_to_yyyymmdd(self):
+        s = self._settings({"backup_dir": "/data/Backup/{date}"}, "20260803")
+        self.assertEqual(str(s.resolve_dir("backup_dir")), "/data/Backup/20260803")
+
+    def test_custom_format(self):
+        s = self._settings({"d": "/data/{date:%Y}/{date:%m}/{date:%d}"}, "20260803")
+        self.assertEqual(str(s.resolve_dir("d")), "/data/2026/08/03")
+
+    def test_negative_offset_for_previous_day(self):
+        """前日データを参照するケースがあるためオフセットを使えること。"""
+        s = self._settings({"d": "/data/{date-1}"}, "20260803")
+        self.assertEqual(str(s.resolve_dir("d")), "/data/20260802")
+
+    def test_offset_crosses_month_boundary(self):
+        s = self._settings({"d": "/data/{date-1}"}, "20260801")
+        self.assertEqual(str(s.resolve_dir("d")), "/data/20260731")
+
+    def test_positive_offset(self):
+        s = self._settings({"d": "/data/{date+1}"}, "20261231")
+        self.assertEqual(str(s.resolve_dir("d")), "/data/20270101")
+
+    def test_defaults_to_today(self):
+        from datetime import date as _date
+        s = self._settings({"d": "/data/{date}"})
+        self.assertEqual(str(s.resolve_dir("d")), "/data/" + _date.today().strftime("%Y%m%d"))
+
+    def test_accepts_hyphenated_input(self):
+        s = self._settings({"d": "/data/{date}"}, "2026-08-03")
+        self.assertEqual(str(s.resolve_dir("d")), "/data/20260803")
+
+    def test_invalid_date_is_config_error(self):
+        s = self._settings({"d": "/data/{date}"})
+        with self.assertRaises(ConfigError):
+            s.set_base_date("2026年8月3日")
+
+    def test_path_without_placeholder_is_untouched(self):
+        s = self._settings({"d": "/data/fixed"}, "20260803")
+        self.assertEqual(str(s.resolve_dir("d")), "/data/fixed")
+
+    def test_expand_applies_to_patterns_and_args(self):
+        s = self._settings({"d": "/tmp"}, "20260803")
+        self.assertEqual(s.expand("RESULT_{date}.csv"), "RESULT_20260803.csv")
+        self.assertEqual(s.expand("--date"), "--date")

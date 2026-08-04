@@ -263,7 +263,8 @@ def put_input_files(
             raise ConfigError(f"投入ファイルが見つかりません: {src}")
 
         dest_dir = settings.resolve_dir(spec.get("dest_dir", "input_dir"))
-        dest_name = spec.get("rename") or src.name
+        # 投入時のリネームにも {date} を使えるようにする
+        dest_name = settings.expand(spec.get("rename")) if spec.get("rename") else src.name
         dest = dest_dir / dest_name
 
         if not dry_run:
@@ -286,7 +287,7 @@ def collect_artifacts(
     for spec in specs:
         alias = spec.get("dir", "output_dir")
         directory = settings.resolve_dir(alias)
-        pattern = spec.get("pattern", "*")
+        pattern = settings.expand(spec.get("pattern", "*"))
         for src in find_files(directory, pattern, recursive=bool(spec.get("recursive", False))):
             # サブフォルダ構造を保って保全する。basename だけにすると
             # 別サブフォルダの同名ファイルが互いに上書きされ、証跡が失われる
