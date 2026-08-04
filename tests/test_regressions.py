@@ -436,3 +436,88 @@ class TestPasswordEnvDiagnosis(unittest.TestCase):
 
     def test_quoted_value_warned(self):
         self.assertIn("引用符", " ".join(self._lines('"secret"')))
+
+
+# =============================================================================
+# pyodbc の API 前提（Cursor に timeout 属性は無い）
+# =============================================================================
+class TestPyodbcCursorApi(unittest.TestCase):
+    """クエリのタイムアウトは Connection の属性であり Cursor には無い。
+
+    cur.timeout = ... と書くと実行時に AttributeError になり、
+    DB 接続自体は成功しているのに最初のスナップショットで落ちる。
+    実際に本番環境で発生したため、同じ書き方に戻らないよう固定する。
+    """
+
+    def test_query_does_not_touch_cursor_timeout(self):
+        import sys as _sys
+        from types import ModuleType
+
+        calls = {"conn_timeout": None}
+
+        class FakeCursor:
+            description = [("ID",), ("VAL",)]
+
+            def __setattr__(self, name, value):
+                if name == "timeout":
+                    raise AttributeError("'pyodbc.Cursor' object has no attribute 'timeout'")
+                object.__setattr__(self, name, value)
+
+            def execute(self, sql, params=None):
+                return self
+
+            def fetchall(self):
+                return [("1", "a")]
+
+            def close(self):
+                pass
+
+        class FakeConn:
+            def __setattr__(self, name, value):
+                if name == "timeout":
+                    calls["conn_timeout"] = value
+                object.__setattr__(self, name, value)
+
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+
+            def close(self):
+                pass
+
+        fake_pyodbc = ModuleType("pyodbc")
+        fake_pyodbc.connect = lambda *a, **k: FakeConn()
+        fake_pyodbc.drivers = lambda: ["ODBC Driver 18 for SQL Server"]
+        saved = _sys.modules.get("pyodbc")
+        _sys.modules["pyodbc"] = fake_pyodbc
+        try:
+            from autotest.db import PyodbcClient
+
+            os.environ["UT_PW"] = "pw"
+            settings = Settings(
+                raw={"batch": {"exe_path": "x"},
+                     "database": {"server": "s,1433", "database": "d", "user": "u",
+                                  "password_env": "UT_PW", "query_timeout_sec": 42},
+                     "paths": {"a": "/tmp"}},
+                source=Path("s.yaml"), project_root=Path("/tmp"))
+
+            client = PyodbcClient(settings)
+            self.assertEqual(calls["conn_timeout"], 42,
+                             "クエリタイムアウトは Connection 側に設定すること")
+
+            # ここで AttributeError が出るなら cur.timeout を触っている
+            columns, rows = client.query("SELECT ID, VAL FROM T")
+            self.assertEqual(columns, ["ID", "VAL"])
+            self.assertEqual(rows, [["1", "a"]])
+
+            client.execute_script("DELETE FROM T\nGO\n")
+        finally:
+            if saved is not None:
+                _sys.modules["pyodbc"] = saved
+            else:
+                _sys.modules.pop("pyodbc", None)

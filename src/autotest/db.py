@@ -166,11 +166,17 @@ class PyodbcClient(DbClient):
             self.conn = pyodbc.connect(conn_str, timeout=int(db.get("login_timeout_sec", 15)))
         except Exception as exc:  # pragma: no cover - 環境依存
             raise DbError(f"SQL Server への接続に失敗しました: {exc}\n  接続文字列: {self._redacted}") from exc
+        # クエリのタイムアウトは Connection の属性。Cursor には timeout が無く、
+        # cur.timeout = ... とすると AttributeError になる（pyodbc の仕様）。
+        # 0 は「無制限」の意味になるため、未設定時も既定値を入れておく。
         self.query_timeout = int(db.get("query_timeout_sec", 60))
+        try:
+            self.conn.timeout = self.query_timeout
+        except Exception:  # pragma: no cover - 古い pyodbc では未対応の場合がある
+            pass
 
     def query(self, sql: str, params: Optional[List[Any]] = None) -> Tuple[List[str], List[List[Any]]]:
         cur = self.conn.cursor()
-        cur.timeout = self.query_timeout
         try:
             cur.execute(sql, params or [])
             if cur.description is None:
@@ -186,7 +192,6 @@ class PyodbcClient(DbClient):
     def execute_script(self, sql: str) -> None:
         """GO 区切りに対応したスクリプト実行。"""
         cur = self.conn.cursor()
-        cur.timeout = self.query_timeout
         try:
             for batch in _split_go_batches(sql):
                 if batch.strip():
