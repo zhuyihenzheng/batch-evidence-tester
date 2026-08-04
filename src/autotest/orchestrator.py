@@ -189,11 +189,9 @@ class CaseRunner:
             self._step("フォルダ撮影（実行前）")
             folder_before = self._capture_folders(renderer, "実行前", case)
 
-            # batch が触った行だけを抽出するための基準時刻。
-            # setup の更新を含めないよう setup 完了後に、かつ batch 起動前に取る。
-            # テスト機ではなく DB サーバの時計から取るのは、両者のずれで
-            # 対象行を取りこぼさないため。
-            self._batch_start_mark = db_mod.server_now(client)
+            # {batch_start} を使うケースだけ DB から基準時刻を取る。
+            # 使わないケースで毎回問い合わせるのは無駄だし、失敗の種を増やすだけ。
+            self._batch_start_mark = self._resolve_batch_start(case, client)
 
             self._step("DBスナップショット（実行前）")
             self._snapshot_db(case, client, result, phase="before")
@@ -418,6 +416,18 @@ class CaseRunner:
                 resolved["sql"] = self._expand_sql(str(spec["sql"]))
             table = client.snapshot(resolved, self.settings.db_format)
             target[table.title] = table
+
+    def _resolve_batch_start(self, case: TestCase, client: db_mod.DbClient):
+        """{batch_start} を使うケースでだけ DB サーバの時刻を取得する。
+
+        使っていないケースでも毎回問い合わせると、無駄なだけでなく
+        権限やバージョン差で余計な失敗を招く。使うときだけ取りに行く。
+        """
+        specs = case.snapshot.get("tables", [])
+        if not any("{batch_start" in str(spec.get("sql", "")) for spec in specs):
+            return None
+        # テスト機ではなく DB の時計を使う。両者のずれで対象行を取りこぼさないため
+        return db_mod.server_now(client)
 
     def _expand_sql(self, sql: str) -> str:
         """スナップショット SQL のプレースホルダを展開する。

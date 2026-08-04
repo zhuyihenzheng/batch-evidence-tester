@@ -852,3 +852,49 @@ class TestQueryErrorIncludesSql(unittest.TestCase):
                 _sys.modules["pyodbc"] = saved
             else:
                 _sys.modules.pop("pyodbc", None)
+
+
+# =============================================================================
+# {batch_start} を使わないケースでは DB 時刻を問い合わせないこと
+# =============================================================================
+class TestBatchStartIsLazy(TmpDirCase):
+    """使っていない機能のために毎回 DB へ問い合わせない。
+
+    無駄なだけでなく、権限やバージョン差で余計な失敗を招くため。
+    """
+
+    class _CountingClient:
+        def __init__(self):
+            self.queries = []
+
+        def query(self, sql, params=None):
+            self.queries.append(sql)
+            return ["now"], [["2026-08-05 00:00:00"]]
+
+        def execute_script(self, sql):
+            pass
+
+    def _case(self, sql):
+        from autotest.config import TestCase
+        return TestCase(case_id="T", name="T", source=self.tmp / "t.yaml",
+                        snapshot={"tables": [{"name": "T_ORDER", "sql": sql}]})
+
+    def _runner(self):
+        from autotest.orchestrator import CaseRunner
+        return CaseRunner(self.write_settings({"log_dir": str(self.tmp)}), self.tmp)
+
+    def test_no_db_query_when_placeholder_unused(self):
+        client = self._CountingClient()
+        runner = self._runner()
+        mark = runner._resolve_batch_start(
+            self._case("SELECT * FROM T_ORDER ORDER BY ORDER_ID"), client)
+        self.assertIsNone(mark)
+        self.assertEqual(client.queries, [], "使っていないのに DB へ問い合わせている")
+
+    def test_db_queried_when_placeholder_used(self):
+        client = self._CountingClient()
+        runner = self._runner()
+        mark = runner._resolve_batch_start(
+            self._case("SELECT * FROM T WHERE UPD >= '{batch_start}'"), client)
+        self.assertIsNotNone(mark)
+        self.assertTrue(client.queries, "使っているのに DB へ問い合わせていない")
