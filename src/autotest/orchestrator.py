@@ -125,11 +125,18 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
 
 
 class CaseRunner:
-    def __init__(self, settings: Settings, run_dir: Path, offline: bool = False, dry_run: bool = False):
+    def __init__(self, settings: Settings, run_dir: Path, offline: bool = False,
+                 dry_run: bool = False, progress=None):
         self.settings = settings
         self.run_dir = run_dir
         self.offline = offline
         self.dry_run = dry_run
+        # 各工程の開始を通知するコールバック。処理が止まったとき、
+        # どの工程で止まっているかを外から見えるようにするためのもの
+        self._progress = progress or (lambda step: None)
+
+    def _step(self, name: str) -> None:
+        self._progress(name)
 
     # ------------------------------------------------------------------
     def run(self, case: TestCase) -> CaseResult:
@@ -147,16 +154,25 @@ class CaseRunner:
 
         client: Optional[db_mod.DbClient] = None
         try:
-            client = db_mod.create_client(self.settings, self.offline, case.case_id)
+            self._step("DB接続")
+            client = db_mod.create_client(self.settings, self.offline, case.case_id, dry_run=self.dry_run)
 
+            self._step("前処理（フォルダ準備・SQL・データ投入）")
             self._setup(case, client)
+
+            self._step("フォルダ撮影（実行前）")
             folder_before = self._capture_folders(renderer, "実行前", case)
+
+            self._step("DBスナップショット（実行前）")
             self._snapshot_db(case, client, result, phase="before")
 
             batch_name = case.execute.get("batch")
             log_dir = self._log_dir_for(batch_name)
 
+            self._step("ログ位置の記録")
             offsets = logs.snapshot_offsets(self.settings, log_dir)
+
+            self._step("batch実行")
             result.execution = run_batch(
                 self.settings,
                 case.execute.get("args", []),
@@ -164,24 +180,42 @@ class CaseRunner:
                 batch_name=batch_name,
             )
 
+            self._step("ログ収集")
             log_slices = logs.collect(
                 self.settings, offsets,
                 result.execution.started_at, result.execution.finished_at,
                 log_dir=log_dir,
             )
+
+            self._step("成果ファイル回収")
             result.saved_artifacts = fsops.collect_artifacts(
                 self.settings, case.collect.get("files", []), artifact_dir
             )
 
+            self._step("DBスナップショット（実行後）")
             self._snapshot_db(case, client, result, phase="after")
+
+            self._step("フォルダ撮影（実行後）")
             folder_after = self._capture_folders(renderer, "実行後", case)
 
+            self._step("証跡生成")
             result.log_tables = self._build_log_tables(log_slices, case, log_dir)
             result.images.extend(folder_before)
             result.images.extend(folder_after)
             result.images.extend(self._render_file_previews(renderer, case, result))
 
-            result.checks = self._assert_all(case, client, result, log_slices)
+            self._step("判定")
+            if self.dry_run:
+                # dry-run は batch も DB も動かしていないので、判定しても意味がない。
+                # ここで NG を出すと「設定が悪いのか、判定が落ちたのか」が区別できず
+                # 誤解を招くため、SKIP として記録するに留める
+                result.checks = [
+                    CheckResult("判定（dry-run のためスキップ）", "dry_run", SKIP,
+                                "batch も DB も実行していないため判定していません。"
+                                "前処理・フォルダ操作・設定の確認のみ行いました。")
+                ]
+            else:
+                result.checks = self._assert_all(case, client, result, log_slices)
 
             # 後処理（teardown）。証跡採取と判定が終わった後に実行する
             teardown_check = self._teardown(case, client)

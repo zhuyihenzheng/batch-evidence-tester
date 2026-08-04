@@ -258,7 +258,25 @@ def _guess_table_name(sql: str) -> str:
     return "UNKNOWN"
 
 
-def create_client(settings: Settings, offline: bool, case_id: str) -> DbClient:
+class NullClient(DbClient):
+    """--dry-run 用。DB へ一切接続しない。
+
+    dry-run は「何も触らずに流れだけ確認する」ためのモードなので、
+    実 DB への接続も行わない。接続を試みると、到達できないサーバ相手に
+    TCP ハンドシェイクで長時間ブロックし、ハングしたように見える
+    （login_timeout はハンドシェイク前の段階を必ずしもカバーしない）。
+    """
+
+    def query(self, sql: str, params: Optional[List[Any]] = None) -> Tuple[List[str], List[List[Any]]]:
+        return [], []
+
+    def execute_script(self, sql: str) -> None:
+        pass
+
+
+def create_client(settings: Settings, offline: bool, case_id: str, dry_run: bool = False) -> DbClient:
+    if dry_run:
+        return NullClient()
     if offline:
         return OfflineClient(settings.project_root / "fixtures", case_id)
     return PyodbcClient(settings)

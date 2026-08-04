@@ -57,7 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tag", action="append", dest="tags", help="実行するタグ（複数指定可）")
     parser.add_argument("--out", default=None, help="Excel 出力先（既定: settings.excel.output_dir）")
     parser.add_argument("--offline", action="store_true", help="SQL Server の代わりに fixtures/ の CSV を使う")
-    parser.add_argument("--dry-run", action="store_true", help=".exe を起動せず、フォルダ操作も行わない")
+    parser.add_argument("--dry-run", action="store_true",
+                        help=".exe も DB 接続も行わず、流れと設定だけを確認する")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="各工程の開始を逐次表示する（処理が止まる箇所の切り分け用）")
     # 注: NG が出ても後続ケースは常に実行する（全 NG を一度に把握するため）。
     #     以前あった --keep-going は「定義だけあって未使用」だったため削除した。
     return parser
@@ -200,15 +203,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     mode_note += " [dry-run]" if args.dry_run else ""
     print(f"=== 自動テスト開始{mode_note}  run_id={run_id}  ケース数={len(cases)} ===")
 
-    runner = CaseRunner(settings, run_dir, offline=args.offline, dry_run=args.dry_run)
-    for i, case in enumerate(cases, start=1):
-        print(f"[{i}/{len(cases)}] {case.case_id} {case.name} ... ", end="", flush=True)
-        result = runner.run(case)
-        run.cases.append(result)
-        detail = f" ({result.ng_count} 件 NG)" if result.ng_count else ""
-        print(f"{result.verdict}{detail}")
-        if result.fatal_error:
-            print(f"    実行時エラー: {result.fatal_error.splitlines()[0]}")
+    # 工程ログ。処理が止まったとき「どこで止まっているか」を後から追えるようにする。
+    # --verbose なら画面にも出す。ファイルには常に記録する。
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "run.log"
+    log_file = log_path.open("w", encoding="utf-8")
+
+    def write_log(message: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        log_file.write(f"{stamp}  {message}\n")
+        log_file.flush()  # ハング時に読めないと意味がないので都度フラッシュ
+
+    write_log(f"開始 run_id={run_id} config={config_path} offline={args.offline} dry_run={args.dry_run}")
+    print(f"実行ログ : {log_path}")
+
+    try:
+        runner = CaseRunner(settings, run_dir, offline=args.offline, dry_run=args.dry_run)
+        for i, case in enumerate(cases, start=1):
+            head = f"[{i}/{len(cases)}] {case.case_id} {case.name}"
+            print(head + " ... ", end="" if not args.verbose else "\n", flush=True)
+            write_log(f"--- {case.case_id} 開始")
+
+            def on_step(step: str, _case_id=case.case_id) -> None:
+                write_log(f"    {_case_id}: {step}")
+                if args.verbose:
+                    print(f"      > {step}", flush=True)
+
+            runner._progress = on_step
+            result = runner.run(case)
+            run.cases.append(result)
+
+            detail = f" ({result.ng_count} 件 NG)" if result.ng_count else ""
+            print(f"{'      => ' if args.verbose else ''}{result.verdict}{detail}")
+            write_log(f"--- {case.case_id} 終了: {result.verdict}{detail}")
+            if result.fatal_error:
+                print(f"    実行時エラー: {result.fatal_error.splitlines()[0]}")
+                write_log(f"    実行時エラー: {result.fatal_error}")
+    finally:
+        log_file.close()
 
     run.finished_at = datetime.now()
 
@@ -216,6 +248,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     excel_path = build_workbook(run, out_dir / file_name, settings.excel)
 
     print("=" * 60)
+    if args.dry_run:
+        # dry-run は判定していないので、成否ではなく「流れが通ったか」を返す
+        failed = [c for c in run.cases if c.fatal_error]
+        print(f"dry-run 完了 : {len(run.cases) - len(failed)} / {len(run.cases)} ケースが前処理まで通過")
+        for c in failed:
+            print(f"  [失敗] {c.case_id}: {c.fatal_error.splitlines()[0]}")
+        print("※ batch も DB も実行していないため判定は行っていません。")
+        print(f"証跡Excel: {excel_path}")
+        print(f"実行ログ : {run_dir / 'run.log'}")
+        return 1 if failed else 0
+
     print(f"総合判定 : {run.verdict}   OK {run.ok_count} / NG {run.ng_count}")
     if run.verdict == "SKIP":
         print("※ 実際に判定されたケースがありません（全件 SKIP）。終了コードは 1 になります。")
