@@ -1,0 +1,74 @@
+# =============================================================================
+# TC001 正常系: 受注ファイル 1 件（明細 2 件）を正常に取り込む
+# =============================================================================
+id: TC001_normal
+name: "正常系：受注ファイル取込（明細2件）"
+description: "投入フォルダの受注 CSV が全件取り込まれ、処理済フォルダへ移動し、結果ファイルが出力されること"
+tags: [正常系, 単体]
+enabled: true
+
+# --- 前処理 -------------------------------------------------------------------
+setup:
+  # settings.paths の論理名でのみ指定できる（生パス指定は不可 = 誤削除防止）
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+
+  # DB を試験前提の状態に戻す。file / inline どちらでも可
+  sql:
+    - file: sql/TC001_setup.sql
+
+  # テストデータの投入。src は cases/<id>/ からの相対パス
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+
+# --- DB スナップショット（実行前後の 2 時点を取得。画像化せず Excel の表に出す）---
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: >
+        SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS, UPDATED_AT
+        FROM T_ORDER ORDER BY ORDER_ID
+      format:
+        decimal_places:
+          AMOUNT: 0
+      mask: []          # 個人情報列があればここに列名を書くと ***MASKED*** になる
+
+# --- batch 実行 ---------------------------------------------------------------
+execute:
+  args: ["--mode", "daily", "--date", "20260803"]
+
+# --- 成果物の回収（判定より先にコピーして保全する）-----------------------------
+collect:
+  files:
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+      preview: true       # 中身を画像化して証跡に貼る
+    - dir: processed_dir
+      pattern: "*.csv"
+      preview: false
+
+# --- 判定 ---------------------------------------------------------------------
+assert:
+  exit_code: 0
+
+  db:
+    - table: T_ORDER
+      expected: "expected/TC001_normal/db_T_ORDER.csv"
+      key: [ORDER_ID]
+      ignore_columns: [UPDATED_AT]   # 実行時刻依存の列は比較対象外
+
+  files:
+    - name: "結果ファイル RESULT_20260803.csv"
+      actual: {dir: output_dir, pattern: "RESULT_*.csv"}
+      expected: "expected/TC001_normal/RESULT_20260803.csv"
+      encoding: utf-8
+    - name: "処理済フォルダへの移動"
+      exists: {dir: processed_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "エラーフォルダが空であること"
+      exists: {dir: error_dir, pattern: "*", count: 0}
+    - name: "投入フォルダが空であること"
+      exists: {dir: input_dir, pattern: "*", count: 0}
+
+  log:
+    must_contain: ["処理開始", "取込件数=2", "処理正常終了"]
+    must_not_contain: ["[ERROR]", "Exception", "異常終了"]

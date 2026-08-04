@@ -1,0 +1,47 @@
+# =============================================================================
+# TC003 NG 見本: 期待値をわざと誤らせ、Excel 上での NG 表示・差分表を確認するためのケース
+#   本番のテストセットに入れる場合は enabled: false にするか、このファイルを削除する
+# =============================================================================
+id: TC003_ng_demo
+name: "【見本】期待値相違時の NG 表示確認"
+description: "期待値をわざと 1 箇所ずらし、差分表と NG 判定が証跡 Excel にどう出るかを確認するためのサンプル"
+tags: [見本]
+enabled: true
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: >
+        SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS, UPDATED_AT
+        FROM T_ORDER ORDER BY ORDER_ID
+
+execute:
+  args: ["--mode", "daily", "--date", "20260803"]
+
+collect:
+  files:
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+
+assert:
+  exit_code: 0
+  db:
+    - table: T_ORDER
+      expected: "expected/TC003_ng_demo/db_T_ORDER.csv"   # STATUS と AMOUNT をわざとずらしてある
+      key: [ORDER_ID]
+      ignore_columns: [UPDATED_AT]
+  files:
+    - name: "結果ファイル（期待値を意図的に相違させたもの）"
+      actual: {dir: output_dir, pattern: "RESULT_*.csv"}
+      expected: "expected/TC003_ng_demo/RESULT_20260803.csv"
+      encoding: utf-8
+  log:
+    must_contain: ["処理正常終了", "存在しないはずのキーワード"]
+    must_not_contain: []

@@ -1,0 +1,20 @@
+# AUTO_TEST_BATCH 依存ライブラリ
+#
+# 対象環境: Anaconda 5.2 (Python 3.6.5) 以降。
+#   Anaconda 5.2 には openpyxl / Pillow / PyYAML が同梱されているため、
+#   多くの場合このファイルのインストールは不要（check_env.py で確認できる）。
+#   閉じた社内ネットワークでも動くよう、追加インストールを前提にしない作りにしてある。
+#
+#   Windows:  .venv\Scripts\pip install -r requirements.txt
+#   Anaconda: conda install openpyxl pillow pyyaml pyodbc
+
+openpyxl>=2.5.0      # Excel 成果物の生成（Anaconda 5.2 同梱は 2.5.3）
+Pillow>=5.1.0        # 証跡画像の描画（5.x は textsize、8.0+ は textlength を使用）
+PyYAML>=3.12         # 設定・ケース定義
+
+# --- SQL Server 接続（Windows テスト機で必須 / --offline 検証時は不要）---
+pyodbc>=4.0 ; platform_system == "Windows"
+
+# --- 実画面キャプチャを使う場合のみ（evidence.mode = screen / both）---
+# mss>=4.0
+# pywin32>=223 ; platform_system == "Windows"

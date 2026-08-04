@@ -1,0 +1,98 @@
+# =============================================================================
+# 検証用設定 — 実環境に触れずにツール全体を動かすためのサンドボックス
+#   .venv/bin/python -m autotest run --config config/settings.demo.yaml --offline
+#   batch は demo/fake_batch.py（Python）を .exe の代役として起動する
+# =============================================================================
+
+env:
+  name: "ローカル検証（サンドボックス）"
+  tester: "auto"
+
+batch:
+  # 実環境では .exe を直接指定する。ここでは検証用に、実行中の Python
+  # （{python} で置換される）に demo/fake_batch.py を渡している
+  exe_path: "{python}"
+  working_dir: "."
+  timeout_sec: 60
+  console_encoding: "utf-8"
+  common_args: ["demo/fake_batch.py", "--root", "./sandbox"]
+  env_vars: {}
+
+# 1 回の実行で複数の batch を扱う場合の名前付き定義。
+# 上の batch: を土台にした差分として書ける（共通項目の再掲は不要）。
+# ケース側で  execute.batch: invoice  と指定すると、こちらの定義で起動する。
+batches:
+  invoice:
+    common_args: ["demo/fake_batch.py", "--root", "./sandbox_invoice"]
+    timeout_sec: 30
+    # この batch のログ出力先（paths の論理名で指定）。
+    # 未指定なら paths.log_dir を見る。batch ごとにログ先が違う場合はここで指定する。
+    log_dir: inv_log_dir
+
+paths:
+  # 既定 batch の入出力フォルダ
+  input_dir:     "./sandbox/in"
+  processed_dir: "./sandbox/processed"
+  error_dir:     "./sandbox/error"
+  output_dir:    "./sandbox/out"
+  log_dir:       "./sandbox/log"
+  # invoice batch の入出力フォルダ（別系統）
+  inv_input_dir:     "./sandbox_invoice/in"
+  inv_processed_dir: "./sandbox_invoice/processed"
+  inv_error_dir:     "./sandbox_invoice/error"
+  inv_output_dir:    "./sandbox_invoice/out"
+  inv_log_dir:       "./sandbox_invoice/log"
+
+folder_evidence:
+  targets: [input_dir, processed_dir, error_dir, output_dir]
+  exclude_patterns: ["Thumbs.db", ".DS_Store", "*.tmp"]
+  max_entries: 40
+  recursive: false
+
+database:
+  driver: "ODBC Driver 18 for SQL Server"
+  server: "localhost,1433"
+  database: "BATCH_DB"
+  auth: "sql"
+  user: "sa"
+  password_env: "AUTOTEST_DB_PASSWORD"
+  encrypt: true
+  trust_server_certificate: true
+  login_timeout_sec: 15
+  query_timeout_sec: 60
+
+db_format:
+  datetime: "%Y-%m-%d %H:%M:%S"
+  date: "%Y-%m-%d"
+  null_text: "(NULL)"
+  decimal_as_text: true
+  binary_head_bytes: 16
+  trim_trailing_space: true
+
+log:
+  patterns: ["*.log"]
+  encoding: "utf-8"
+  encoding_fallbacks: ["cp932"]
+  timestamp_regex: '^(?P<ts>\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2})'
+  timestamp_format: "%Y-%m-%d %H:%M:%S"
+  slice_margin_sec: 3
+  max_lines_in_excel: 500
+
+evidence:
+  mode: "render"
+  image_width: 1180
+  font_size: 14
+  font_candidates:
+    - "C:/Windows/Fonts/meiryo.ttc"
+    - "C:/Windows/Fonts/msgothic.ttc"
+    - "/System/Library/Fonts/Hiragino Sans GB.ttc"
+    - "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
+  file_preview_lines: 40
+  file_preview_cols: 160
+
+excel:
+  output_dir: "./output"
+  file_name_format: "TestEvidence_{run_id}.xlsx"
+  image_display_width: 720
+  max_db_rows: 500
+  freeze_header: true

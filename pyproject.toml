@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autotest-batch"
+version = "0.1.0"
+description = "C# 製 batch(.exe) の自動テスト・証跡採取ツール"
+# Anaconda 5.2 (Python 3.6.5) を対象環境に含むため 3.6 まで下げている。
+# ソースは tools/check_py36_compat.py で 3.6 構文互換を機械的に検証している。
+requires-python = ">=3.6"
+dependencies = [
+    "openpyxl>=2.5.0",
+    "Pillow>=5.1.0",
+    "PyYAML>=3.12",
+    "pyodbc>=4.0 ; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+# 実画面キャプチャ（evidence.mode = screen / both）を使う場合
+screenshot = ["mss>=4.0", "pywin32>=223 ; platform_system == 'Windows'"]
+
+[project.scripts]
+# pip install -e . 後、どのフォルダからでも `autotest` で起動できる
+autotest = "autotest.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

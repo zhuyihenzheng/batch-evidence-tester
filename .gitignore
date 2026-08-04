@@ -1,0 +1,27 @@
+# 実行成果物（証跡は run ごとに再生成されるため管理対象外）
+output/
+# サンドボックス実行用の作業フォルダ。batch ごとに sandbox_<名前> が増える
+sandbox/
+sandbox_*/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# ローカル環境固有の設定（絶対パスを含むため公開しない）
+.claude/
+
+# 認証情報が混入しやすいもの
+*.local.yaml
+.env

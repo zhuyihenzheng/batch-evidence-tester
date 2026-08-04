@@ -1,0 +1,147 @@
+# =============================================================================
+# AUTO_TEST_BATCH  全体設定
+#   環境ごとにこのファイルをコピーして  --config config/settings.<env>.yaml  で切替
+# =============================================================================
+
+env:
+  name: "結合テスト環境"
+  # 証跡ヘッダに出す実行者名。未指定なら OS のログインユーザ名
+  tester: ""
+
+# -----------------------------------------------------------------------------
+# 被テスト batch (C# .exe)
+# -----------------------------------------------------------------------------
+batch:
+  exe_path: "C:/app/batch/OrderBatch.exe"
+  working_dir: "C:/app/batch"
+  timeout_sec: 600
+  # .exe の標準出力/標準エラーの文字コード。日本語 Windows の既定は cp932
+  console_encoding: "cp932"
+  # 全ケース共通で渡す引数（ケース側 execute.args の前に付く）
+  common_args: []
+  # 実行時に差し込む環境変数
+  env_vars: {}
+
+# 1 回の実行で複数の batch を扱う場合の名前付き定義（任意）。
+#   上の batch: を土台にした差分として書けるので、共通項目の再掲は不要。
+#   ケース側で  execute.batch: invoice  と書くとこちらの定義で起動する。
+#   環境そのものが違う場合（DB 接続先が違う等）は batches ではなく
+#   settings.yaml をもう 1 つ作り --config で切り替えること。
+# batches:
+#   invoice:
+#     exe_path: "C:/app/invoice/InvoiceBatch.exe"
+#     working_dir: "C:/app/invoice"
+#     log_dir: inv_log_dir          # この batch のログ出力先（paths の論理名）
+#   nightly:
+#     exe_path: "C:/app/batch/NightlyBatch.exe"
+#     timeout_sec: 3600             # 上書きしたい項目だけ書けばよい
+
+# -----------------------------------------------------------------------------
+# ★ 入出力フォルダ設定（ここがテスト対象 batch のフォルダ構成に合わせる箇所）
+#    ケース定義の中では  input_dir / processed_dir  のような「論理名」で参照する。
+#    フォルダを増やしたい場合はここに追記するだけでよい。
+# -----------------------------------------------------------------------------
+paths:
+  input_dir:     "C:/app/batch/in"          # 投入フォルダ（テストデータをここに置く）
+  processed_dir: "C:/app/batch/processed"   # 処理済フォルダ（batch が移動先に使う）
+  error_dir:     "C:/app/batch/error"       # エラーフォルダ
+  output_dir:    "C:/app/batch/out"         # 出力フォルダ（成果ファイルの取得元）
+  log_dir:       "C:/app/batch/log"         # ログフォルダ
+  work_dir:      "C:/app/batch/work"        # 一時作業フォルダ（任意）
+
+# 証跡としてフォルダ一覧画像を撮る対象と、その表示順
+folder_evidence:
+  targets: [input_dir, processed_dir, error_dir, output_dir]
+  # 一覧に出さないファイル（Thumbs.db 等のノイズ除去）
+  exclude_patterns: ["Thumbs.db", "desktop.ini", "*.tmp"]
+  # 1 画像あたりの最大表示件数。超えた分は「他 N 件」と表示
+  max_entries: 40
+  # 再帰的にサブフォルダも辿るか
+  recursive: false
+
+# -----------------------------------------------------------------------------
+# SQL Server 接続
+#   パスワードは YAML に書かず環境変数から読む（password_env で変数名を指定）
+#   例) setx AUTOTEST_DB_PASSWORD "xxxxx"
+# -----------------------------------------------------------------------------
+database:
+  driver: "ODBC Driver 18 for SQL Server"
+  server: "localhost,1433"
+  database: "BATCH_DB"
+  auth: "sql"                    # sql | windows
+  user: "sa"
+  password_env: "AUTOTEST_DB_PASSWORD"
+  encrypt: true
+  trust_server_certificate: true
+  login_timeout_sec: 15
+  query_timeout_sec: 60
+
+# DB 値を Excel に書くときの既定フォーマット（ケース側で個別上書き可）
+db_format:
+  datetime: "%Y-%m-%d %H:%M:%S"
+  date: "%Y-%m-%d"
+  null_text: "(NULL)"
+  # Decimal をそのまま Excel 数値にすると丸めが出るため既定は文字列化
+  decimal_as_text: true
+  # bytes 型カラムは 16 進表記に変換（先頭 N バイトのみ）
+  binary_head_bytes: 16
+  trim_trailing_space: true
+
+# -----------------------------------------------------------------------------
+# ログ収集
+#   ログは画像化せず、Excel のネイティブセル（行番号 + 本文）として出力する。
+#   Excel 上で検索・コピー・フィルタでき、ERROR/WARN 行はセル色で示す。
+# -----------------------------------------------------------------------------
+log:
+  patterns: ["*.log", "*.txt"]
+  encoding: "utf-8"
+  encoding_fallbacks: ["cp932", "utf-8-sig"]
+  # 行頭のタイムスタンプ。batch 実行時間帯の行だけを切り出すのに使う
+  timestamp_regex: '^(?P<ts>\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2})'
+  timestamp_format: "%Y-%m-%d %H:%M:%S"
+  # 実行前後に取るマージン（秒）。時計ずれ対策
+  slice_margin_sec: 3
+  # Excel に出す最大行数。超過分は中略して先頭と末尾を残す
+  max_lines_in_excel: 500
+  # 行の色分け規則（正規表現・大文字小文字を区別しない）。未指定なら logs.py の既定を使う。
+  # 既定は「エラー=0」「エラー件数=0」を異常扱いしない。自社ログの書式に合わせて調整する。
+  # error_patterns:
+  #   - '\[(?:ERROR|FATAL)\]'
+  #   - '異常終了'
+  # warn_patterns:
+  #   - '\[WARN\]'
+
+# -----------------------------------------------------------------------------
+# 証跡画像
+#   画像化する対象は「入出力フォルダの一覧」と「回収したファイルの中身」のみ。
+#   DB データとログは Excel のネイティブセルとして出力する（画像にしない）。
+# -----------------------------------------------------------------------------
+evidence:
+  # render : コードで画像を生成（無人実行可・再現性あり）★既定
+  # screen : 実画面をキャプチャ（対話ログオンセッションが必要）
+  # both   : フォルダ一覧のみ実画面、他は render
+  mode: "render"
+  image_width: 1180
+  font_size: 14
+  # フォント候補（上から順に存在するものを使用）
+  font_candidates:
+    - "C:/Windows/Fonts/meiryo.ttc"
+    - "C:/Windows/Fonts/msgothic.ttc"
+    - "C:/Windows/Fonts/YuGothM.ttc"
+    - "/System/Library/Fonts/Hiragino Sans GB.ttc"
+    - "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
+  # ファイル内容プレビューの最大行数・最大桁数
+  file_preview_lines: 40
+  file_preview_cols: 160
+
+# -----------------------------------------------------------------------------
+# Excel 成果物
+# -----------------------------------------------------------------------------
+excel:
+  output_dir: "./output"
+  file_name_format: "TestEvidence_{run_id}.xlsx"
+  # Excel に貼る画像の表示幅（px）。元画像はリサイズせずシート上の表示のみ縮小
+  image_display_width: 720
+  # DB スナップショットの最大出力行数（超過分は行数のみ記載）
+  max_db_rows: 500
+  freeze_header: true

@@ -1,0 +1,47 @@
+# =============================================================================
+# TC004 見本: 別の batch（別 exe・別フォルダ）を同じ実行の中でテストする
+#   - execute.batch          … settings.yaml の batches.<名前> を選ぶ
+#   - setup.clean_dirs 等     … その batch 用の論理名を指定する
+#   - collect.folder_evidence … 証跡画像を撮るフォルダを差し替える
+# =============================================================================
+id: TC004_other_batch
+name: "【見本】別 batch（請求処理）の実行"
+description: "複数の .exe を 1 回の実行でテストする場合の書き方サンプル。batches.invoice の定義で起動する"
+tags: [見本, 正常系]
+enabled: true
+
+setup:
+  clean_dirs: [inv_input_dir, inv_processed_dir, inv_error_dir, inv_output_dir]
+  input_files:
+    - src: "input/INVOICE_20260803.csv"
+      dest_dir: inv_input_dir          # ← 投入先も この batch 用のフォルダ
+
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: >
+        SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS, UPDATED_AT
+        FROM T_ORDER ORDER BY ORDER_ID
+
+execute:
+  batch: invoice                       # ← settings.yaml の batches.invoice を使う
+  args: ["--mode", "monthly", "--date", "20260803"]
+
+collect:
+  # 証跡画像を撮るフォルダ。省略すると settings.folder_evidence.targets が使われる
+  folder_evidence: [inv_input_dir, inv_processed_dir, inv_output_dir]
+  files:
+    - dir: inv_output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+
+assert:
+  exit_code: 0
+  files:
+    - name: "請求結果ファイルの出力"
+      exists: {dir: inv_output_dir, pattern: "RESULT_*.csv", count: 1}
+    - name: "処理済フォルダへの移動"
+      exists: {dir: inv_processed_dir, pattern: "INVOICE_*.csv", count: 1}
+  log:
+    must_contain: ["処理正常終了"]
+    must_not_contain: ["[ERROR]"]

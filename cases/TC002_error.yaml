@@ -1,0 +1,54 @@
+# =============================================================================
+# TC002 異常系: 金額不正の明細を含むファイル → エラーフォルダへ退避され異常終了
+# =============================================================================
+id: TC002_error
+name: "異常系：金額不正明細を含むファイル"
+description: "明細に金額不正が含まれる場合、当該ファイルがエラーフォルダへ移動し、終了コード 1 で異常終了すること"
+tags: [異常系, 単体]
+enabled: true
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  sql:
+    - file: sql/TC002_setup.sql
+  input_files:
+    - src: "input/ORDER_20260804.csv"
+      dest_dir: input_dir
+
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: >
+        SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS, UPDATED_AT
+        FROM T_ORDER ORDER BY ORDER_ID
+
+execute:
+  args: ["--mode", "daily", "--date", "20260804"]
+
+collect:
+  files:
+    - dir: error_dir
+      pattern: "*.csv"
+      preview: true
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+
+assert:
+  exit_code: 1
+
+  db:
+    - table: T_ORDER
+      expected: "expected/TC002_error/db_T_ORDER.csv"
+      key: [ORDER_ID]
+      ignore_columns: [UPDATED_AT]
+
+  files:
+    - name: "エラーフォルダへの退避"
+      exists: {dir: error_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "処理済フォルダが空であること"
+      exists: {dir: processed_dir, pattern: "*", count: 0}
+
+  log:
+    must_contain: ["明細エラー", "処理異常終了"]
+    must_not_contain: ["処理正常終了"]
