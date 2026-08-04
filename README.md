@@ -462,6 +462,62 @@ run_test.bat --case TC001 --tag 異常系    :: 同时用 = 两者都满足（AN
 tags: [異常系, 環境不備]
 ```
 
+### 按机能分文件夹（文件夹名自动成为 tag）
+
+```
+cases/
+├─ 受注/                          ← 这个文件夹下的用例自动带 tag「受注」
+│   ├─ TC_ORDER01.yaml
+│   ├─ TC_ORDER01/input/...
+│   └─ TC_ORDER02.yaml
+├─ 請求/                          ← 自动带 tag「請求」
+│   ├─ TC_INV01.yaml
+│   └─ TC_INV01/input/...
+└─ 共通/
+    └─ TC_COMMON01.yaml
+```
+
+```cmd
+run_test.bat --tag 受注           :: 只跑受注机能
+run_test.bat --tag 受注 --tag 請求 :: 两个机能
+```
+
+嵌套也可以，每层都是一个 tag：`cases/受注/取込/TC001.yaml` → `[受注, 取込]`。
+YAML 里 `tags:` 声明的标签会追加在后面，两者都能用来筛选。
+
+### 不同机能调不同的 .exe
+
+`settings.local.yaml` 里给每个 .exe 定义一个名字：
+
+```yaml
+batch:                                    # 既定
+  exe_path: "C:/app/order/OrderBatch.exe"
+  console_encoding: "cp932"
+  timeout_sec: 600
+
+batches:                                  # 只写和既定的差异
+  invoice:
+    exe_path: "C:/app/invoice/InvoiceBatch.exe"
+    working_dir: "C:/app/invoice"
+    log_dir: inv_log_dir
+  nightly:
+    exe_path: "C:/app/batch/NightlyBatch.exe"
+    timeout_sec: 3600
+```
+
+用例里选：
+
+```yaml
+# cases/請求/TC_INV01.yaml
+execute:
+  batch: invoice                          # ← 用哪个 .exe
+  args: ["--mode", "monthly"]
+collect:
+  folder_evidence: [inv_input_dir, inv_output_dir]   # 该机能的文件夹
+```
+
+一次执行可以跨机能，各用例用各自的 .exe，最后汇总到同一份 Excel。
+
 打错 ID 或标签会**报配置错误并退出码 2**，不会静默跑 0 件。
 
 ```cmd

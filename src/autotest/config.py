@@ -262,14 +262,60 @@ class TestCase:
         return self.source.parent / self.case_id if (self.source.parent / self.case_id).is_dir() else self.source.parent
 
 
+def _folder_tags(path: Path, cases_dir: Path) -> List[str]:
+    """ケース定義の置き場所から暗黙のタグを作る。
+
+    cases/受注/TC001.yaml       -> ["受注"]
+    cases/受注/取込/TC001.yaml   -> ["受注", "取込"]
+    cases/TC001.yaml            -> []
+    """
+    try:
+        rel = path.relative_to(cases_dir)
+    except ValueError:
+        return []
+    return [part for part in rel.parts[:-1]]
+
+
+def find_case_files(cases_dir: Path) -> List[Path]:
+    """ケース定義 YAML を再帰的に集める。
+
+    機能ごとにサブフォルダで整理できるようにする:
+        cases/受注/TC001.yaml
+        cases/請求/TC010.yaml
+
+    ケース資材（cases/<機能>/TC001/input/... 等）の中にある YAML は
+    ケース定義ではないので除外する。判定基準は「同名の YAML が兄弟に
+    存在するフォルダの配下かどうか」。
+    """
+    all_yaml = sorted(list(cases_dir.rglob("*.yaml")) + list(cases_dir.rglob("*.yml")))
+    # 資材フォルダ = 同名の定義ファイルが隣にあるフォルダ
+    material_dirs = {
+        p.parent / p.stem
+        for p in all_yaml
+        if (p.parent / p.stem).is_dir()
+    }
+
+    def is_material(path: Path) -> bool:
+        for parent in path.parents:
+            if parent in material_dirs:
+                return True
+        return False
+
+    return [p for p in all_yaml if not is_material(p)]
+
+
 def load_cases(cases_dir: Union[str, Path], only: Optional[List[str]] = None, tags: Optional[List[str]] = None) -> List[TestCase]:
-    """cases/ 配下の *.yaml を読み込む。only / tags で絞り込み可能。"""
+    """cases/ 配下の *.yaml を読み込む。only / tags で絞り込み可能。
+
+    サブフォルダ名は暗黙のタグになる（cases/受注/TC001.yaml なら「受注」）。
+    機能ごとにフォルダを切っておけば --tag 受注 でまとめて実行できる。
+    """
     cases_dir = Path(cases_dir)
     if not cases_dir.is_dir():
         raise ConfigError(f"ケースフォルダがありません: {cases_dir}")
 
     cases: List[TestCase] = []
-    for path in sorted(cases_dir.glob("*.yaml")) + sorted(cases_dir.glob("*.yml")):
+    for path in find_case_files(cases_dir):
         data = _load_yaml(path)
         case_id = str(data.get("id") or path.stem)
         case = TestCase(
@@ -277,7 +323,11 @@ def load_cases(cases_dir: Union[str, Path], only: Optional[List[str]] = None, ta
             name=str(data.get("name") or case_id),
             source=path,
             description=str(data.get("description") or ""),
-            tags=list(data.get("tags") or []),
+            # サブフォルダ名を暗黙のタグとして足す。機能別にフォルダを切れば
+            # そのまま --tag <機能名> で絞り込める（宣言済みのタグは重複させない）
+            tags=_folder_tags(path, cases_dir) + [
+                t for t in (data.get("tags") or []) if t not in _folder_tags(path, cases_dir)
+            ],
             enabled=bool(data.get("enabled", True)),
             setup=data.get("setup") or {},
             snapshot=data.get("snapshot") or {},

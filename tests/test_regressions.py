@@ -1058,3 +1058,62 @@ class TestListAlignment(unittest.TestCase):
     def test_pad_keeps_separation_when_overflowing(self):
         from autotest.cli import _pad
         self.assertTrue(_pad("very_long_case_id_here", 5).endswith(" "))
+
+
+# =============================================================================
+# 機能別のフォルダ構成（サブフォルダ = 暗黙のタグ）
+# =============================================================================
+class TestCaseFolderStructure(TmpDirCase):
+    """機能ごとにサブフォルダで整理し、--tag <機能名> でまとめて実行できること。"""
+
+    def _build(self):
+        root = self.tmp / "cases"
+        (root / "受注" / "TC_ORDER01" / "input").mkdir(parents=True)
+        (root / "請求").mkdir(parents=True)
+        (root / "受注" / "TC_ORDER01.yaml").write_text(
+            "id: TC_ORDER01\nname: 受注取込\ntags: [正常系]\nexecute: {batch: order}\n",
+            encoding="utf-8")
+        (root / "請求" / "TC_INV01.yaml").write_text(
+            "id: TC_INV01\nname: 請求処理\ntags: [正常系]\nexecute: {batch: invoice}\n",
+            encoding="utf-8")
+        (root / "TC_TOP.yaml").write_text(
+            "id: TC_TOP\nname: トップ直下\n", encoding="utf-8")
+        return root
+
+    def test_subdirectories_are_loaded(self):
+        got = {c.case_id for c in load_cases(self._build())}
+        self.assertEqual(got, {"TC_ORDER01", "TC_INV01", "TC_TOP"})
+
+    def test_folder_name_becomes_tag(self):
+        by_id = {c.case_id: c for c in load_cases(self._build())}
+        self.assertIn("受注", by_id["TC_ORDER01"].tags)
+        self.assertIn("請求", by_id["TC_INV01"].tags)
+        self.assertEqual(by_id["TC_TOP"].tags, [], "トップ直下は暗黙タグ無し")
+
+    def test_declared_tags_are_kept(self):
+        by_id = {c.case_id: c for c in load_cases(self._build())}
+        self.assertIn("正常系", by_id["TC_ORDER01"].tags)
+
+    def test_filter_by_folder_tag(self):
+        got = load_cases(self._build(), tags=["受注"])
+        self.assertEqual([c.case_id for c in got], ["TC_ORDER01"])
+
+    def test_nested_folders_become_multiple_tags(self):
+        root = self.tmp / "cases"
+        (root / "受注" / "取込").mkdir(parents=True)
+        (root / "受注" / "取込" / "TC_X.yaml").write_text(
+            "id: TC_X\nname: X\n", encoding="utf-8")
+        by_id = {c.case_id: c for c in load_cases(root)}
+        self.assertEqual(by_id["TC_X"].tags, ["受注", "取込"])
+
+    def test_yaml_inside_case_material_folder_is_ignored(self):
+        """資材フォルダ内の YAML をケース定義と誤認しないこと。"""
+        root = self._build()
+        (root / "受注" / "TC_ORDER01" / "input" / "notacase.yaml").write_text(
+            "id: SHOULD_NOT_LOAD\nname: 資材\n", encoding="utf-8")
+        got = {c.case_id for c in load_cases(root)}
+        self.assertNotIn("SHOULD_NOT_LOAD", got)
+
+    def test_material_dir_resolves_under_subfolder(self):
+        by_id = {c.case_id: c for c in load_cases(self._build())}
+        self.assertTrue(str(by_id["TC_ORDER01"].dir).endswith("受注/TC_ORDER01"))
