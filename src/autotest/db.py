@@ -263,6 +263,31 @@ def _guess_table_name(sql: str) -> str:
     return "UNKNOWN"
 
 
+def server_now(client: "DbClient") -> Optional[dt.datetime]:
+    """DB サーバ側の現在時刻を取得する。取れなければ None。
+
+    テスト機の時計ではなく DB の時計を使う。両者にずれがあると、
+    batch が更新した行を取りこぼす（＝異常の見逃し）ため。
+    SYSDATETIME() が使えない環境向けに GETDATE() へフォールバックする。
+    """
+    for sql in ("SELECT SYSDATETIME()", "SELECT GETDATE()"):
+        try:
+            _columns, rows = client.query(sql)
+        except Exception:
+            continue
+        if not rows or not rows[0]:
+            continue
+        value = rows[0][0]
+        if isinstance(value, dt.datetime):
+            return value
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return dt.datetime.strptime(str(value)[:26 if "%f" in fmt else 19], fmt)
+            except ValueError:
+                continue
+    return None
+
+
 def format_sql_datetime(value: dt.datetime) -> str:
     """SQL Server のリテラルとして埋め込める形式にする（ミリ秒まで）。
 

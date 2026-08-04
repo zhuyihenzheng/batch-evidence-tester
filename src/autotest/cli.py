@@ -38,6 +38,19 @@ def _prepare_console() -> None:
                 pass
 
 
+def _default_config() -> Path:
+    """既定の設定ファイルを決める。
+
+    config/settings.local.yaml があればそれを優先する。こちらは .gitignore
+    済みなので、各自の環境値（実パス・DB 接続先）を書いても git pull で
+    衝突しない。settings.yaml はリポジトリ側が更新し続けるテンプレート。
+    """
+    local = PROJECT_ROOT / "config" / "settings.local.yaml"
+    if local.exists():
+        return local
+    return PROJECT_ROOT / "config" / "settings.yaml"
+
+
 def _project_root_for(config_path: Path) -> Path:
     """プロジェクトルートを決める。
 
@@ -52,7 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autotest", description="batch(.exe) 自動テスト実行ツール")
     parser.add_argument("command", choices=["run", "validate", "list", "dbcheck"],
                         help="実行するコマンド（dbcheck: SQL Server へ実際に接続できるか確認）")
-    parser.add_argument("--config", default=str(PROJECT_ROOT / "config" / "settings.yaml"), help="設定ファイル")
+    parser.add_argument("--config", default=None,
+                        help="設定ファイル（既定: config/settings.local.yaml があればそれ、無ければ settings.yaml）")
     parser.add_argument("--cases-dir", default=None, help="ケース定義フォルダ（既定: <プロジェクトルート>/cases）")
     parser.add_argument("--case", action="append", dest="cases", help="実行するケースID（複数指定可）")
     parser.add_argument("--tag", action="append", dest="tags", help="実行するタグ（複数指定可）")
@@ -213,7 +227,7 @@ def _validate(settings, cases, args, project_root: Path) -> int:
     errors: List[str] = []
     warnings: List[str] = []
 
-    print(f"設定ファイル : {args.config}")
+    print(f"設定ファイル : {args.config or _default_config()}")
     print(f"ケース定義   : {len(cases)} 件")
 
     # --- paths（run 時に自動作成されるため「未作成」は警告扱い）--------------
@@ -287,7 +301,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _prepare_console()
     args = build_parser().parse_args(argv)
 
-    config_path = Path(args.config)
+    config_path = Path(args.config) if args.config else _default_config()
     project_root = _project_root_for(config_path)
     cases_dir = Path(args.cases_dir) if args.cases_dir else project_root / "cases"
 

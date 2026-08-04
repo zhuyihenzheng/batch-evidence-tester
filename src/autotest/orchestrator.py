@@ -418,17 +418,21 @@ class CaseRunner:
             target[table.title] = table
 
     def _resolve_batch_start(self, case: TestCase, client: db_mod.DbClient):
-        """{batch_start} の基準時刻を決める。テスト機の時計を使う。
+        """{batch_start} の基準時刻を決める。
 
-        DB へ問い合わせない分、権限やバージョン差の影響を受けず単純。
-        ただしテスト機の時計が DB サーバより進んでいると、batch が最初に
-        更新した行を取りこぼす（＝異常を見逃す）。これを避けるため
-        既定で数秒さかのぼった時刻を基準にする。余分に拾う分には
-        実行前スナップショットとの差で判別できるので害が小さい。
+        DB サーバの時計から取る。テスト機と DB でずれていると、batch が
+        最初に更新した行を取りこぼす（＝異常の見逃し）ため。
+        使っていないケースでは問い合わせ自体を行わない。
         """
         specs = case.snapshot.get("tables", [])
         if not any("{batch_start" in str(spec.get("sql", "")) for spec in specs):
             return None
+        # DB サーバの時計を使う。テスト機との時計ずれで対象行を取りこぼさないため
+        mark = db_mod.server_now(client)
+        if mark is not None:
+            return mark
+        # 取得できない場合のみテスト機の時計で代用する。進んでいた場合に
+        # 取りこぼさないよう、マージン分さかのぼる
         margin = int(self.settings.database.get("batch_start_margin_sec", 5))
         return datetime.now() - timedelta(seconds=margin)
 

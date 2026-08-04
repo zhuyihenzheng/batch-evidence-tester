@@ -795,21 +795,24 @@ class TestQueryErrorIncludesSql(unittest.TestCase):
 # =============================================================================
 # {batch_start} を使わないケースでは DB 時刻を問い合わせないこと
 # =============================================================================
-class TestBatchStartUsesLocalTime(TmpDirCase):
-    """{batch_start} はテスト機の時計から決める（DB へ問い合わせない）。
+class TestBatchStartSource(TmpDirCase):
+    """{batch_start} の基準時刻は DB サーバの時計から取ること。
 
-    DB 時刻の取得は権限やバージョン差で失敗の種になるため使わない。
-    代わりに、テスト機の時計が DB より進んでいた場合に batch が最初に
-    更新した行を取りこぼさないよう、既定で数秒さかのぼる。
+    テスト機と DB でずれていると batch が更新した行を取りこぼす
+    （＝異常の見逃し）。DB から取れないときだけテスト機の時計で代用し、
+    その場合は取りこぼさないようマージン分さかのぼる。
     """
 
-    class _CountingClient:
-        def __init__(self):
+    class _Client:
+        def __init__(self, value="2026-08-05 09:15:22"):
+            self.value = value
             self.queries = []
 
         def query(self, sql, params=None):
             self.queries.append(sql)
-            return ["now"], [["2026-08-05 00:00:00"]]
+            if self.value is None:
+                raise RuntimeError("not available")
+            return ["now"], [[self.value]]
 
         def execute_script(self, sql):
             pass
@@ -824,37 +827,71 @@ class TestBatchStartUsesLocalTime(TmpDirCase):
         extra = {"database": {"server": "s", "database": "d"}}
         if margin is not None:
             extra["database"]["batch_start_margin_sec"] = margin
-        settings = self.write_settings({"log_dir": str(self.tmp)}, extra=extra)
-        return CaseRunner(settings, self.tmp)
+        return CaseRunner(self.write_settings({"log_dir": str(self.tmp)}, extra=extra), self.tmp)
 
-    def test_never_queries_the_database(self):
-        client = self._CountingClient()
-        runner = self._runner()
-        runner._resolve_batch_start(
-            self._case("SELECT * FROM T WHERE UPD >= '{batch_start}'"), client)
-        self.assertEqual(client.queries, [], "DB へ問い合わせてはいけない")
+    def test_uses_db_time(self):
+        client = self._Client("2026-08-05 09:15:22")
+        mark = self._runner()._resolve_batch_start(
+            self._case("WHERE UPD >= '{batch_start}'"), client)
+        self.assertEqual(mark.strftime("%Y-%m-%d %H:%M:%S"), "2026-08-05 09:15:22")
+        self.assertTrue(client.queries, "DB へ問い合わせていない")
 
-    def test_returns_none_when_placeholder_unused(self):
-        runner = self._runner()
-        mark = runner._resolve_batch_start(
-            self._case("SELECT * FROM T_ORDER ORDER BY ORDER_ID"), self._CountingClient())
+    def test_not_queried_when_placeholder_unused(self):
+        """使っていないケースで余計な問い合わせをしないこと。"""
+        client = self._Client()
+        mark = self._runner()._resolve_batch_start(
+            self._case("SELECT * FROM T_ORDER ORDER BY ORDER_ID"), client)
         self.assertIsNone(mark)
+        self.assertEqual(client.queries, [])
 
-    def test_margin_is_subtracted(self):
-        """時計ずれで取りこぼさないよう、基準時刻を数秒さかのぼること。"""
+    def test_falls_back_to_local_clock_with_margin(self):
+        """DB から取れないときはテスト機の時計。取りこぼし防止に数秒さかのぼる。"""
         from datetime import datetime as _dtm
-        runner = self._runner(margin=30)
+        client = self._Client(None)          # 常に失敗する
         before = _dtm.now()
-        mark = runner._resolve_batch_start(
-            self._case("WHERE UPD >= '{batch_start}'"), self._CountingClient())
+        mark = self._runner(margin=30)._resolve_batch_start(
+            self._case("WHERE UPD >= '{batch_start}'"), client)
         self.assertIsNotNone(mark)
-        delta = (before - mark).total_seconds()
-        self.assertGreaterEqual(delta, 29, "マージンが引かれていない")
-        self.assertLess(delta, 40)
+        self.assertGreaterEqual((before - mark).total_seconds(), 29, "マージンが引かれていない")
 
-    def test_zero_margin_is_allowed(self):
-        from datetime import datetime as _dtm
-        runner = self._runner(margin=0)
-        mark = runner._resolve_batch_start(
-            self._case("WHERE UPD >= '{batch_start}'"), self._CountingClient())
-        self.assertLess(abs((_dtm.now() - mark).total_seconds()), 5)
+    def test_falls_back_to_getdate(self):
+        """SYSDATETIME が使えない環境向けに GETDATE を試すこと。"""
+        class OnlyGetdate(self._Client):
+            def query(self, sql, params=None):
+                self.queries.append(sql)
+                if "SYSDATETIME" in sql:
+                    raise RuntimeError("not supported")
+                return ["now"], [["2026-08-05 09:15:22"]]
+
+        client = OnlyGetdate()
+        mark = self._runner()._resolve_batch_start(
+            self._case("WHERE UPD >= '{batch_start}'"), client)
+        self.assertIsNotNone(mark)
+        self.assertTrue(any("GETDATE" in q for q in client.queries))
+
+
+class TestLocalConfigPreference(TmpDirCase):
+    """config/settings.local.yaml があればそちらを既定にすること。
+
+    settings.yaml はリポジトリ側が更新し続けるため、各自の環境値を
+    そこに書くと毎回 git pull で衝突する。local 側は .gitignore 済み。
+    """
+
+    def test_local_config_is_preferred(self):
+        import autotest.cli as cli
+        saved = cli.PROJECT_ROOT
+        try:
+            cli.PROJECT_ROOT = self.tmp
+            (self.tmp / "config").mkdir()
+            (self.tmp / "config" / "settings.yaml").write_text("a: 1", encoding="utf-8")
+            self.assertEqual(cli._default_config().name, "settings.yaml")
+
+            (self.tmp / "config" / "settings.local.yaml").write_text("a: 2", encoding="utf-8")
+            self.assertEqual(cli._default_config().name, "settings.local.yaml")
+        finally:
+            cli.PROJECT_ROOT = saved
+
+    def test_local_config_is_gitignored(self):
+        """*.local.yaml が .gitignore に入っていること。"""
+        gitignore = (Path(__file__).resolve().parent.parent / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("*.local.yaml", gitignore)

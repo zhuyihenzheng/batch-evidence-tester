@@ -114,10 +114,9 @@ database:
   trust_server_certificate: true
   login_timeout_sec: 15
   query_timeout_sec: 60
-  # スナップショット SQL の {batch_start} をどれだけさかのぼらせるか（秒）。
-  # 基準時刻はテスト機の時計から取るため、DB サーバより進んでいると
-  # batch が最初に更新した行を取りこぼす（＝異常の見逃し）。
-  # 余分に拾う分は実行前スナップショットとの差で判別できるので害が小さい。
+  # {batch_start} は DB サーバの時計（SYSDATETIME / GETDATE）から取る。
+  # それが取得できなかった場合のみテスト機の時計で代用し、進んでいた場合に
+  # 取りこぼさないようこの秒数だけさかのぼる。
   batch_start_margin_sec: 5
 
 # DB 値を Excel に書くときの既定フォーマット（ケース側で個別上書き可）
