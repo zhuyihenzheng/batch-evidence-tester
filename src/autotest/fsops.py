@@ -296,6 +296,74 @@ def put_input_files(
     return placed
 
 
+class ReplacedFile:
+    """差し替えたファイルと、その退避先。実行後に元へ戻すために持ち回る。"""
+
+    def __init__(self, dest: Path, backup: Optional[Path], existed: bool) -> None:
+        self.dest = dest
+        self.backup = backup      # 退避先。元ファイルが無かった場合は None
+        self.existed = existed    # 差し替え前に存在したか
+
+
+def replace_files(
+    settings: Settings,
+    case_dir: Path,
+    specs: List[dict],
+    backup_root: Path,
+    dry_run: bool = False,
+) -> List[ReplacedFile]:
+    """batch の設定ファイル等をケース用のものに差し替える。
+
+    元ファイルは backup_root へ退避する。テストが環境を変更したまま
+    終わると、次のテストや手動実行が壊れた設定で動いてしまうため、
+    呼び出し側は必ず restore_files() で戻すこと。
+    """
+    replaced: List[ReplacedFile] = []
+    for spec in specs:
+        src_raw = spec.get("src")
+        if not src_raw:
+            raise ConfigError("setup.replace_files に src がありません: %s" % spec)
+        src = Path(src_raw)
+        if not src.is_absolute():
+            src = case_dir / src
+        if not src.exists():
+            raise ConfigError("差し替え元ファイルがありません: %s" % src)
+
+        dest_dir = settings.resolve_dir(spec.get("dest_dir", ""))
+        name = settings.expand(spec.get("name") or src.name)
+        dest = dest_dir / name
+
+        backup = None
+        existed = dest.exists()
+        if not dry_run:
+            if existed:
+                backup_root.mkdir(parents=True, exist_ok=True)
+                backup = backup_root / (name + ".orig")
+                shutil.copy2(dest, backup)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        replaced.append(ReplacedFile(dest, backup, existed))
+    return replaced
+
+
+def restore_files(replaced: List[ReplacedFile]) -> List[str]:
+    """差し替えたファイルを元に戻す。戻せなかったものの説明を返す。
+
+    1 つ失敗しても残りは戻す。環境を中途半端な状態で放置しないため。
+    """
+    problems: List[str] = []
+    for item in replaced:
+        try:
+            if item.backup is not None and item.backup.exists():
+                shutil.copy2(item.backup, item.dest)
+            elif not item.existed and item.dest.exists():
+                # 元々無かったファイルなので、差し替えで作った分を消す
+                item.dest.unlink()
+        except OSError as exc:
+            problems.append("%s を元に戻せませんでした: %s" % (item.dest, exc))
+    return problems
+
+
 def collect_artifacts(
     settings: Settings,
     specs: List[dict],

@@ -115,6 +115,31 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
         if dest_alias not in aliases:
             problems.append("input_files.dest_dir の論理名が paths に未定義です: %s" % dest_alias)
 
+    # --- replace_files（batch 設定ファイルの差し替え）-------------------------
+    for spec in (case.setup or {}).get("replace_files", []):
+        src_raw = spec.get("src")
+        if not src_raw:
+            problems.append("setup.replace_files に src がありません: %s" % spec)
+            continue
+        src = Path(src_raw)
+        if not src.is_absolute():
+            src = case.dir / src
+        if not src.exists():
+            problems.append("差し替え元ファイルがありません: %s" % src)
+        dest_alias = spec.get("dest_dir")
+        if not dest_alias:
+            problems.append("setup.replace_files に dest_dir がありません: %s" % spec)
+        elif dest_alias not in aliases:
+            problems.append("replace_files.dest_dir の論理名が paths に未定義です: %s" % dest_alias)
+        # 差し替え先を clean_dirs で消すと、退避前に元ファイルが失われる
+        cleaning = {(c["alias"] if isinstance(c, dict) else c)
+                    for c in (case.setup or {}).get("clean_dirs", [])}
+        if dest_alias in cleaning:
+            problems.append(
+                "setup.clean_dirs に %s があるため、差し替え先のフォルダが空にされます。"
+                "batch 本体や元の設定ファイルまで消えるので、この論理名は clean_dirs から外してください。"
+                % dest_alias)
+
     # --- collect / folder_evidence ------------------------------------------
     for spec in (case.collect or {}).get("files", []):
         if spec.get("dir", "output_dir") not in aliases:
@@ -155,6 +180,8 @@ class CaseRunner:
         self._progress = progress or (lambda step: None)
         # batch 起動直前に DB から取る基準時刻（{batch_start} の展開に使う）
         self._batch_start_mark = None
+        # 差し替え中のファイル（ケース終了時に元へ戻す）
+        self._replaced_files = []
 
     def _step(self, name: str) -> None:
         self._progress(name)
@@ -234,6 +261,7 @@ class CaseRunner:
             result.images.extend(folder_before)
             result.images.extend(folder_after)
             result.images.extend(self._render_file_previews(renderer, case, result))
+            result.images.extend(self._render_replaced_configs(renderer, case))
 
             self._step("判定")
             if self.dry_run:
@@ -256,6 +284,15 @@ class CaseRunner:
         except Exception as exc:  # 1 ケースの失敗で全体を止めない
             result.fatal_error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
         finally:
+            # 差し替えたファイルは、途中で落ちた場合でも必ず元に戻す。
+            # 戻し損ねると次のケースや手動実行が壊れた設定で動いてしまう
+            restore_problems = fsops.restore_files(getattr(self, "_replaced_files", []))
+            self._replaced_files = []
+            if restore_problems:
+                result.checks.append(CheckResult(
+                    "設定ファイルの復元", "teardown", NG,
+                    "差し替えたファイルを元に戻せませんでした（環境が変更されたままです）: "
+                    + " / ".join(restore_problems)))
             if client:
                 client.close()
 
@@ -296,6 +333,14 @@ class CaseRunner:
                 client.execute_script(sql_text)
 
         fsops.put_input_files(self.settings, case.dir, setup.get("input_files", []), dry_run=self.dry_run)
+
+        # batch の設定ファイル等をケース用に差し替える。元ファイルは退避し、
+        # ケース終了時に必ず戻す（環境を変更したまま終わらせない）
+        self._replaced_files = fsops.replace_files(
+            self.settings, case.dir, setup.get("replace_files", []),
+            backup_root=self.run_dir / "backup" / case.case_id,
+            dry_run=self.dry_run,
+        )
 
     # ------------------------------------------------------------------
     def _teardown(self, case: TestCase, client: db_mod.DbClient) -> Optional[CheckResult]:
@@ -491,6 +536,41 @@ class CaseRunner:
         return [logs.to_table(sl, classifier, keywords, max_lines=max_lines) for sl in slices]
 
     # ------------------------------------------------------------------
+    def _render_replaced_configs(self, renderer: render.Renderer, case: TestCase) -> List[ImageEvidence]:
+        """差し替えた設定ファイルの中身を証跡に残す。
+
+        「このケースはどの設定で動かしたのか」は後から確認できないと
+        再現も原因調査もできないため、実際に配置した内容を記録する。
+        """
+        images: List[ImageEvidence] = []
+        cfg = self.settings.evidence
+        for spec in (case.setup or {}).get("replace_files", []):
+            src = Path(spec["src"])
+            if not src.is_absolute():
+                src = case.dir / src
+            if not src.exists():
+                continue
+            dest_dir = self.settings.resolve_dir(spec.get("dest_dir", ""))
+            name = self.settings.expand(spec.get("name") or src.name)
+            text = fsops.read_text_file(
+                src, self.settings.log.get("encoding", "utf-8"),
+                self.settings.log.get("encoding_fallbacks", ["cp932"]))
+            paths = renderer.text_page(
+                title=f"差し替えた設定: {name}",
+                subtitle=str(dest_dir / name),
+                lines=text.splitlines(),
+                stem=f"config_{Path(name).stem}",
+                max_lines=int(cfg.get("file_preview_lines", 40)),
+                max_cols=int(cfg.get("file_preview_cols", 160)),
+            )
+            for i, path in enumerate(paths, start=1):
+                images.append(ImageEvidence(
+                    title=f"差し替えた設定: {name}" + (f" ({i}/{len(paths)})" if len(paths) > 1 else ""),
+                    path=path,
+                    caption=f"差し替え元: {src}  /  実行後に元の内容へ復元済み",
+                ))
+        return images
+
     def _render_file_previews(self, renderer: render.Renderer, case: TestCase, result: CaseResult) -> List[ImageEvidence]:
         """回収したファイルの中身を画像化する（preview: true の指定分のみ）。"""
         images: List[ImageEvidence] = []

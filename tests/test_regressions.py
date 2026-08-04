@@ -895,3 +895,101 @@ class TestLocalConfigPreference(TmpDirCase):
         """*.local.yaml が .gitignore に入っていること。"""
         gitignore = (Path(__file__).resolve().parent.parent / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("*.local.yaml", gitignore)
+
+
+# =============================================================================
+# batch 設定ファイルの差し替えと復元
+# =============================================================================
+class TestReplaceFiles(TmpDirCase):
+    """ケースごとに batch の設定ファイルを差し替え、実行後に必ず戻すこと。
+
+    戻し損ねると環境が変更されたまま残り、次のケースや手動実行が
+    壊れた設定で動いてしまう。
+    """
+
+    def _setup_layout(self):
+        batch_dir = self.tmp / "app" / "batch"
+        batch_dir.mkdir(parents=True)
+        (batch_dir / "OrderBatch.exe.config").write_text("ORIGINAL", encoding="utf-8")
+        case_dir = self.tmp / "cases" / "TC"
+        (case_dir / "config").mkdir(parents=True)
+        (case_dir / "config" / "case01.config").write_text("CASE01", encoding="utf-8")
+        return batch_dir, case_dir
+
+    def _settings(self, batch_dir):
+        return self.write_settings({"batch_dir": str(batch_dir)})
+
+    def test_replaced_then_restored(self):
+        batch_dir, case_dir = self._setup_layout()
+        settings = self._settings(batch_dir)
+        target = batch_dir / "OrderBatch.exe.config"
+
+        replaced = fsops.replace_files(
+            settings, case_dir,
+            [{"src": "config/case01.config", "dest_dir": "batch_dir",
+              "name": "OrderBatch.exe.config"}],
+            backup_root=self.tmp / "backup")
+        self.assertEqual(target.read_text(encoding="utf-8"), "CASE01", "差し替わっていない")
+
+        self.assertEqual(fsops.restore_files(replaced), [])
+        self.assertEqual(target.read_text(encoding="utf-8"), "ORIGINAL", "元に戻っていない")
+
+    def test_file_created_when_absent_is_removed_on_restore(self):
+        """元々無かったファイルは、復元時に削除されること（ゴミを残さない）。"""
+        batch_dir, case_dir = self._setup_layout()
+        settings = self._settings(batch_dir)
+        target = batch_dir / "extra.config"
+
+        replaced = fsops.replace_files(
+            settings, case_dir,
+            [{"src": "config/case01.config", "dest_dir": "batch_dir", "name": "extra.config"}],
+            backup_root=self.tmp / "backup")
+        self.assertTrue(target.exists())
+
+        fsops.restore_files(replaced)
+        self.assertFalse(target.exists(), "差し替えで作ったファイルが残っている")
+
+    def test_missing_source_is_config_error(self):
+        batch_dir, case_dir = self._setup_layout()
+        with self.assertRaises(ConfigError):
+            fsops.replace_files(
+                self._settings(batch_dir), case_dir,
+                [{"src": "config/nope.config", "dest_dir": "batch_dir"}],
+                backup_root=self.tmp / "backup")
+
+    def test_restore_continues_after_one_failure(self):
+        """1 つ戻せなくても、残りは戻すこと（中途半端な状態で放置しない）。"""
+        batch_dir, case_dir = self._setup_layout()
+        settings = self._settings(batch_dir)
+        (batch_dir / "second.config").write_text("ORIG2", encoding="utf-8")
+
+        replaced = fsops.replace_files(
+            settings, case_dir,
+            [{"src": "config/case01.config", "dest_dir": "batch_dir", "name": "OrderBatch.exe.config"},
+             {"src": "config/case01.config", "dest_dir": "batch_dir", "name": "second.config"}],
+            backup_root=self.tmp / "backup")
+
+        # 1 件目の退避ファイルを壊して復元を失敗させる
+        replaced[0].backup.unlink()
+        replaced[0].existed = True
+        replaced[0].backup = self.tmp / "backup" / "gone.orig"
+
+        problems = fsops.restore_files(replaced)
+        self.assertEqual((batch_dir / "second.config").read_text(encoding="utf-8"), "ORIG2",
+                         "2 件目が戻っていない")
+
+    def test_preflight_rejects_cleaning_the_replace_target(self):
+        """差し替え先を clean_dirs に入れる矛盾を検出すること。"""
+        from autotest.config import TestCase
+        from autotest.orchestrator import preflight_case
+
+        batch_dir, case_dir = self._setup_layout()
+        settings = self._settings(batch_dir)
+        settings.raw["batch"]["exe_path"] = str(batch_dir / "OrderBatch.exe.config")
+
+        case = TestCase(case_id="TC", name="TC", source=self.tmp / "cases" / "TC.yaml",
+                        setup={"clean_dirs": ["batch_dir"],
+                               "replace_files": [{"src": "config/case01.config",
+                                                  "dest_dir": "batch_dir"}]})
+        problems = " ".join(preflight_case(settings, case))
+        self.assertIn("clean_dirs", problems)

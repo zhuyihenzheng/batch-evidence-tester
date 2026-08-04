@@ -25,6 +25,16 @@ setup:
   sql:
     - file: sql/TC001_setup.sql
 
+  # batch の設定ファイルをケース専用のものに差し替える（任意）。
+  # 元ファイルは output/<run_id>/backup/<ケースID>/ へ退避し、ケース終了時に
+  # 必ず元へ戻す（途中で失敗した場合も戻す）。実際に配置した内容は
+  # 証跡画像として Excel に残るので、後から「どの設定で動かしたか」を追える。
+  #   replace_files:
+  #     - src: "config/case01.exe.config"   # cases/<id>/ からの相対
+  #       dest_dir: batch_dir               # paths の論理名（差し替え先フォルダ）
+  #       name: "OrderBatch.exe.config"     # 置き換える先のファイル名（省略時は src と同名）
+  # ※ dest_dir を clean_dirs に入れると batch 本体まで消えるため preflight で弾く
+
   # テストデータの投入。src は cases/<id>/ からの相対パス
   input_files:
     - src: "input/ORDER_20260803.csv"
