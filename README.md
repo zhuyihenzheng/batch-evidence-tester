@@ -443,6 +443,27 @@ Excel 里各占一个 sheet）。
 
 ## 6. 运行
 
+### 选择要跑哪些用例
+
+```cmd
+python -m autotest list                 :: 先看有哪些用例和标签
+
+run_test.bat                            :: 全部（enabled: true のもの）
+run_test.bat --case TC001_normal        :: 单个
+run_test.bat --case TC001 --case TC005  :: 多个（--case 重复即可）
+run_test.bat --tag 異常系                :: 按标签
+run_test.bat --tag 正常系 --tag 環境不備  :: 多标签 = 任一命中（OR）
+run_test.bat --case TC001 --tag 異常系    :: 同时用 = 两者都满足（AND）
+```
+
+用例的标签在 YAML 里定义：
+
+```yaml
+tags: [異常系, 環境不備]
+```
+
+打错 ID 或标签会**报配置错误并退出码 2**，不会静默跑 0 件。
+
 ```cmd
 :: --- 接真实环境前的确认 ---
 python -m autotest dbcheck            :: SQL Server 能不能连上（列出已装 ODBC 驱动 + 实际连一次）

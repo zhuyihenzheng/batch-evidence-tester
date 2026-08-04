@@ -993,3 +993,68 @@ class TestReplaceFiles(TmpDirCase):
                                                   "dest_dir": "batch_dir"}]})
         problems = " ".join(preflight_case(settings, case))
         self.assertIn("clean_dirs", problems)
+
+
+# =============================================================================
+# ケース絞り込み（--case / --tag）
+# =============================================================================
+class TestCaseFiltering(TmpDirCase):
+    def _make_cases(self):
+        d = self.tmp / "cases"
+        d.mkdir()
+        defs = [
+            ("A", "TC_A", ["正常系", "単体"]),
+            ("B", "TC_B", ["異常系", "単体"]),
+            ("C", "TC_C", ["異常系", "環境不備"]),
+        ]
+        for fname, cid, tags in defs:
+            (d / (fname + ".yaml")).write_text(
+                "id: %s\nname: %s\ntags: [%s]\n" % (cid, cid, ", ".join(tags)),
+                encoding="utf-8")
+        return d
+
+    def test_multiple_cases_are_all_selected(self):
+        got = load_cases(self._make_cases(), only=["TC_A", "TC_C"])
+        self.assertEqual(sorted(c.case_id for c in got), ["TC_A", "TC_C"])
+
+    def test_tag_selects_all_matching(self):
+        got = load_cases(self._make_cases(), tags=["異常系"])
+        self.assertEqual(sorted(c.case_id for c in got), ["TC_B", "TC_C"])
+
+    def test_multiple_tags_are_or(self):
+        """複数タグはいずれかに一致すれば対象（AND ではない）。"""
+        got = load_cases(self._make_cases(), tags=["正常系", "環境不備"])
+        self.assertEqual(sorted(c.case_id for c in got), ["TC_A", "TC_C"])
+
+    def test_case_and_tag_combine_as_and(self):
+        got = load_cases(self._make_cases(), only=["TC_A", "TC_B"], tags=["異常系"])
+        self.assertEqual([c.case_id for c in got], ["TC_B"])
+
+    def test_unknown_case_id_is_error(self):
+        """打ち間違いを黙って 0 件実行にしないこと。"""
+        with self.assertRaises(ConfigError) as ctx:
+            load_cases(self._make_cases(), only=["TC_TYPO"])
+        self.assertIn("TC_TYPO", str(ctx.exception))
+
+    def test_unknown_tag_is_error(self):
+        with self.assertRaises(ConfigError):
+            load_cases(self._make_cases(), tags=["存在しないタグ"])
+
+
+class TestListAlignment(unittest.TestCase):
+    """全角を含む一覧が桁ずれしないこと。"""
+
+    def test_east_asian_width_counted_as_two(self):
+        from autotest.cli import _display_width
+        self.assertEqual(_display_width("abc"), 3)
+        self.assertEqual(_display_width("異常系"), 6)
+        self.assertEqual(_display_width("TC_異常"), 7)
+
+    def test_pad_aligns_by_display_width(self):
+        from autotest.cli import _display_width, _pad
+        for text in ("TC001", "異常系/環境不備", "見本"):
+            self.assertEqual(_display_width(_pad(text, 20)), 20)
+
+    def test_pad_keeps_separation_when_overflowing(self):
+        from autotest.cli import _pad
+        self.assertTrue(_pad("very_long_case_id_here", 5).endswith(" "))

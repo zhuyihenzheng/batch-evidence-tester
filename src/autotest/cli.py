@@ -83,6 +83,46 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _display_width(text: str) -> int:
+    """表示上の桁数。日本語などの全角文字を 2 桁として数える。
+
+    str の長さで揃えると、全角を含む列がずれて読めなくなる。
+    """
+    import unicodedata
+
+    return sum(2 if unicodedata.east_asian_width(ch) in "FWA" else 1 for ch in text)
+
+
+def _pad(text: str, width: int) -> str:
+    """表示幅を揃えて右側を空白で埋める。溢れる場合は 1 桁だけ空ける。"""
+    return text + " " * max(1, width - _display_width(text))
+
+
+def _list_cases(cases) -> int:
+    """ケース一覧とタグ一覧を表示する。"""
+    id_w = max([_display_width(c.case_id) for c in cases] + [10]) + 2
+    tag_w = max([_display_width("/".join(c.tags)) for c in cases] + [8]) + 2
+
+    print(_pad("ケースID", id_w) + _pad("区分", tag_w) + "ケース名")
+    print("-" * (id_w + tag_w + 40))
+    for c in cases:
+        print(_pad(c.case_id, id_w) + _pad("/".join(c.tags), tag_w) + c.name)
+
+    # 使えるタグを提示する。--tag に何を渡せるか分からないと使えないため
+    counts = {}
+    for c in cases:
+        for tag in c.tags:
+            counts[tag] = counts.get(tag, 0) + 1
+    if counts:
+        print()
+        print("タグ一覧（--tag で指定。複数指定するといずれかに一致するケースが対象）:")
+        for tag in sorted(counts):
+            print("  %s  (%d 件)" % (_pad(tag, 14), counts[tag]))
+    print()
+    print("%d 件" % len(cases))
+    return 0
+
+
 def _dbcheck(settings, timeout_sec: int = 10) -> int:
     """SQL Server へ実際に接続できるかを確認する。
 
@@ -314,11 +354,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if args.command == "list":
-        print(f"{'ケースID':<16}{'区分':<16}ケース名")
-        print("-" * 72)
-        for c in cases:
-            print(f"{c.case_id:<16}{'/'.join(c.tags):<16}{c.name}")
-        return 0
+        return _list_cases(cases)
 
     if args.command == "dbcheck":
         return _dbcheck(settings, timeout_sec=int(settings.database.get("login_timeout_sec", 15)))
