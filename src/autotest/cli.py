@@ -63,6 +63,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _is_under(path: Path, parent: Path) -> bool:
+    """path が parent の配下か。Path.is_relative_to は 3.9+ のため自前で判定する。"""
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
 def _validate(settings, cases, args, project_root: Path) -> int:
     """設定とケース定義の妥当性チェック。
 
@@ -78,11 +87,27 @@ def _validate(settings, cases, args, project_root: Path) -> int:
     print(f"ケース定義   : {len(cases)} 件")
 
     # --- paths（run 時に自動作成されるため「未作成」は警告扱い）--------------
+    raw_paths = settings.raw.get("paths") or {}
+    # サンドボックス設定はプロジェクト配下の相対パスを意図的に使うため、
+    # 「相対パス警告」の対象から外す（env.sandbox: true で明示する）
+    is_sandbox = bool(settings.env.get("sandbox", False))
     for alias, path in settings.path_aliases.items():
         mark = "存在" if path.is_dir() else "未作成（run 時に自動作成）"
         if not path.is_dir():
             warnings.append(f"paths.{alias} は未作成です: {path}")
         print(f"  paths.{alias:<16} {path}  ({mark})")
+
+        # 相対パスはツール自身のフォルダ配下に解決される。テスト対象 batch の
+        # フォルダを指すつもりで相対で書くと、まったく別の場所を見てしまうため警告する
+        raw = str(raw_paths.get(alias, ""))
+        if not is_sandbox and raw and not Path(raw).is_absolute() and _is_under(path, project_root):
+            warnings.append(
+                f"paths.{alias} が相対パスのため、ツール自身のフォルダ配下に解決されています。\n"
+                f"          設定値: {raw}\n"
+                f"          解決先: {path}\n"
+                f"          テスト対象 batch のフォルダを指すなら、ドライブ文字付きの"
+                f"絶対パス（例 C:/app/batch/in）で書いてください。"
+            )
 
     # --- 既定 batch ---------------------------------------------------------
     exe = _resolve_exe(str(settings.batch["exe_path"]), project_root)
