@@ -352,6 +352,37 @@ def build_connection_string(settings: Settings, timeout_sec: Optional[int] = Non
     return conn_str, shown
 
 
+def diagnose_password_env(env_name: str, value: Optional[str]) -> List[str]:
+    """パスワード環境変数の状態を診断する。値そのものは決して返さない。
+
+    setx は「新しいプロセスにしか効かない」ため設定したつもりで未反映、
+    cmd では % & ^ 等が解釈されて値が壊れる、という事故が起きやすい。
+    """
+    if value is None:
+        return [
+            "[NG] このプロセスからは見えていません。",
+            "     setx で設定した場合、既存のコンソールには反映されません。",
+            "     PowerShell を開き直すか、次で直接確認してください:",
+            '       [Environment]::GetEnvironmentVariable("%s", "User")' % env_name,
+        ]
+
+    lines = ["[OK] 設定済み（%d 文字）" % len(value)]
+    if value == "":
+        return ["[NG] 空文字が設定されています。値の指定を確認してください。"]
+
+    # cmd の setx はこれらを解釈するため、意図した値と違って保存されることがある
+    risky = [c for c in "%&^<>|" if c in value]
+    if risky:
+        lines.append("[警告] 特殊文字 %s を含みます。cmd の setx で設定した場合、" % "".join(risky))
+        lines.append("       値が壊れている可能性があります。PowerShell から設定し直せます:")
+        lines.append('         [Environment]::SetEnvironmentVariable("%s", \'<パスワード>\', "User")' % env_name)
+    if value != value.strip():
+        lines.append("[警告] 前後に空白が含まれています。引用符の付け方を確認してください。")
+    if value.startswith('"') and value.endswith('"'):
+        lines.append("[警告] 値が引用符で囲まれたまま保存されています。引用符も値の一部になっています。")
+    return lines
+
+
 def diagnose_connection_error(exc: Exception) -> List[str]:
     """接続例外から、次に何を確認すべきかの助言を組み立てる。"""
     text = str(exc)

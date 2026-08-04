@@ -401,3 +401,38 @@ class TestServerStringParsing(unittest.TestCase):
         host, port, _inst = self._parse("SQLSRV01:1433")
         self.assertEqual(host, "SQLSRV01:1433")
         self.assertEqual(port, 1433, "既定ポートが補われること（実際の接続は失敗する想定）")
+
+
+# =============================================================================
+# パスワード環境変数の診断（setx 由来の事故を見つけられること）
+# =============================================================================
+class TestPasswordEnvDiagnosis(unittest.TestCase):
+    def _lines(self, value):
+        from autotest import db as db_mod
+        return db_mod.diagnose_password_env("AUTOTEST_DB_PASSWORD", value)
+
+    def test_not_set_explains_setx_behaviour(self):
+        text = " ".join(self._lines(None))
+        self.assertIn("NG", text)
+        self.assertIn("setx", text, "setx が新プロセスにしか効かない点を案内すること")
+
+    def test_empty_string_is_ng(self):
+        self.assertIn("NG", " ".join(self._lines("")))
+
+    def test_normal_value_reports_length_only(self):
+        lines = self._lines("GoodPass123")
+        text = " ".join(lines)
+        self.assertIn("OK", text)
+        self.assertIn("11 文字", text)
+        self.assertNotIn("GoodPass123", text, "パスワードそのものを出力してはいけない")
+
+    def test_special_characters_warned(self):
+        text = " ".join(self._lines("p@ss%wo&rd"))
+        self.assertIn("警告", text)
+        self.assertNotIn("p@ss%wo&rd", text, "パスワードそのものを出力してはいけない")
+
+    def test_surrounding_whitespace_warned(self):
+        self.assertIn("空白", " ".join(self._lines(" secret ")))
+
+    def test_quoted_value_warned(self):
+        self.assertIn("引用符", " ".join(self._lines('"secret"')))
