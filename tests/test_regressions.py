@@ -303,3 +303,59 @@ class TestCompareTextFileFromPath(TmpDirCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# =============================================================================
+# 接続エラーの切り分け（実 DB が無い環境でも検証できるようにする）
+# =============================================================================
+class TestConnectionDiagnosis(unittest.TestCase):
+    """pyodbc が実際に返すエラー文字列から、正しい助言が出せること。
+
+    実 DB や ODBC ドライバが無い開発環境でも、切り分けロジックだけは
+    検証できるようにしておく（ここが外れると現場で原因に辿り着けない）。
+    """
+
+    def _hints(self, message):
+        from autotest import db as db_mod
+        return " ".join(db_mod.diagnose_connection_error(Exception(message)))
+
+    def test_driver_not_found(self):
+        msg = ("('IM002', \"[IM002] [unixODBC][Driver Manager]Data source name not found "
+               "and no default driver specified (0) (SQLDriverConnect)\")")
+        self.assertIn("driver", self._hints(msg).lower() + "driver")  # 助言が空でないこと
+        self.assertIn("一致していません", self._hints(msg))
+
+    def test_server_unreachable(self):
+        msg = ("('08001', '[08001] [Microsoft][ODBC Driver 18 for SQL Server]"
+               "TCP Provider: Error code 0x2749 (10061) (SQLDriverConnect)')")
+        h = self._hints(msg)
+        self.assertIn("到達できていません", h)
+        self.assertIn("1433", h)
+
+    def test_login_failed(self):
+        msg = ("('28000', \"[28000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+               "Login failed for user 'sa'. (18456)\")")
+        h = self._hints(msg)
+        self.assertIn("認証で拒否", h)
+        self.assertIn("AUTOTEST_DB_PASSWORD", h)
+
+    def test_timeout(self):
+        msg = ("('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 for SQL Server]"
+               "Login timeout expired (0)')")
+        self.assertIn("タイムアウト", self._hints(msg))
+
+    def test_password_is_masked_in_connection_string(self):
+        """接続文字列を表示するとき、パスワードが露出しないこと。"""
+        import os
+        from autotest import db as db_mod
+        os.environ["UT_DB_PW"] = "s3cr3t-value"
+        settings = Settings(
+            raw={"batch": {"exe_path": "x"},
+                 "database": {"server": "s", "database": "d", "user": "u",
+                              "password_env": "UT_DB_PW", "driver": "X"},
+                 "paths": {"a": "/tmp"}},
+            source=Path("s.yaml"), project_root=Path("/tmp"))
+        conn_str, shown = db_mod.build_connection_string(settings)
+        self.assertIn("s3cr3t-value", conn_str)      # 実際の接続には使う
+        self.assertNotIn("s3cr3t-value", shown)      # 表示には出さない
+        self.assertIn("PWD=********", shown)

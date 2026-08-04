@@ -444,6 +444,12 @@ Excel 里各占一个 sheet）。
 ## 6. 运行
 
 ```cmd
+:: --- 接真实环境前的确认 ---
+python -m autotest dbcheck            :: SQL Server 能不能连上（列出已装 ODBC 驱动 + 实际连一次）
+python -m autotest validate           :: 配置和用例的完整性（有问题退出码 1）
+python -m autotest run --dry-run      :: 不碰 DB、不启动 exe，只验流程
+
+:: --- 正式执行 ---
 run_test.bat                          :: 全用例
 run_test.bat --case TC001_normal      :: 指定用例（可多次指定）
 run_test.bat --tag 正常系              :: 按标签
@@ -460,6 +466,10 @@ set PYTHONPATH=src
 > 没走 `pip install -e .` 是刻意的：那条路径会因为构建隔离去联网取 setuptools，
 > 封闭的社内网络容易失败。`requirements.txt` + `PYTHONPATH` 更稳。
 > 若网络允许，`pip install -e .` 后可直接用 `autotest` 命令，两种方式都支持。
+
+每次运行都会写 `output\<run_id>\run.log`，逐工程记录并立即刷盘。卡住时另开窗口
+`Get-Content output\<run_id>\run.log -Wait -Tail 20` 就能看到停在哪一步。
+加 `--verbose` 可以直接在屏幕上看。
 
 **退出码**：全 OK = `0`，有 NG = `1`，设定错误 = `2`
 → 可直接接 タスクスケジューラ / Jenkins / GitLab CI。

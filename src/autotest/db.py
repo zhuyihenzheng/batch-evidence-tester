@@ -258,6 +258,79 @@ def _guess_table_name(sql: str) -> str:
     return "UNKNOWN"
 
 
+def list_installed_drivers() -> List[str]:
+    """この端末にインストール済みの ODBC ドライバ名を返す。
+
+    「settings.yaml の driver 名が実際に入っているものと違う」は
+    接続失敗の最頻原因なので、失敗時に候補を提示できるようにする。
+    """
+    try:
+        import pyodbc  # noqa: PLC0415
+    except ImportError:
+        return []
+    try:
+        return list(pyodbc.drivers())
+    except Exception:
+        return []
+
+
+def build_connection_string(settings: Settings, timeout_sec: Optional[int] = None) -> Tuple[str, str]:
+    """(接続文字列, パスワードを伏せた表示用文字列) を返す。"""
+    db = settings.database
+    parts = [
+        "DRIVER={%s}" % db.get("driver", "ODBC Driver 18 for SQL Server"),
+        "SERVER=%s" % db.get("server", ""),
+        "DATABASE=%s" % db.get("database", ""),
+    ]
+    password = ""
+    if str(db.get("auth", "sql")).lower() == "windows":
+        parts.append("Trusted_Connection=yes")
+    else:
+        password = settings.db_password()
+        parts.append("UID=%s" % db.get("user", ""))
+        parts.append("PWD=%s" % password)
+    parts.append("Encrypt=yes" if db.get("encrypt", True) else "Encrypt=no")
+    if db.get("trust_server_certificate", True):
+        parts.append("TrustServerCertificate=yes")
+
+    conn_str = ";".join(parts)
+    shown = conn_str.replace("PWD=%s" % password, "PWD=********") if password else conn_str
+    return conn_str, shown
+
+
+def diagnose_connection_error(exc: Exception) -> List[str]:
+    """接続例外から、次に何を確認すべきかの助言を組み立てる。"""
+    text = str(exc)
+    hints: List[str] = []
+
+    if "IM002" in text or "Data source name not found" in text:
+        hints.append("settings.yaml の database.driver が、この端末に入っている名前と一致していません。")
+        drivers = list_installed_drivers()
+        if drivers:
+            hints.append("インストール済みのドライバ: %s" % drivers)
+            hints.append("この中の SQL Server 用のものを database.driver にそのまま書いてください。")
+        else:
+            hints.append("ODBC ドライバが 1 つも見つかりません。"
+                         "Microsoft ODBC Driver for SQL Server を導入してください。")
+    elif "08001" in text or "Named Pipes" in text or "TCP Provider" in text:
+        hints.append("サーバへ到達できていません。次を確認してください:")
+        hints.append("  - サーバ名 / IP とポート番号（例 SQLSRV01,1433）")
+        hints.append("  - セキュリティグループ・ファイアウォールで 1433 が開いているか")
+        hints.append("  - SQL Server 側で TCP/IP プロトコルが有効か")
+    elif "28000" in text or "Login failed" in text:
+        hints.append("サーバには到達できていますが、認証で拒否されました:")
+        hints.append("  - ユーザー名 / パスワード（環境変数 %s）"
+                     % "AUTOTEST_DB_PASSWORD")
+        hints.append("  - Windows 認証なら database.auth を windows にする")
+    elif "timeout" in text.lower() or "HYT00" in text:
+        hints.append("接続がタイムアウトしました。到達できないホストか、"
+                     "ファイアウォールがパケットを破棄している可能性があります。")
+    elif "SSL" in text or "certificate" in text.lower():
+        hints.append("TLS 証明書の検証で失敗しています。"
+                     "検証環境なら database.trust_server_certificate: true を試してください。")
+    return hints
+
+
 class NullClient(DbClient):
     """--dry-run 用。DB へ一切接続しない。
 

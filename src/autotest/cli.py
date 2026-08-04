@@ -50,7 +50,8 @@ def _project_root_for(config_path: Path) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autotest", description="batch(.exe) 自動テスト実行ツール")
-    parser.add_argument("command", choices=["run", "validate", "list"], help="実行するコマンド")
+    parser.add_argument("command", choices=["run", "validate", "list", "dbcheck"],
+                        help="実行するコマンド（dbcheck: SQL Server へ実際に接続できるか確認）")
     parser.add_argument("--config", default=str(PROJECT_ROOT / "config" / "settings.yaml"), help="設定ファイル")
     parser.add_argument("--cases-dir", default=None, help="ケース定義フォルダ（既定: <プロジェクトルート>/cases）")
     parser.add_argument("--case", action="append", dest="cases", help="実行するケースID（複数指定可）")
@@ -64,6 +65,99 @@ def build_parser() -> argparse.ArgumentParser:
     # 注: NG が出ても後続ケースは常に実行する（全 NG を一度に把握するため）。
     #     以前あった --keep-going は「定義だけあって未使用」だったため削除した。
     return parser
+
+
+def _dbcheck(settings, timeout_sec: int = 10) -> int:
+    """SQL Server へ実際に接続できるかを確認する。
+
+    validate は設定の書式しか見ないため、「本当に繋がるか」は別途確認が要る。
+    失敗時は原因の切り分けに必要な情報（導入済みドライバ一覧など）まで出す。
+    """
+    from . import db as db_mod
+
+    print("=" * 66)
+    print(" SQL Server 接続確認")
+    print("=" * 66)
+
+    db = settings.database
+    auth = str(db.get("auth", "sql")).lower()
+    print("  接続先     : %s / %s" % (db.get("server"), db.get("database")))
+    print("  認証方式   : %s" % ("Windows 認証" if auth == "windows" else "SQL Server 認証（ユーザー: %s）" % db.get("user")))
+    print("  ドライバ   : %s" % db.get("driver"))
+
+    # --- pyodbc の有無 ------------------------------------------------------
+    try:
+        import pyodbc  # noqa: F401,PLC0415
+    except ImportError:
+        print("\n[NG] pyodbc が入っていません。")
+        print("     Anaconda      : conda install pyodbc")
+        print("     通常の Python : pip install pyodbc")
+        return 1
+
+    # --- 導入済みドライバ ----------------------------------------------------
+    drivers = db_mod.list_installed_drivers()
+    print("\n  この端末に入っている ODBC ドライバ:")
+    if drivers:
+        for d in drivers:
+            mark = "  <- 設定値と一致" if d == db.get("driver") else ""
+            print("    - %s%s" % (d, mark))
+        if db.get("driver") not in drivers:
+            print("\n[警告] 設定値 '%s' が一覧にありません。上の中から選んでください。" % db.get("driver"))
+    else:
+        print("    （1 つも見つかりません）")
+        print("\n[NG] ODBC ドライバが未導入です。")
+        print("     Microsoft ODBC Driver for SQL Server を入れてください。")
+        return 1
+
+    # --- パスワード ----------------------------------------------------------
+    try:
+        conn_str, shown = db_mod.build_connection_string(settings)
+    except ConfigError as exc:
+        print("\n[NG] %s" % exc)
+        return 1
+    print("\n  接続文字列 : %s" % shown)
+
+    # --- 実接続 --------------------------------------------------------------
+    print("\n  接続中（タイムアウト %d 秒）..." % timeout_sec)
+    started = datetime.now()
+    try:
+        conn = pyodbc.connect(conn_str, timeout=timeout_sec)
+    except Exception as exc:
+        elapsed = (datetime.now() - started).total_seconds()
+        print("\n[NG] 接続に失敗しました（%.1f 秒）" % elapsed)
+        print("     %s" % str(exc).replace("\n", "\n     "))
+        hints = db_mod.diagnose_connection_error(exc)
+        if hints:
+            print("\n  確認してください:")
+            for h in hints:
+                print("    %s" % h)
+        return 1
+
+    elapsed = (datetime.now() - started).total_seconds()
+    print("[OK] 接続成功（%.2f 秒）" % elapsed)
+
+    # --- 接続先の実体を確認（設定ミスで別 DB に繋がっていないか）--------------
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT @@VERSION, DB_NAME(), SUSER_NAME(), @@SERVERNAME")
+        version, dbname, login, servername = cur.fetchone()
+        print("\n  実際の接続先:")
+        print("    サーバ名   : %s" % servername)
+        print("    データベース: %s" % dbname)
+        print("    ログイン   : %s" % login)
+        print("    バージョン : %s" % str(version).splitlines()[0].strip())
+        if dbname != db.get("database"):
+            print("\n[警告] 接続先 DB が設定値 '%s' と異なります。" % db.get("database"))
+        cur.close()
+    except Exception as exc:
+        print("\n[警告] 接続はできましたが情報取得に失敗しました: %s" % exc)
+    finally:
+        conn.close()
+
+    print("\n" + "=" * 66)
+    print(" 接続確認 OK。次は python -m autotest validate で設定全体を確認してください。")
+    print("=" * 66)
+    return 0
 
 
 def _is_under(path: Path, parent: Path) -> bool:
@@ -177,6 +271,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         for c in cases:
             print(f"{c.case_id:<16}{'/'.join(c.tags):<16}{c.name}")
         return 0
+
+    if args.command == "dbcheck":
+        return _dbcheck(settings, timeout_sec=int(settings.database.get("login_timeout_sec", 15)))
 
     if args.command == "validate":
         return _validate(settings, cases, args, project_root)
