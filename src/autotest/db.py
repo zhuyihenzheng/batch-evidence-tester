@@ -263,6 +263,39 @@ def _guess_table_name(sql: str) -> str:
     return "UNKNOWN"
 
 
+def server_now(client: "DbClient") -> Optional[dt.datetime]:
+    """DB サーバ側の現在時刻を取得する。取れなければ None。
+
+    「batch 開始以降に更新された行だけ抽出する」ための基準時刻は、
+    テスト機の時計ではなく DB サーバの時計で取る必要がある。両者に
+    ずれがあると、対象行を取りこぼしたり無関係な行まで拾ったりする。
+    """
+    try:
+        _columns, rows = client.query("SELECT SYSDATETIME()")
+    except Exception:
+        try:
+            _columns, rows = client.query("SELECT GETDATE()")
+        except Exception:
+            return None
+    if not rows or not rows[0]:
+        return None
+    value = rows[0][0]
+    if isinstance(value, dt.datetime):
+        return value
+    try:
+        return dt.datetime.strptime(str(value)[:26], "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        try:
+            return dt.datetime.strptime(str(value)[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+
+
+def format_sql_datetime(value: dt.datetime) -> str:
+    """SQL Server のリテラルとして埋め込める形式にする（ミリ秒まで）。"""
+    return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
 def list_installed_drivers() -> List[str]:
     """この端末にインストール済みの ODBC ドライバ名を返す。
 

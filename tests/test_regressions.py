@@ -637,3 +637,105 @@ class TestNestedFolderProtection(TmpDirCase):
         files = [e for e in entries if not e.is_dir]
         self.assertEqual([d.name for d in dirs], ["Backup"])
         self.assertEqual([f.name for f in files], ["ERR_001.csv"])
+
+
+# =============================================================================
+# {batch_start} プレースホルダ（batch が触った行だけを抽出する）
+# =============================================================================
+class TestBatchStartPlaceholder(TmpDirCase):
+    """スナップショット SQL に batch 起動時刻を埋め込めること。
+
+    基準時刻は DB サーバから取る。テスト機の時計を使うと、両者にずれが
+    あるとき対象行を取りこぼす／無関係な行まで拾うため。
+    """
+
+    def _runner(self):
+        from autotest.orchestrator import CaseRunner
+        settings = self.write_settings({"log_dir": str(self.tmp)})
+        return CaseRunner(settings, self.tmp)
+
+    def test_placeholder_replaced_with_db_time(self):
+        import datetime as _dt
+        runner = self._runner()
+        runner._batch_start_mark = _dt.datetime(2026, 8, 5, 9, 15, 22, 123456)
+
+        sql = runner._expand_sql(
+            "SELECT * FROM T_ORDER WHERE LAST_UPDATE >= '{batch_start}'")
+        self.assertIn("'2026-08-05 09:15:22.123'", sql)
+        self.assertNotIn("{batch_start}", sql)
+
+    def test_falls_back_to_local_time_when_db_time_unavailable(self):
+        runner = self._runner()
+        runner._batch_start_mark = None
+        sql = runner._expand_sql("WHERE LAST_UPDATE >= '{batch_start}'")
+        self.assertNotIn("{batch_start}", sql, "展開されずに SQL へ渡ってはいけない")
+
+    def test_date_placeholder_also_works_in_sql(self):
+        runner = self._runner()
+        runner.settings.set_base_date("20260805")
+        sql = runner._expand_sql("WHERE ORDER_DATE = '{date}'")
+        self.assertIn("'20260805'", sql)
+
+    def test_sql_without_placeholder_is_untouched(self):
+        runner = self._runner()
+        original = "SELECT ORDER_ID FROM T_ORDER ORDER BY ORDER_ID"
+        self.assertEqual(runner._expand_sql(original), original)
+
+
+class TestServerNowParsing(unittest.TestCase):
+    """DB から返る時刻値の型ゆれを吸収できること。"""
+
+    class _FakeClient:
+        def __init__(self, value):
+            self.value = value
+            self.calls = []
+
+        def query(self, sql, params=None):
+            self.calls.append(sql)
+            if isinstance(self.value, Exception):
+                raise self.value
+            return ["now"], [[self.value]]
+
+        def execute_script(self, sql):
+            pass
+
+    def test_datetime_value(self):
+        import datetime as _dt
+        from autotest import db as db_mod
+        v = _dt.datetime(2026, 8, 5, 9, 0, 0)
+        self.assertEqual(db_mod.server_now(self._FakeClient(v)), v)
+
+    def test_string_with_microseconds(self):
+        from autotest import db as db_mod
+        got = db_mod.server_now(self._FakeClient("2026-08-05 09:15:22.1234567"))
+        self.assertEqual(got.strftime("%Y-%m-%d %H:%M:%S"), "2026-08-05 09:15:22")
+
+    def test_string_without_microseconds(self):
+        from autotest import db as db_mod
+        got = db_mod.server_now(self._FakeClient("2026-08-05 09:15:22"))
+        self.assertEqual(got.second, 22)
+
+    def test_returns_none_when_query_fails(self):
+        from autotest import db as db_mod
+        self.assertIsNone(db_mod.server_now(self._FakeClient(RuntimeError("no"))))
+
+    def test_falls_back_to_getdate(self):
+        """SYSDATETIME が使えない古いバージョン向けに GETDATE を試すこと。"""
+        from autotest import db as db_mod
+
+        class OnlyGetdate:
+            def __init__(self):
+                self.calls = []
+
+            def query(self, sql, params=None):
+                self.calls.append(sql)
+                if "SYSDATETIME" in sql:
+                    raise RuntimeError("not supported")
+                return ["now"], [["2026-08-05 09:15:22"]]
+
+            def execute_script(self, sql):
+                pass
+
+        client = OnlyGetdate()
+        self.assertIsNotNone(db_mod.server_now(client))
+        self.assertTrue(any("GETDATE" in c for c in client.calls))

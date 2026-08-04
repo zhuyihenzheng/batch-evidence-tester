@@ -10,6 +10,7 @@
 """
 
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -148,6 +149,8 @@ class CaseRunner:
         # 各工程の開始を通知するコールバック。処理が止まったとき、
         # どの工程で止まっているかを外から見えるようにするためのもの
         self._progress = progress or (lambda step: None)
+        # batch 起動直前に DB から取る基準時刻（{batch_start} の展開に使う）
+        self._batch_start_mark = None
 
     def _step(self, name: str) -> None:
         self._progress(name)
@@ -181,6 +184,12 @@ class CaseRunner:
 
             self._step("フォルダ撮影（実行前）")
             folder_before = self._capture_folders(renderer, "実行前", case)
+
+            # batch が触った行だけを抽出するための基準時刻。
+            # setup の更新を含めないよう setup 完了後に、かつ batch 起動前に取る。
+            # テスト機ではなく DB サーバの時計から取るのは、両者のずれで
+            # 対象行を取りこぼさないため。
+            self._batch_start_mark = db_mod.server_now(client)
 
             self._step("DBスナップショット（実行前）")
             self._snapshot_db(case, client, result, phase="before")
@@ -400,8 +409,28 @@ class CaseRunner:
         # 判定用データは打ち切らない（表示行数の絞り込みは excel.py 側で行う）
         target = result.db_before if phase == "before" else result.db_after
         for spec in specs:
-            table = client.snapshot(spec, self.settings.db_format)
+            resolved = dict(spec)
+            if spec.get("sql"):
+                resolved["sql"] = self._expand_sql(str(spec["sql"]))
+            table = client.snapshot(resolved, self.settings.db_format)
             target[table.title] = table
+
+    def _expand_sql(self, sql: str) -> str:
+        """スナップショット SQL のプレースホルダを展開する。
+
+        {batch_start} … batch 起動直前に DB サーバから取得した時刻。
+                        「今回の実行で更新された行だけ」を抽出するのに使う。
+        {date} 系      … 業務日付（paths や引数と同じ規則）
+        """
+        sql = self.settings.expand(sql)
+        if "{batch_start}" in sql:
+            mark = getattr(self, "_batch_start_mark", None)
+            if mark is None:
+                # DB から時刻を取れない場合（offline 等）はテスト機の時刻で代用する。
+                # 時計ずれの影響を受けるため、実 DB では server_now を優先している。
+                mark = datetime.now()
+            sql = sql.replace("{batch_start}", db_mod.format_sql_datetime(mark))
+        return sql
 
     # ------------------------------------------------------------------
     def _log_dir_for(self, batch_name: Optional[str]) -> Path:

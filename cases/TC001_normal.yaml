@@ -31,6 +31,15 @@ setup:
       dest_dir: input_dir
 
 # --- DB スナップショット（実行前後の 2 時点を取得。画像化せず Excel の表に出す）---
+#
+#   SQL では次のプレースホルダが使える:
+#     {batch_start} … batch 起動直前に DB サーバから取得した時刻。
+#                     「今回の実行で更新された行だけ」を抽出したいときに使う:
+#                       WHERE UPDATED_AT >= '{batch_start}'
+#                     実行前スナップショットでは 0 件になる（まだ何も更新していない）
+#                     ため、実行後との差がそのまま「batch が触った行」になる。
+#                     テスト機ではなく DB の時計を使うので時計ずれの影響を受けない。
+#     {date} 系     … 業務日付（paths や引数と同じ規則。{date-1} 等も可）
 snapshot:
   tables:
     - name: T_ORDER
