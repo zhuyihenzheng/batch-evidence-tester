@@ -11,7 +11,7 @@
 
 import re
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -418,16 +418,19 @@ class CaseRunner:
             target[table.title] = table
 
     def _resolve_batch_start(self, case: TestCase, client: db_mod.DbClient):
-        """{batch_start} を使うケースでだけ DB サーバの時刻を取得する。
+        """{batch_start} の基準時刻を決める。テスト機の時計を使う。
 
-        使っていないケースでも毎回問い合わせると、無駄なだけでなく
-        権限やバージョン差で余計な失敗を招く。使うときだけ取りに行く。
+        DB へ問い合わせない分、権限やバージョン差の影響を受けず単純。
+        ただしテスト機の時計が DB サーバより進んでいると、batch が最初に
+        更新した行を取りこぼす（＝異常を見逃す）。これを避けるため
+        既定で数秒さかのぼった時刻を基準にする。余分に拾う分には
+        実行前スナップショットとの差で判別できるので害が小さい。
         """
         specs = case.snapshot.get("tables", [])
         if not any("{batch_start" in str(spec.get("sql", "")) for spec in specs):
             return None
-        # テスト機ではなく DB の時計を使う。両者のずれで対象行を取りこぼさないため
-        return db_mod.server_now(client)
+        margin = int(self.settings.database.get("batch_start_margin_sec", 5))
+        return datetime.now() - timedelta(seconds=margin)
 
     def _expand_sql(self, sql: str) -> str:
         """スナップショット SQL のプレースホルダを展開する。

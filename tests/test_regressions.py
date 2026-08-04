@@ -683,68 +683,6 @@ class TestBatchStartPlaceholder(TmpDirCase):
         self.assertEqual(runner._expand_sql(original), original)
 
 
-class TestServerNowParsing(unittest.TestCase):
-    """DB から返る時刻値の型ゆれを吸収できること。"""
-
-    class _FakeClient:
-        def __init__(self, value):
-            self.value = value
-            self.calls = []
-
-        def query(self, sql, params=None):
-            self.calls.append(sql)
-            if isinstance(self.value, Exception):
-                raise self.value
-            return ["now"], [[self.value]]
-
-        def execute_script(self, sql):
-            pass
-
-    def test_datetime_value(self):
-        import datetime as _dt
-        from autotest import db as db_mod
-        v = _dt.datetime(2026, 8, 5, 9, 0, 0)
-        self.assertEqual(db_mod.server_now(self._FakeClient(v)), v)
-
-    def test_string_with_microseconds(self):
-        from autotest import db as db_mod
-        got = db_mod.server_now(self._FakeClient("2026-08-05 09:15:22.1234567"))
-        self.assertEqual(got.strftime("%Y-%m-%d %H:%M:%S"), "2026-08-05 09:15:22")
-
-    def test_string_without_microseconds(self):
-        from autotest import db as db_mod
-        got = db_mod.server_now(self._FakeClient("2026-08-05 09:15:22"))
-        self.assertEqual(got.second, 22)
-
-    def test_returns_none_when_query_fails(self):
-        from autotest import db as db_mod
-        self.assertIsNone(db_mod.server_now(self._FakeClient(RuntimeError("no"))))
-
-    def test_falls_back_to_getdate(self):
-        """SYSDATETIME が使えない古いバージョン向けに GETDATE を試すこと。"""
-        from autotest import db as db_mod
-
-        class OnlyGetdate:
-            def __init__(self):
-                self.calls = []
-
-            def query(self, sql, params=None):
-                self.calls.append(sql)
-                if "SYSDATETIME" in sql:
-                    raise RuntimeError("not supported")
-                return ["now"], [["2026-08-05 09:15:22"]]
-
-            def execute_script(self, sql):
-                pass
-
-        client = OnlyGetdate()
-        self.assertIsNotNone(db_mod.server_now(client))
-        self.assertTrue(any("GETDATE" in c for c in client.calls))
-
-
-# =============================================================================
-# 日付リテラルの書式（SQLSTATE 22007 / エラー 241 の回避）
-# =============================================================================
 class TestSqlDatetimeLiteral(unittest.TestCase):
     """datetime リテラルは言語設定に依存しない書式で埋め込むこと。
 
@@ -857,10 +795,12 @@ class TestQueryErrorIncludesSql(unittest.TestCase):
 # =============================================================================
 # {batch_start} を使わないケースでは DB 時刻を問い合わせないこと
 # =============================================================================
-class TestBatchStartIsLazy(TmpDirCase):
-    """使っていない機能のために毎回 DB へ問い合わせない。
+class TestBatchStartUsesLocalTime(TmpDirCase):
+    """{batch_start} はテスト機の時計から決める（DB へ問い合わせない）。
 
-    無駄なだけでなく、権限やバージョン差で余計な失敗を招くため。
+    DB 時刻の取得は権限やバージョン差で失敗の種になるため使わない。
+    代わりに、テスト機の時計が DB より進んでいた場合に batch が最初に
+    更新した行を取りこぼさないよう、既定で数秒さかのぼる。
     """
 
     class _CountingClient:
@@ -879,22 +819,42 @@ class TestBatchStartIsLazy(TmpDirCase):
         return TestCase(case_id="T", name="T", source=self.tmp / "t.yaml",
                         snapshot={"tables": [{"name": "T_ORDER", "sql": sql}]})
 
-    def _runner(self):
+    def _runner(self, margin=None):
         from autotest.orchestrator import CaseRunner
-        return CaseRunner(self.write_settings({"log_dir": str(self.tmp)}), self.tmp)
+        extra = {"database": {"server": "s", "database": "d"}}
+        if margin is not None:
+            extra["database"]["batch_start_margin_sec"] = margin
+        settings = self.write_settings({"log_dir": str(self.tmp)}, extra=extra)
+        return CaseRunner(settings, self.tmp)
 
-    def test_no_db_query_when_placeholder_unused(self):
+    def test_never_queries_the_database(self):
         client = self._CountingClient()
         runner = self._runner()
-        mark = runner._resolve_batch_start(
-            self._case("SELECT * FROM T_ORDER ORDER BY ORDER_ID"), client)
-        self.assertIsNone(mark)
-        self.assertEqual(client.queries, [], "使っていないのに DB へ問い合わせている")
-
-    def test_db_queried_when_placeholder_used(self):
-        client = self._CountingClient()
-        runner = self._runner()
-        mark = runner._resolve_batch_start(
+        runner._resolve_batch_start(
             self._case("SELECT * FROM T WHERE UPD >= '{batch_start}'"), client)
+        self.assertEqual(client.queries, [], "DB へ問い合わせてはいけない")
+
+    def test_returns_none_when_placeholder_unused(self):
+        runner = self._runner()
+        mark = runner._resolve_batch_start(
+            self._case("SELECT * FROM T_ORDER ORDER BY ORDER_ID"), self._CountingClient())
+        self.assertIsNone(mark)
+
+    def test_margin_is_subtracted(self):
+        """時計ずれで取りこぼさないよう、基準時刻を数秒さかのぼること。"""
+        from datetime import datetime as _dtm
+        runner = self._runner(margin=30)
+        before = _dtm.now()
+        mark = runner._resolve_batch_start(
+            self._case("WHERE UPD >= '{batch_start}'"), self._CountingClient())
         self.assertIsNotNone(mark)
-        self.assertTrue(client.queries, "使っているのに DB へ問い合わせていない")
+        delta = (before - mark).total_seconds()
+        self.assertGreaterEqual(delta, 29, "マージンが引かれていない")
+        self.assertLess(delta, 40)
+
+    def test_zero_margin_is_allowed(self):
+        from datetime import datetime as _dtm
+        runner = self._runner(margin=0)
+        mark = runner._resolve_batch_start(
+            self._case("WHERE UPD >= '{batch_start}'"), self._CountingClient())
+        self.assertLess(abs((_dtm.now() - mark).total_seconds()), 5)

@@ -39,12 +39,13 @@ setup:
 #   SQL では次のプレースホルダが使える（必要なときだけ）:
 #     {date} 系     … 業務日付（paths や引数と同じ規則。{date-1} 等も可）
 #                       WHERE ORDER_DATE = '{date}'
-#     {batch_start} … batch 起動直前に DB サーバから取得した時刻。
-#                     対象テーブルが巨大で、今回触った行だけに絞りたい場合のみ:
+#     {batch_start} … batch 起動直前の時刻（テスト機の時計）。
+#                     全件ではなく今回触った行だけに絞りたいときに使う:
 #                       WHERE UPDATED_AT >= '{batch_start}'
 #                     列が char/varchar なら書式を合わせる:
 #                       WHERE UPDATE_YMD >= '{batch_start:%Y%m%d}'
-#                     使わないケースでは DB への問い合わせ自体が発生しない。
+#                     DB への問い合わせは発生しない。時計ずれ対策として
+#                     database.batch_start_margin_sec 秒だけさかのぼる。
 snapshot:
   tables:
     - name: T_ORDER
