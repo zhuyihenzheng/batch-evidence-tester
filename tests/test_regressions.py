@@ -1117,3 +1117,71 @@ class TestCaseFolderStructure(TmpDirCase):
     def test_material_dir_resolves_under_subfolder(self):
         by_id = {c.case_id: c for c in load_cases(self._build())}
         self.assertTrue(str(by_id["TC_ORDER01"].dir).endswith("受注/TC_ORDER01"))
+
+
+# =============================================================================
+# 絞り込み実行の証跡（何を実行しなかったかも残す）
+# =============================================================================
+class TestFilteredRunEvidence(TmpDirCase):
+    """一部だけ実行した結果を「全体が合格した」と誤読させないこと。"""
+
+    def _run_result(self, executed, total, description):
+        from autotest.models import RunResult
+        run = RunResult(run_id="ut", started_at=datetime.now(), finished_at=datetime.now(),
+                        filter_description=description, total_available=total)
+        for i in range(executed):
+            case = CaseResult(case_id="TC%d" % i, name="case%d" % i)
+            case.checks.append(compare.CheckResult("c", "db", OK, "ok"))
+            run.cases.append(case)
+        return run
+
+    def _summary_values(self, run):
+        from openpyxl import load_workbook
+        from autotest.excel import build_workbook
+        out = self.tmp / "e.xlsx"
+        build_workbook(run, out, {})
+        ws = load_workbook(out)["サマリ"]
+        return {r[0].value: r[1].value for r in ws.iter_rows(max_row=16) if r[0].value}
+
+    def test_filter_condition_is_recorded(self):
+        values = self._summary_values(self._run_result(3, 6, "タグ指定: 異常系"))
+        self.assertEqual(values["実行対象"], "タグ指定: 異常系")
+
+    def test_excluded_count_is_shown(self):
+        values = self._summary_values(self._run_result(3, 6, "タグ指定: 異常系"))
+        self.assertIn("全 6 件中", values["実行ケース数"])
+        self.assertIn("3 件は今回実行していません", values["実行ケース数"])
+
+    def test_full_run_says_no_filter(self):
+        values = self._summary_values(self._run_result(6, 6, ""))
+        self.assertIn("絞り込みなし", values["実行対象"])
+        self.assertEqual(str(values["実行ケース数"]), "6")
+
+    def test_filter_description_from_args(self):
+        from autotest.cli import _filter_description
+
+        class Args:
+            cases = None
+            tags = ["異常系", "環境不備"]
+        self.assertIn("異常系", _filter_description(Args()))
+
+        class Args2:
+            cases = ["TC001"]
+            tags = None
+        self.assertIn("TC001", _filter_description(Args2()))
+
+        class Args3:
+            cases = None
+            tags = None
+        self.assertEqual(_filter_description(Args3()), "")
+
+    def test_filter_slug_is_filename_safe(self):
+        from autotest.cli import _filter_slug
+
+        class Args:
+            cases = None
+            tags = ["異常系"]
+        slug = _filter_slug(Args())
+        self.assertNotIn("/", slug)
+        self.assertNotIn("\\\\", slug)
+        self.assertIn("tag-", slug)

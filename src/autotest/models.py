@@ -162,6 +162,8 @@ class RunResult:
         exe_path: str = "",
         db_server: str = "",
         db_name: str = "",
+        filter_description: str = "",
+        total_available: Optional[int] = None,
     ) -> None:
         self.run_id = run_id
         self.started_at = started_at
@@ -171,6 +173,11 @@ class RunResult:
         self.exe_path = exe_path
         self.db_server = db_server
         self.db_name = db_name
+        # 絞り込み条件と、絞り込み前の全ケース数。
+        # 証跡には「何を実行したか」だけでなく「何を実行しなかったか」も
+        # 残す必要がある。一部だけ実行した結果を全体の合格と誤読させないため。
+        self.filter_description = filter_description
+        self.total_available = total_available
         self.cases = []  # type: List[CaseResult]
 
     @property

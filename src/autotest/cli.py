@@ -38,6 +38,33 @@ def _prepare_console() -> None:
                 pass
 
 
+def _filter_description(args) -> str:
+    """証跡に残す絞り込み条件の説明。
+
+    一部だけ実行した結果を「全体が合格した」と誤読させないため、
+    どう絞り込んだかを証跡側に必ず記録する。
+    """
+    parts = []
+    if args.cases:
+        parts.append("ケース指定: " + ", ".join(args.cases))
+    if args.tags:
+        parts.append("タグ指定: " + ", ".join(args.tags))
+    if not parts:
+        return ""
+    return " / ".join(parts)
+
+
+def _filter_slug(args) -> str:
+    """ファイル名に使える形の絞り込み識別子。絞り込みが無ければ空文字。"""
+    parts = []
+    if args.tags:
+        parts.append("tag-" + "-".join(args.tags))
+    if args.cases:
+        parts.append("case-" + "-".join(args.cases))
+    slug = "_".join(parts)
+    return "".join(ch for ch in slug if ch.isalnum() or ch in "-_ぁ-んァ-ヶ一-龠") or "all"
+
+
 def _default_config() -> Path:
     """既定の設定ファイルを決める。
 
@@ -349,6 +376,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         settings = load_settings(config_path, project_root=project_root)
         settings.set_base_date(args.date)   # {date} の既定基準日
         cases = load_cases(cases_dir, only=args.cases, tags=args.tags)
+        # 絞り込み前の全件数。証跡に「何件を実行しなかったか」を残すために使う
+        total_available = len(load_cases(cases_dir)) if (args.cases or args.tags) else len(cases)
     except ConfigError as exc:
         print(f"[設定エラー] {exc}", file=sys.stderr)
         return 2
@@ -378,6 +407,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         exe_path=str(settings.batch.get("exe_path", "")),
         db_server=str(settings.database.get("server", "")),
         db_name=str(settings.database.get("database", "")),
+        filter_description=_filter_description(args),
+        total_available=total_available,
     )
 
     mode_note = " [offline]" if args.offline else ""
@@ -426,7 +457,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     run.finished_at = datetime.now()
 
-    file_name = str(settings.excel.get("file_name_format", "TestEvidence_{run_id}.xlsx")).format(run_id=run_id)
+    # file_name_format では {run_id} のほか {filter} も使える
+    # （例: "TestEvidence_{run_id}_{filter}.xlsx" -> TestEvidence_..._tag-受注.xlsx）
+    file_name = str(settings.excel.get("file_name_format", "TestEvidence_{run_id}.xlsx")).format(
+        run_id=run_id, filter=_filter_slug(args))
     excel_path = build_workbook(run, out_dir / file_name, settings.excel)
 
     print("=" * 60)

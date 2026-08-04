@@ -108,6 +108,19 @@ def build_workbook(run: RunResult, output_path: Path, cfg: dict) -> Path:
 # =============================================================================
 
 
+def _case_count_text(run: RunResult) -> str:
+    """実行件数の表示。絞り込みがあった場合は除外件数も明示する。
+
+    「3 件すべて OK」とだけ書くと、実行しなかったケースの存在が
+    証跡から読み取れず、全体が合格したかのように誤読される。
+    """
+    if run.total_available is None or run.total_available == len(run.cases):
+        return str(len(run.cases))
+    excluded = run.total_available - len(run.cases)
+    return "%d 件（全 %d 件中。%d 件は今回実行していません）" % (
+        len(run.cases), run.total_available, excluded)
+
+
 def _write_summary_sheet(ws: Worksheet, run: RunResult, sheet_names: Dict[str, str], cfg: Optional[dict] = None) -> None:
     ws.sheet_view.showGridLines = False
     ws["A1"] = "バッチ自動テスト 実行結果"
@@ -122,7 +135,8 @@ def _write_summary_sheet(ws: Worksheet, run: RunResult, sheet_names: Dict[str, s
         ("DB", f"{run.db_server} / {run.db_name}"),
         ("開始日時", run.started_at.strftime("%Y-%m-%d %H:%M:%S")),
         ("終了日時", run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-"),
-        ("総ケース数", str(len(run.cases))),
+        ("実行対象", run.filter_description or "全ケース（絞り込みなし）"),
+        ("実行ケース数", _case_count_text(run)),
         ("OK / NG", f"{run.ok_count} / {run.ng_count}"),
     ]
     row = 3

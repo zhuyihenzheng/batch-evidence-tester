@@ -520,6 +520,24 @@ collect:
 
 打错 ID 或标签会**报配置错误并退出码 2**，不会静默跑 0 件。
 
+**筛选执行也照常出 Excel**，而且サマリ里会记录筛选条件和未执行的件数：
+
+```
+実行対象     | タグ指定: 異常系
+実行ケース数 | 3 件（全 6 件中。3 件は今回実行していません）
+総合判定     | OK
+```
+
+这点对エビデンス很重要——不写的话，别人看到「3 件全 OK」会误以为全部测试都通过了。
+
+想让文件名也带上筛选条件，改 `settings.local.yaml`：
+
+```yaml
+excel:
+  file_name_format: "TestEvidence_{run_id}_{filter}.xlsx"
+  # → TestEvidence_20260805_084441_468_tag-異常系.xlsx
+```
+
 ```cmd
 :: --- 接真实环境前的确认 ---
 python -m autotest dbcheck            :: SQL Server 能不能连上（列出已装 ODBC 驱动 + 实际连一次）
