@@ -14,7 +14,11 @@ env:
 batch:
   exe_path: "C:/app/batch/OrderBatch.exe"
   working_dir: "C:/app/batch"
+  # この秒数を超えたらプロセスツリーごと強制終了し、NG と判定する
   timeout_sec: 600
+  # 実行中に「N 秒経過」を run.log と画面へ出す間隔。
+  # 固まっているのか単に時間がかかっているのかを区別するためのもの
+  heartbeat_sec: 10
   # .exe の標準出力/標準エラーの文字コード。日本語 Windows の既定は cp932
   console_encoding: "cp932"
   # 全ケース共通で渡す引数（ケース側 execute.args の前に付く）

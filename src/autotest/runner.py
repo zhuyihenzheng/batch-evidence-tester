@@ -25,11 +25,36 @@ def _resolve_exe(raw: str, project_root: Path) -> Path:
     return path
 
 
+def _kill_process_tree(proc: "subprocess.Popen") -> None:
+    """プロセスツリーごと確実に終了させる。
+
+    .exe が別プロセスを起動していると、親だけ kill しても孫が
+    標準出力パイプを掴んだままになり、communicate() が返らずハングする。
+    Windows では taskkill /T、それ以外ではプロセスグループへシグナルを送る。
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(  # noqa: S603,S607
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            )
+        else:
+            proc.kill()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 def run_batch(
     settings: Settings,
     args: List[str],
     dry_run: bool = False,
     batch_name: Optional[str] = None,
+    on_progress=None,
 ) -> ExecutionInfo:
     """batch を同期実行し、終了コード・標準出力・所要時間を記録する。
 
@@ -71,21 +96,47 @@ def run_batch(
     env = os.environ.copy()
     env.update({str(k): str(v) for k, v in (batch.get("env_vars") or {}).items()})
 
+    heartbeat = max(1, int(batch.get("heartbeat_sec", 10)))
+
+    proc = subprocess.Popen(  # noqa: S603  実行対象はテスト設定で明示された .exe
+        [str(exe_path)] + list(full_args),
+        cwd=str(working_dir),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        # ★ 標準入力を空にする。これを渡さないと .exe は親の stdin を継承し、
+        #   「続行するには何かキーを押してください」等の入力待ちで永久に止まる。
+        #   DEVNULL なら即 EOF になり、対話待ちの batch もそのまま進む。
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
+
     try:
-        # capture_output= は Python 3.7 以降のため、3.6 でも動く書き方にしている
-        proc = subprocess.run(  # noqa: S603  実行対象はテスト設定で明示された .exe
-            [str(exe_path)] + list(full_args),
-            cwd=str(working_dir),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
+        # 一定間隔で生存確認しながら待つ。完全にブロックすると
+        # 「動いているのか固まったのか」が外から分からないため。
+        waited = 0.0
+        while True:
+            try:
+                out, err = proc.communicate(timeout=heartbeat)
+                break
+            except subprocess.TimeoutExpired:
+                waited += heartbeat
+                if waited >= timeout:
+                    raise
+                if on_progress:
+                    on_progress("batch実行中… %d 秒経過（上限 %d 秒）" % (waited, timeout))
+
         info.exit_code = proc.returncode
-        info.stdout = proc.stdout.decode(encoding, errors="replace")
-        info.stderr = proc.stderr.decode(encoding, errors="replace")
+        info.stdout = out.decode(encoding, errors="replace")
+        info.stderr = err.decode(encoding, errors="replace")
     except subprocess.TimeoutExpired as exc:
+        # ★ 子プロセスだけ kill しても、孫プロセスがパイプを掴んだままだと
+        #   communicate() が返らず結局ハングする。プロセスツリーごと落とす。
+        _kill_process_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=10)
+        except Exception:
+            out, err = b"", b""
+        exc.stdout, exc.stderr = out, err
         info.timed_out = True
         info.exit_code = None
         info.stdout = (exc.stdout or b"").decode(encoding, errors="replace")

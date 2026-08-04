@@ -184,6 +184,7 @@ class CaseRunner:
                 case.execute.get("args", []),
                 dry_run=self.dry_run,
                 batch_name=batch_name,
+                on_progress=self._progress,   # 実行中の経過を run.log と画面へ
             )
 
             self._step("ログ収集")
