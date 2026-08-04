@@ -580,3 +580,60 @@ class TestDatePlaceholders(unittest.TestCase):
         s = self._settings({"d": "/tmp"}, "20260803")
         self.assertEqual(s.expand("RESULT_{date}.csv"), "RESULT_20260803.csv")
         self.assertEqual(s.expand("--date"), "--date")
+
+
+# =============================================================================
+# 入れ子フォルダの保護（Receive の下に Backup がある構成）
+# =============================================================================
+class TestNestedFolderProtection(TmpDirCase):
+    """クリア対象の配下に業務データのフォルダがある構成を壊さないこと。
+
+    実案件の構成: Receive/ にエラーファイルが置かれ、同じ Receive/ の下に
+    Backup/20260802/ のような履歴フォルダがある。Receive をクリアすると
+    履歴ごと消えてしまう（rmtree は復元不能）。
+    """
+
+    def _layout(self):
+        recv = self.tmp / "work" / "TAS" / "Receive"
+        (recv / "Backup" / "20260802").mkdir(parents=True)
+        (recv / "Backup" / "20260802" / "old.csv").write_text("履歴", encoding="utf-8")
+        (recv / "ERR_001.csv").write_text("err", encoding="utf-8")
+        return recv
+
+    def test_nested_alias_is_protected_automatically(self):
+        """配下のフォルダが論理名として定義済みなら、明示しなくても残ること。"""
+        recv = self._layout()
+        settings = self.write_settings({"error_dir": str(recv), "backup_dir": str(recv / "Backup")})
+
+        removed = fsops.clear_dir(settings, "error_dir")
+        self.assertEqual(removed, 1, "エラーファイルだけが消えること")
+        self.assertTrue((recv / "Backup" / "20260802" / "old.csv").exists(),
+                        "履歴データが消えている（復元不能）")
+        self.assertFalse((recv / "ERR_001.csv").exists())
+
+    def test_explicit_exclude_protects_undeclared_folder(self):
+        """論理名でない補助フォルダも exclude で残せること。"""
+        recv = self._layout()
+        (recv / "Keep").mkdir()
+        (recv / "Keep" / "a.txt").write_text("z", encoding="utf-8")
+        settings = self.write_settings({"error_dir": str(recv)})
+
+        fsops.clear_dir(settings, "error_dir", exclude=["Backup", "Keep"])
+        self.assertTrue((recv / "Backup").exists())
+        self.assertTrue((recv / "Keep" / "a.txt").exists())
+        self.assertFalse((recv / "ERR_001.csv").exists())
+
+    def test_file_count_excludes_directories(self):
+        """assert の件数はフォルダを数えないこと（Backup が 1 件と数えられない）。"""
+        recv = self._layout()
+        self.assertEqual(len(fsops.find_files(recv, "*")), 1,
+                         "サブフォルダがファイルとして数えられている")
+
+    def test_listing_separates_files_and_folders(self):
+        """証跡一覧はファイルとフォルダを区別できる形で返すこと。"""
+        recv = self._layout()
+        entries = fsops.list_dir(recv)
+        dirs = [e for e in entries if e.is_dir]
+        files = [e for e in entries if not e.is_dir]
+        self.assertEqual([d.name for d in dirs], ["Backup"])
+        self.assertEqual([f.name for f in files], ["ERR_001.csv"])

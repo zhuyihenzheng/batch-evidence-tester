@@ -56,7 +56,8 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
 
     # --- clean_dirs / remove_dirs: 論理名の存在と、解決後パスの安全性 --------
     for key in ("clean_dirs", "remove_dirs"):
-        for alias in (case.setup or {}).get(key, []):
+        for spec in (case.setup or {}).get(key, []):
+            alias = spec["alias"] if isinstance(spec, dict) else spec
             if alias not in aliases:
                 problems.append("setup.%s の論理名が paths に未定義です: %s" % (key, alias))
                 continue
@@ -64,6 +65,18 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
                 fsops.assert_safe_to_clear(aliases[alias], settings.project_root)
             except ConfigError as exc:
                 problems.append(str(exc))
+
+            # 配下に別の論理名がある場合、そのフォルダごと消える構成になっていないか。
+            # 例: error_dir=.../Receive の下に backup_dir=.../Receive/Backup がある
+            target = aliases[alias]
+            nested = [name for name, path in aliases.items()
+                      if name != alias and path != target
+                      and fsops._is_relative_to(path, target)]
+            if nested and key == "remove_dirs":
+                problems.append(
+                    "setup.remove_dirs の %s (%s) の配下に別の論理名があります: %s。"
+                    "フォルダごと削除するとこれらも消えます。" % (alias, target, nested)
+                )
 
     # remove_dirs で消すフォルダへファイルを投入すると、投入時に再作成されて
     # 「フォルダが無い」状態を作れない。設定の矛盾として先に弾く
@@ -246,8 +259,13 @@ class CaseRunner:
         removing = set(setup.get("remove_dirs", []))
         fsops.ensure_dirs(self.settings, [a for a in self.settings.path_aliases if a not in removing])
 
-        for alias in setup.get("clean_dirs", []):
-            fsops.clear_dir(self.settings, alias, dry_run=self.dry_run)
+        for spec in setup.get("clean_dirs", []):
+            # 文字列（論理名だけ）と辞書（exclude 付き）の両方を受ける
+            if isinstance(spec, dict):
+                fsops.clear_dir(self.settings, spec["alias"], dry_run=self.dry_run,
+                                exclude=spec.get("exclude"))
+            else:
+                fsops.clear_dir(self.settings, spec, dry_run=self.dry_run)
 
         # フォルダごと削除。batch が「出力先が無い」ときにどう振る舞うかを試す
         for alias in setup.get("remove_dirs", []):
@@ -293,8 +311,12 @@ class CaseRunner:
                 if sql_text.strip() and not self.dry_run:
                     client.execute_script(sql_text)
 
-            for alias in teardown.get("clean_dirs", []):
-                fsops.clear_dir(self.settings, alias, dry_run=self.dry_run)
+            for spec in teardown.get("clean_dirs", []):
+                if isinstance(spec, dict):
+                    fsops.clear_dir(self.settings, spec["alias"], dry_run=self.dry_run,
+                                    exclude=spec.get("exclude"))
+                else:
+                    fsops.clear_dir(self.settings, spec, dry_run=self.dry_run)
         except Exception as exc:
             return CheckResult(
                 "後処理（teardown）", "teardown", NG,
@@ -324,7 +346,10 @@ class CaseRunner:
                 recursive=bool(cfg.get("recursive", False)),
             )
             path, note = self._folder_image(renderer, directory, entries, alias, phase, int(cfg.get("max_entries", 40)))
-            caption = f"{directory}  —  {len(entries)} 件"
+            n_dir = sum(1 for e in entries if e.is_dir)
+            caption = f"{directory}  —  ファイル {len(entries) - n_dir} 件"
+            if n_dir:
+                caption += f" / フォルダ {n_dir} 件"
             if note:
                 caption += f"  ※ {note}"
             images.append(

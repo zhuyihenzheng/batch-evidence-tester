@@ -166,8 +166,18 @@ def find_files(directory: Path, pattern: str = "*", recursive: bool = False) -> 
     return sorted(p for p in it if p.is_file())
 
 
-def clear_dir(settings: Settings, alias: str, dry_run: bool = False) -> int:
-    """論理名で指定されたフォルダの中身を削除する。削除件数を返す。"""
+def clear_dir(
+    settings: Settings,
+    alias: str,
+    dry_run: bool = False,
+    exclude: Optional[List[str]] = None,
+) -> int:
+    """論理名で指定されたフォルダの中身を削除する。削除件数を返す。
+
+    exclude に名前パターン（fnmatch）を渡すと、そこに一致する項目は残す。
+    「Receive の下に Backup があり、Receive をクリアしたいが Backup の履歴は
+    消したくない」という構成のためのもの。
+    """
     aliases = settings.path_aliases
     if alias not in aliases:
         raise ConfigError(
@@ -182,8 +192,20 @@ def clear_dir(settings: Settings, alias: str, dry_run: bool = False) -> int:
     if not directory.is_dir():
         return 0
 
+    # 他の論理名がこのフォルダの配下にある場合、そのフォルダは自動的に保護する。
+    # 設定漏れで業務データ（Backup 等）を消す事故を防ぐための保険。
+    protected = {settings.expand(str(p)) for p in (exclude or [])}
+    for other_alias, other_path in aliases.items():
+        if other_alias == alias:
+            continue
+        if _is_relative_to(other_path, directory) and other_path != directory:
+            # directory 直下の、その論理名へ至る先頭要素を保護する
+            protected.add(other_path.relative_to(directory).parts[0])
+
     count = 0
     for p in directory.iterdir():
+        if any(fnmatch.fnmatch(p.name, pat) for pat in protected):
+            continue
         if dry_run:
             count += 1
             continue

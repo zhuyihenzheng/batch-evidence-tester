@@ -81,7 +81,9 @@ paths:
 # 証跡としてフォルダ一覧画像を撮る対象と、その表示順
 folder_evidence:
   targets: [input_dir, processed_dir, error_dir, output_dir]
-  # 一覧に出さないファイル（Thumbs.db 等のノイズ除去）
+  # 一覧に出さない項目（Thumbs.db 等のノイズ除去）。フォルダ名も指定できる。
+  # 例: 対象フォルダの下に履歴用の Backup がある場合、一覧から外すなら追記する
+  #     （件数はファイルとフォルダを分けて表示するので、外さなくても誤読はしない）
   exclude_patterns: ["Thumbs.db", "desktop.ini", "*.tmp"]
   # 1 画像あたりの最大表示件数。超えた分は「他 N 件」と表示
   max_entries: 40

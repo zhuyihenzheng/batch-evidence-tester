@@ -10,6 +10,15 @@ enabled: true
 # --- 前処理 -------------------------------------------------------------------
 setup:
   # settings.paths の論理名でのみ指定できる（生パス指定は不可 = 誤削除防止）
+  #
+  # クリア対象の配下に別の論理名のフォルダがある場合、そのフォルダは
+  # 自動的に保護される（例: error_dir=.../Receive の下に
+  # backup_dir=.../Receive/Backup がある構成でも Backup は消えない）。
+  # 論理名として定義していない補助フォルダを残したいときは辞書形式で書く:
+  #   clean_dirs:
+  #     - input_dir
+  #     - alias: error_dir
+  #       exclude: ["Backup", "*.keep"]
   clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
 
   # DB を試験前提の状態に戻す。file / inline どちらでも可

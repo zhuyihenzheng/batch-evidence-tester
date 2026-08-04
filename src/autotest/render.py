@@ -179,7 +179,14 @@ class Renderer:
                 draw.text((x_name, y + 4), f"... 他 {overflow} 件", font=self.font, fill=C_MUTED)
                 y += self.line_h
 
-        self._footer(draw, y, f"{len(entries)} 個の項目  |  取得日時: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        # ファイルとフォルダを分けて出す。サブフォルダ（Backup 等）が
+        # 1 件として数えられ「ファイルが 1 件ある」と誤読されるのを防ぐ
+        n_dir = sum(1 for e in entries if e.is_dir)
+        n_file = len(entries) - n_dir
+        summary = f"ファイル {n_file} 件"
+        if n_dir:
+            summary += f" / フォルダ {n_dir} 件"
+        self._footer(draw, y, f"{summary}  |  取得日時: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
         path = self._next_path(f"folder_{label}_{phase}")
         img.save(path)
