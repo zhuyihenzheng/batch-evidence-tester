@@ -188,12 +188,15 @@ def _apply_manual(check: CheckResult, manual: bool) -> CheckResult:
 
 class CaseRunner:
     def __init__(self, settings: Settings, run_dir: Path, offline: bool = False,
-                 dry_run: bool = False, progress=None, default_date=None):
+                 dry_run: bool = False, progress=None, default_date=None,
+                 keep_env: bool = False):
         self.settings = settings
         self._default_date = default_date
         self.run_dir = run_dir
         self.offline = offline
         self.dry_run = dry_run
+        # 調査用。失敗した状態を保全するため、後始末を行わない
+        self.keep_env = keep_env
         # 各工程の開始を通知するコールバック。処理が止まったとき、
         # どの工程で止まっているかを外から見えるようにするためのもの
         self._progress = progress or (lambda step: None)
@@ -252,6 +255,16 @@ class CaseRunner:
             self._step("ログ位置の記録")
             offsets = logs.snapshot_offsets(self.settings, log_dir)
 
+            # DB 更新失敗の再現。batch 実行中だけ別接続でロックを保持する。
+            # with を抜けるときに必ずロールバックするので、失敗しても
+            # ロックが残って後続が止まることはない。
+            lock_sql = (case.setup or {}).get("db_lock")
+            lock_ctx = None
+            if lock_sql and not self.dry_run and not self.offline:
+                self._step("DBロック取得（更新失敗の再現）")
+                lock_ctx = db_mod.LockHolder(self.settings, self._expand_sql(str(lock_sql)))
+                lock_ctx.__enter__()
+
             self._step("batch実行")
             result.execution = run_batch(
                 self.settings,
@@ -272,6 +285,13 @@ class CaseRunner:
             )
             if waited >= 0.5:
                 self._step("ログ書き込み待ち %.1f 秒" % waited)
+
+            if lock_ctx is not None:
+                # batch が終わったら即座に解放する。判定や証跡採取の間
+                # 保持し続ける必要はなく、長く持つほど巻き添えが増える
+                self._step("DBロック解放")
+                lock_ctx.__exit__(None, None, None)
+                lock_ctx = None
 
             self._step("ログ収集")
             log_slices = logs.collect(
@@ -314,10 +334,18 @@ class CaseRunner:
         except Exception as exc:  # 1 ケースの失敗で全体を止めない
             result.fatal_error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
         finally:
+            # 例外で抜けた場合もロックを必ず解放する。保持したままだと
+            # 後続ケースも他の作業も全部ロック待ちで止まる
+            if locals().get("lock_ctx") is not None:
+                try:
+                    lock_ctx.__exit__(None, None, None)
+                except Exception:
+                    pass
+
             # 後処理（teardown）は finally で行う。証跡採取や判定の途中で
             # 例外が出た場合でも、setup が入れたテストデータ・制約違反データ・
             # 権限変更を DB に残したままにしないため。
-            if setup_started and client is not None:
+            if setup_started and client is not None and not self.keep_env:
                 try:
                     teardown_check = self._teardown(case, client)
                     if teardown_check is not None:
@@ -329,7 +357,16 @@ class CaseRunner:
 
             # 差し替えたファイルは、途中で落ちた場合でも必ず元に戻す。
             # 戻し損ねると次のケースや手動実行が壊れた設定で動いてしまう
-            restore_problems = fsops.restore_files(getattr(self, "_replaced_files", []))
+            if self.keep_env:
+                # 調査用に差し替えたままにする。何を戻していないかは残す
+                if self._replaced_files:
+                    result.checks.append(CheckResult(
+                        "設定ファイルの復元", "teardown", SKIP,
+                        "--keep-env のため復元していません。調査後に手動で戻してください: "
+                        + ", ".join(str(r.dest) for r in self._replaced_files)))
+                restore_problems = []
+            else:
+                restore_problems = fsops.restore_files(getattr(self, "_replaced_files", []))
             self._replaced_files = []
             if restore_problems:
                 result.checks.append(CheckResult(

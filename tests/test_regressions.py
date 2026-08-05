@@ -1623,3 +1623,118 @@ class TestLogSettleWait(TmpDirCase):
     def test_disabled_when_zero(self):
         d = self._log_dir()
         self.assertEqual(logs.wait_until_stable(self._settings(d), d, max_wait_sec=0), 0.0)
+
+
+# =============================================================================
+# 障害注入: 破損ファイルの生成
+# =============================================================================
+class TestCorruptFileGeneration(TmpDirCase):
+    """解凍エラー等の異常系を、正常な資材から決まった手順で再現できること。
+
+    壊れたバイナリを直接リポジトリへ置くと、中身が読めず「何がどう
+    壊れているのか」が後から分からなくなる。
+    """
+
+    def _zip(self):
+        import io
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("data.csv", "ORDER_NO,AMOUNT\n" +
+                       "\n".join("A%04d,%d" % (i, i * 100) for i in range(200)))
+        return buf.getvalue()
+
+    def _zip_status(self, data):
+        import io
+        import zipfile
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(data))
+            return "crc" if zf.testzip() else "ok"
+        except Exception:
+            return "broken"
+
+    def test_truncate_breaks_zip(self):
+        self.assertEqual(self._zip_status(fsops.corrupt_bytes(self._zip(), {"mode": "truncate"})),
+                         "broken")
+
+    def test_empty_breaks_zip(self):
+        got = fsops.corrupt_bytes(self._zip(), {"mode": "empty"})
+        self.assertEqual(got, b"")
+
+    def test_flip_causes_crc_error(self):
+        """既定は中央（データ部）。末尾だと zip は壊れたと判定しないことがある。"""
+        self.assertEqual(self._zip_status(fsops.corrupt_bytes(self._zip(), {"mode": "flip"})),
+                         "crc")
+
+    def test_truncate_with_explicit_size(self):
+        got = fsops.corrupt_bytes(self._zip(), {"mode": "truncate", "size": 10})
+        self.assertEqual(len(got), 10)
+
+    def test_unknown_mode_is_config_error(self):
+        with self.assertRaises(ConfigError):
+            fsops.corrupt_bytes(b"x", {"mode": "explode"})
+
+    def test_put_input_files_writes_corrupted_copy(self):
+        """投入時に生成され、元の資材は変更されないこと。"""
+        case_dir = self.tmp / "case"
+        (case_dir / "input").mkdir(parents=True)
+        source = case_dir / "input" / "DATA.zip"
+        original = self._zip()
+        source.write_bytes(original)
+
+        dest_dir = self.tmp / "in"
+        settings = self.write_settings({"input_dir": str(dest_dir)})
+        fsops.put_input_files(settings, case_dir, [
+            {"src": "input/DATA.zip", "dest_dir": "input_dir",
+             "corrupt": {"mode": "truncate"}}])
+
+        self.assertEqual(source.read_bytes(), original, "元の資材を壊してはいけない")
+        self.assertEqual(self._zip_status((dest_dir / "DATA.zip").read_bytes()), "broken")
+
+    def test_shorthand_string_form(self):
+        case_dir = self.tmp / "case"
+        (case_dir / "input").mkdir(parents=True)
+        (case_dir / "input" / "a.zip").write_bytes(self._zip())
+        dest_dir = self.tmp / "in"
+        settings = self.write_settings({"input_dir": str(dest_dir)})
+        fsops.put_input_files(settings, case_dir, [
+            {"src": "input/a.zip", "dest_dir": "input_dir", "corrupt": "empty"}])
+        self.assertEqual((dest_dir / "a.zip").read_bytes(), b"")
+
+
+class TestKeepEnvOption(TmpDirCase):
+    """--keep-env は調査のため後始末を行わないこと。"""
+
+    def test_teardown_skipped_and_reported(self):
+        from autotest import db as dbm
+        from autotest.config import TestCase
+        from autotest.orchestrator import CaseRunner
+
+        executed = []
+
+        class FakeClient:
+            def query(self, sql, params=None):
+                return [], []
+
+            def execute_script(self, sql):
+                executed.append(sql.strip())
+
+            def close(self):
+                pass
+
+        exe = self.tmp / "b.exe"
+        exe.write_text("x", encoding="utf-8")
+        settings = self.write_settings({"log_dir": str(self.tmp)},
+                                       extra={"batch": {"exe_path": str(exe)}})
+        case = TestCase(case_id="T", name="T", source=self.tmp / "T.yaml",
+                        setup={"sql": ["SETUP"]}, teardown={"sql": ["TEARDOWN"]})
+
+        saved = dbm.create_client
+        try:
+            dbm.create_client = lambda *a, **k: FakeClient()
+            CaseRunner(settings, self.tmp / "out", keep_env=True).run(case)
+        finally:
+            dbm.create_client = saved
+
+        self.assertIn("SETUP", executed)
+        self.assertNotIn("TEARDOWN", executed, "--keep-env なのに teardown が走っている")

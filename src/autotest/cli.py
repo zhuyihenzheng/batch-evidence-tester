@@ -103,6 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help=".exe も DB 接続も行わず、流れと設定だけを確認する")
     parser.add_argument("--date", default=None,
                         help="パス・引数の {date} を展開する基準日（YYYYMMDD。既定は本日）")
+    parser.add_argument("--keep-env", action="store_true",
+                        help="teardown と設定ファイルの復元を行わない（失敗の調査用）")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="各工程の開始を逐次表示する（処理が止まる箇所の切り分け用）")
     # 注: NG が出ても後続ケースは常に実行する（全 NG を一度に把握するため）。
@@ -431,7 +433,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         runner = CaseRunner(settings, run_dir, offline=args.offline,
-                            dry_run=args.dry_run, default_date=args.date)
+                            dry_run=args.dry_run, default_date=args.date,
+                            keep_env=args.keep_env)
+        if args.keep_env:
+            print("※ --keep-env: teardown と設定復元を行いません。調査後は手動で戻してください。")
+            write_log("--keep-env 指定: teardown / 設定復元をスキップ")
         for i, case in enumerate(cases, start=1):
             head = f"[{i}/{len(cases)}] {case.case_id} {case.name}"
             print(head + " ... ", end="" if not args.verbose else "\n", flush=True)

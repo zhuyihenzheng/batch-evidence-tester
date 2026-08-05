@@ -36,6 +36,14 @@ setup:
   # ※ dest_dir を clean_dirs に入れると batch 本体まで消えるため preflight で弾く
 
   # テストデータの投入。src は cases/<id>/ からの相対パス
+  #
+  # corrupt を付けると、正常な資材から壊れたファイルを生成して投入する。
+  # 解凍エラー・フォーマット不正の異常系で使う（元の資材は変更しない）:
+  #   input_files:
+  #     - src: "input/DATA.zip"
+  #       dest_dir: input_dir
+  #       corrupt: {mode: flip}          # データ部を反転 -> CRC エラー
+  #       # mode: truncate（途中で切る）/ empty / garbage（先頭破壊）/ append
   input_files:
     - src: "input/ORDER_20260803.csv"
       dest_dir: input_dir

@@ -14,7 +14,7 @@ import stat
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .config import ConfigError, Settings
 
@@ -265,6 +265,63 @@ def remove_dir(settings: Settings, alias: str, dry_run: bool = False) -> bool:
     return True
 
 
+def corrupt_bytes(data: bytes, spec: Dict[str, Any]) -> bytes:
+    """正常なファイルから壊れたファイルを作る。
+
+    解凍エラー・フォーマット不正の異常系は「壊れたファイル」を用意しないと
+    再現できないが、壊れたバイナリを直接リポジトリへ置くと、中身が読めず
+    「何がどう壊れているのか」が後から分からなくなる。正常な資材 1 つから
+    決まった壊し方で生成すれば、意図が定義に残る。
+
+    mode:
+      truncate  … 末尾を切る（size / ratio で位置指定。既定は半分）
+      empty     … 0 バイトにする
+      flip      … バイト反転（既定は中央＝データ部。CRC エラーを起こす）
+      garbage   … 先頭を別バイト列で上書き（マジックナンバーを壊す）
+      append    … 末尾に余分なデータを足す
+
+    どの壊し方が有効かは形式による。zip の場合:
+      truncate / empty  … 中央ディレクトリごと失われるため確実に壊れる
+      flip（データ部）   … 展開時に CRC エラー
+      garbage（先頭）    … ローカルヘッダは壊れるが、中央ディレクトリから
+                          読む実装では検出されないことがある
+    実際に batch がどう振る舞うかは、まず 1 ケース試して確認すること。
+    """
+    mode = str(spec.get("mode", "truncate"))
+
+    if mode == "empty":
+        return b""
+
+    if mode == "truncate":
+        if "size" in spec:
+            keep = max(0, int(spec["size"]))
+        else:
+            keep = int(len(data) * float(spec.get("ratio", 0.5)))
+        return data[:keep]
+
+    if mode == "flip":
+        if not data:
+            return data
+        # 既定は中央付近。末尾を反転しても zip は末尾の中央ディレクトリから
+        # 読むため壊れたと判定されないことがある。データ部を壊すのが確実
+        offset = int(spec.get("offset", len(data) // 2))
+        offset = min(max(offset, 0), len(data) - 1)
+        mutated = bytearray(data)
+        mutated[offset] ^= 0xFF
+        return bytes(mutated)
+
+    if mode == "garbage":
+        head = str(spec.get("content", "NOT_A_VALID_FILE")).encode("utf-8")
+        return head + data[len(head):] if len(data) > len(head) else head
+
+    if mode == "append":
+        extra = str(spec.get("content", "GARBAGE")).encode("utf-8")
+        return data + extra
+
+    raise ConfigError(
+        "corrupt.mode が不正です: %r（truncate / empty / flip / garbage / append）" % mode)
+
+
 def put_input_files(
     settings: Settings,
     case_dir: Path,
@@ -291,7 +348,14 @@ def put_input_files(
 
         if not dry_run:
             dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+            corrupt = spec.get("corrupt")
+            if corrupt:
+                # 壊れたファイルは正常な資材から生成する（意図が定義に残る）
+                if not isinstance(corrupt, dict):
+                    corrupt = {"mode": str(corrupt)}
+                dest.write_bytes(corrupt_bytes(src.read_bytes(), corrupt))
+            else:
+                shutil.copy2(src, dest)
         placed.append(dest)
     return placed
 

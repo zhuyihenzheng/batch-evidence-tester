@@ -198,6 +198,51 @@ class PyodbcClient(DbClient):
             pass
 
 
+class LockHolder:
+    """batch の実行中だけ別接続でロックを保持する。
+
+    「DB 更新に失敗したとき batch がどう振る舞うか」は手作業では再現しづらい。
+    SSMS で手動トランザクションを張ったまま batch を起動する、という作業を
+    自動化するためのもの。ロック待ちタイムアウト・デッドロック・更新失敗時の
+    ロールバックを、決まった手順で毎回同じように起こせる。
+
+    with 文を抜けるとき必ずロールバックする。保持したまま終わると
+    後続ケースや他の作業が全部止まるため、解放は例外時も必ず行う。
+    """
+
+    def __init__(self, settings: Settings, sql: str):
+        self.settings = settings
+        self.sql = sql
+        self.conn = None
+
+    def __enter__(self) -> "LockHolder":
+        import pyodbc  # noqa: PLC0415
+
+        conn_str, _shown = build_connection_string(self.settings)
+        self.conn = pyodbc.connect(conn_str, timeout=int(
+            self.settings.database.get("login_timeout_sec", 15)))
+        cur = self.conn.cursor()
+        try:
+            # BEGIN TRAN したまま commit しないことでロックを保持する
+            cur.execute(self.sql)
+        finally:
+            cur.close()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.conn is None:
+            return
+        try:
+            self.conn.rollback()
+        except Exception:
+            pass
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+        self.conn = None
+
+
 class OfflineClient(DbClient):
     """DB 無しでパイプラインを検証するための代替。fixtures/ の CSV を返す。"""
 
