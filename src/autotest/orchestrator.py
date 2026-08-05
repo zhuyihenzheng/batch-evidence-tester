@@ -149,11 +149,17 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
             problems.append("collect.folder_evidence の論理名が paths に未定義です: %s" % alias)
 
     # --- 期待値ファイル -------------------------------------------------------
+    # manual: true は「人が証跡を見て判定する」ため expected が無くてよい。
+    # 無条件に必須にすると、その運用が preflight で弾かれて成立しない。
     for item in (case.assertions or {}).get("db", []):
-        expected = settings.project_root / item.get("expected", "")
         if not item.get("expected"):
-            problems.append("assert.db に expected がありません: %s" % item.get("table"))
-        elif not expected.exists():
+            if not item.get("manual"):
+                problems.append(
+                    "assert.db に expected がありません: %s"
+                    "（人が目視で判定する場合は manual: true を指定してください）" % item.get("table"))
+            continue
+        expected = settings.project_root / item["expected"]
+        if not expected.exists():
             problems.append("期待値 CSV がありません: %s" % expected)
     for item in (case.assertions or {}).get("files", []):
         if "expected" in item:
@@ -219,11 +225,15 @@ class CaseRunner:
             return result
 
         client: Optional[db_mod.DbClient] = None
+        setup_started = False
         try:
             self._step("DB接続")
             client = db_mod.create_client(self.settings, self.offline, case.case_id, dry_run=self.dry_run)
 
             self._step("前処理（フォルダ準備・SQL・データ投入）")
+            # teardown が必要かどうかの判断に使う。setup に入った時点で
+            # 環境や DB が変更されている可能性があるため、以降は必ず後始末する
+            setup_started = True
             self._setup(case, client)
 
             self._step("フォルダ撮影（実行前）")
@@ -289,14 +299,22 @@ class CaseRunner:
             else:
                 result.checks = self._assert_all(case, client, result, log_slices)
 
-            # 後処理（teardown）。証跡採取と判定が終わった後に実行する
-            teardown_check = self._teardown(case, client)
-            if teardown_check is not None:
-                result.checks.append(teardown_check)
-
         except Exception as exc:  # 1 ケースの失敗で全体を止めない
             result.fatal_error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
         finally:
+            # 後処理（teardown）は finally で行う。証跡採取や判定の途中で
+            # 例外が出た場合でも、setup が入れたテストデータ・制約違反データ・
+            # 権限変更を DB に残したままにしないため。
+            if setup_started and client is not None:
+                try:
+                    teardown_check = self._teardown(case, client)
+                    if teardown_check is not None:
+                        result.checks.append(teardown_check)
+                except Exception as exc:
+                    result.checks.append(CheckResult(
+                        "後処理（teardown）", "teardown", NG,
+                        "teardown 自体が失敗しました（環境が変更されたまま残っています）: %s" % exc))
+
             # 差し替えたファイルは、途中で落ちた場合でも必ず元に戻す。
             # 戻し損ねると次のケースや手動実行が壊れた設定で動いてしまう
             restore_problems = fsops.restore_files(getattr(self, "_replaced_files", []))
@@ -315,10 +333,15 @@ class CaseRunner:
     def _setup(self, case: TestCase, client: db_mod.DbClient) -> None:
         setup = case.setup or {}
 
-        # remove_dirs で「フォルダが存在しない」状態を作る異常系があるため、
-        # そのフォルダは自動作成の対象から外す（作った直後に消すのは無駄で紛らわしい）
-        removing = set(setup.get("remove_dirs", []))
-        fsops.ensure_dirs(self.settings, [a for a in self.settings.path_aliases if a not in removing])
+        # フォルダの自動作成は「このケースが実際に使う論理名」だけに限定する。
+        # paths 全部を作ると、無関係な batch のフォルダまで生やしてしまい、
+        # その中にアクセスできないネットワーク共有があると巻き添えで失敗する。
+        # dry-run では 1 つも作らない（何も触らないのが dry-run の約束）。
+        if not self.dry_run:
+            removing = set(setup.get("remove_dirs", []))
+            fsops.ensure_dirs(
+                self.settings,
+                [a for a in self._aliases_used_by(case) if a not in removing])
 
         for spec in setup.get("clean_dirs", []):
             # 文字列（論理名だけ）と辞書（exclude 付き）の両方を受ける
@@ -354,6 +377,39 @@ class CaseRunner:
             backup_root=self.run_dir / "backup" / case.case_id,
             dry_run=self.dry_run,
         )
+
+    def _aliases_used_by(self, case: TestCase) -> List[str]:
+        """このケースが参照する論理名だけを集める。
+
+        paths に定義された全フォルダを作ると、他機能の batch のフォルダまで
+        生成してしまう。到達できないネットワーク共有が含まれていると、
+        関係のないケースがそれに引きずられて失敗する。
+        """
+        setup = case.setup or {}
+        collect = case.collect or {}
+        used = set()
+
+        for key in ("clean_dirs", "remove_dirs"):
+            for spec in setup.get(key, []):
+                used.add(spec["alias"] if isinstance(spec, dict) else spec)
+        for spec in setup.get("input_files", []):
+            used.add(spec.get("dest_dir", "input_dir"))
+        for spec in setup.get("replace_files", []):
+            if spec.get("dest_dir"):
+                used.add(spec["dest_dir"])
+        for spec in collect.get("files", []):
+            used.add(spec.get("dir", "output_dir"))
+        used.update(collect.get("folder_evidence") or self.settings.folder_evidence.get("targets", []))
+        for item in (case.assertions or {}).get("files", []):
+            for spec in (item.get("actual"), item.get("exists")):
+                if spec:
+                    used.add(spec.get("dir", "output_dir"))
+        # ログ出力先は batch 定義側で決まる
+        log_alias = self.settings.batch_profile(case.execute.get("batch")).get("log_dir")
+        used.add(log_alias or "log_dir")
+
+        aliases = self.settings.path_aliases
+        return [a for a in used if a in aliases]
 
     # ------------------------------------------------------------------
     def _teardown(self, case: TestCase, client: db_mod.DbClient) -> Optional[CheckResult]:

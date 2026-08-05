@@ -4,8 +4,15 @@ rem  自動テスト実行
 rem    run_test.bat                    … 全ケース
 rem    run_test.bat --case TC001_normal … ケース指定
 rem    run_test.bat --tag 正常系         … タグ指定
-rem    run_test.bat --dry-run           … .exe を起動せず流れだけ確認
-rem  終了コード: 全 OK = 0 / NG あり = 1 / 設定エラー = 2
+rem    run_test.bat --dry-run           … .exe も DB も触らず流れだけ確認
+rem
+rem  設定ファイルはツール側が決める（config\settings.local.yaml があれば
+rem  そちらを優先し、無ければ settings.yaml）。ここで --config を固定すると
+rem  local 設定が読まれず、テンプレートの exe や DB を見に行ってしまう。
+rem  別の設定で動かしたい場合は  run_test.bat --config <パス>  と渡す。
+rem
+rem  終了コード:
+rem    0 = 全 OK / 1 = NG あり / 2 = 設定エラー / 3 = 人の確認待ち
 rem  （タスクスケジューラや Jenkins からはこの終了コードで判定できる）
 rem ============================================================================
 setlocal
@@ -29,7 +36,7 @@ if exist ".venv\Scripts\python.exe" (
 )
 
 set PYTHONPATH=%~dp0src
-%PY% -m autotest run --config config\settings.yaml %*
+%PY% -m autotest run %*
 set RESULT=%errorlevel%
 
 echo.
@@ -37,8 +44,12 @@ if "%RESULT%"=="0" (
     echo 総合判定: OK
 ) else if "%RESULT%"=="1" (
     echo 総合判定: NG  ―  出力された Excel の「サマリ」シートを確認してください。
-) else (
+) else if "%RESULT%"=="3" (
+    echo 総合判定: 要確認  ―  Excel の黄色い欄に確認結果を記入してください。
+) else if "%RESULT%"=="2" (
     echo 設定エラーで実行できませんでした。
+) else (
+    echo 想定外の終了コード: %RESULT%
 )
 
 rem 対話実行時のみ一時停止する（スケジューラ起動時は止めない）

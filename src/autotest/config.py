@@ -258,6 +258,128 @@ class TestCase:
         return self.source.parent / self.case_id if (self.source.parent / self.case_id).is_dir() else self.source.parent
 
 
+# ケース定義で使えるトップレベル項目。ここに無いキーは綴り間違いとして扱う。
+# 黙って無視すると「書いたのに効かない」状態が静かに続く。
+CASE_TOP_KEYS = {
+    "id", "name", "description", "tags", "enabled",
+    "setup", "snapshot", "execute", "collect", "assert", "teardown",
+}
+SETUP_KEYS = {"clean_dirs", "remove_dirs", "sql", "input_files", "replace_files"}
+COLLECT_KEYS = {"files", "folder_evidence"}
+EXECUTE_KEYS = {"batch", "args", "date", "expected_exit_code"}
+ASSERT_KEYS = {"exit_code", "db", "files", "log"}
+
+
+def _as_bool(value: Any, where: str) -> bool:
+    """YAML の真偽値を厳密に解釈する。
+
+    enabled: "false" は文字列なので Python では真になる。これを黙って
+    True と扱うと、無効化したつもりのケースが実行されてしまう。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "yes", "on", "1"):
+            return True
+        if lowered in ("false", "no", "off", "0"):
+            return False
+    raise ConfigError(
+        "%s は true / false で指定してください（指定値: %r）。"
+        "引用符で囲むと文字列になり、意図と逆に解釈されます。" % (where, value)
+    )
+
+
+def _check_unknown_keys(data: Dict[str, Any], allowed: set, where: str, path: Path) -> List[str]:
+    unknown = [k for k in data if k not in allowed]
+    if not unknown:
+        return []
+    return ["%s: 未知の項目 %s（綴り間違いの可能性。使える項目: %s）"
+            % (where, sorted(unknown), sorted(allowed))]
+
+
+def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> List[str]:
+    """ケース定義の型と項目名を検証する。実行時に KeyError で落ちるのを防ぐ。"""
+    problems: List[str] = []
+    problems += _check_unknown_keys(data, CASE_TOP_KEYS, "トップレベル", path)
+
+    if not str(case_id).strip():
+        problems.append("id が空です")
+    # 証跡フォルダ名やシート名に使うため、区切り文字を含む ID は許可しない
+    if any(ch in str(case_id) for ch in "/\\:*?\"<>|") or str(case_id) in (".", ".."):
+        problems.append("id にパス区切りや記号は使えません: %r" % case_id)
+
+    if "enabled" in data:
+        try:
+            _as_bool(data["enabled"], "enabled")
+        except ConfigError as exc:
+            problems.append(str(exc))
+
+    tags = data.get("tags")
+    if tags is not None and not isinstance(tags, list):
+        problems.append("tags はリストで指定してください（指定値: %r）" % tags)
+
+    setup = data.get("setup") or {}
+    if not isinstance(setup, dict):
+        problems.append("setup はマッピングで指定してください")
+        setup = {}
+    problems += _check_unknown_keys(setup, SETUP_KEYS, "setup", path)
+
+    for key in ("clean_dirs", "remove_dirs"):
+        for i, spec in enumerate(setup.get(key) or []):
+            if isinstance(spec, dict):
+                if not spec.get("alias"):
+                    problems.append("setup.%s[%d] に alias がありません: %r" % (key, i, spec))
+            elif not isinstance(spec, str):
+                problems.append("setup.%s[%d] は論理名の文字列か {alias: ...} で指定してください: %r"
+                                % (key, i, spec))
+
+    for key, required in (("input_files", "src"), ("replace_files", "src")):
+        for i, spec in enumerate(setup.get(key) or []):
+            if not isinstance(spec, dict):
+                problems.append("setup.%s[%d] はマッピングで指定してください: %r" % (key, i, spec))
+            elif not spec.get(required):
+                problems.append("setup.%s[%d] に %s がありません" % (key, i, required))
+            else:
+                for field in ("src", "rename", "name"):
+                    problems += _check_relative(spec.get(field), "setup.%s[%d].%s" % (key, i, field))
+
+    execute = data.get("execute") or {}
+    if not isinstance(execute, dict):
+        problems.append("execute はマッピングで指定してください")
+        execute = {}
+    problems += _check_unknown_keys(execute, EXECUTE_KEYS, "execute", path)
+    args = execute.get("args")
+    if args is not None and not isinstance(args, list):
+        # 文字列を渡すと 1 文字ずつに分解されて .exe へ渡ってしまう
+        problems.append('execute.args はリストで指定してください（例: ["--mode", "daily"]）。'
+                        "文字列を渡すと 1 文字ずつ分解されます。指定値: %r" % args)
+
+    collect = data.get("collect") or {}
+    if isinstance(collect, dict):
+        problems += _check_unknown_keys(collect, COLLECT_KEYS, "collect", path)
+    else:
+        problems.append("collect はマッピングで指定してください")
+
+    assertions = data.get("assert") or {}
+    if isinstance(assertions, dict):
+        problems += _check_unknown_keys(assertions, ASSERT_KEYS, "assert", path)
+    else:
+        problems.append("assert はマッピングで指定してください")
+
+    return problems
+
+
+def _check_relative(value: Any, where: str) -> List[str]:
+    """資材パスが上位ディレクトリへ抜けないことを確認する。"""
+    if not value or not isinstance(value, str):
+        return []
+    normalized = value.replace("\\", "/")
+    if normalized.startswith("/") or ".." in normalized.split("/"):
+        return ["%s に上位フォルダへ抜けるパスは指定できません: %r" % (where, value)]
+    return []
+
+
 def _folder_tags(path: Path, cases_dir: Path) -> List[str]:
     """ケース定義の置き場所から暗黙のタグを作る。
 
@@ -314,6 +436,12 @@ def load_cases(cases_dir: Union[str, Path], only: Optional[List[str]] = None, ta
     for path in find_case_files(cases_dir):
         data = _load_yaml(path)
         case_id = str(data.get("id") or path.stem)
+
+        schema_problems = _validate_case_schema(data, path, case_id)
+        if schema_problems:
+            raise ConfigError(
+                "ケース定義に問題があります: %s\n  - %s" % (path, "\n  - ".join(schema_problems)))
+
         case = TestCase(
             case_id=case_id,
             name=str(data.get("name") or case_id),
@@ -324,7 +452,7 @@ def load_cases(cases_dir: Union[str, Path], only: Optional[List[str]] = None, ta
             tags=_folder_tags(path, cases_dir) + [
                 t for t in (data.get("tags") or []) if t not in _folder_tags(path, cases_dir)
             ],
-            enabled=bool(data.get("enabled", True)),
+            enabled=_as_bool(data.get("enabled", True), "enabled"),
             setup=data.get("setup") or {},
             snapshot=data.get("snapshot") or {},
             execute=data.get("execute") or {},

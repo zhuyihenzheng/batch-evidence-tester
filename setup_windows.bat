@@ -39,6 +39,17 @@ echo.
 echo [4/4] 設定の検証
 set PYTHONPATH=%~dp0src
 .venv\Scripts\python.exe -m autotest validate
+rem 検証が通っていないのに「完了」と表示すると、設定が有効だと誤解される
+if errorlevel 1 (
+    echo.
+    echo ============================================================================
+    echo  依存関係の導入は完了しましたが、設定の検証で問題が見つかりました。
+    echo  上の [NG] を解消してから run_test.bat を実行してください。
+    echo    設定ファイル: config\settings.local.yaml（無ければ settings.yaml）
+    echo ============================================================================
+    pause
+    exit /b 1
+)
 echo.
 echo ============================================================================
 echo  セットアップ完了。

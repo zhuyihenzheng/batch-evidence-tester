@@ -551,6 +551,9 @@ run_test.bat --tag 正常系              :: 按标签
 run_test.bat --dry-run                :: 不启动 exe、不动文件夹，只验流程
 run_demo.bat                          :: 沙箱空跑
 
+:: 配置文件由工具自动选：有 config\settings.local.yaml 就用它，否则用 settings.yaml
+:: run_test.bat 不再固定 --config，所以 local 配置一定会生效
+
 :: 直接用 CLI 也可以（.bat 里已自动设好，手敲时需要这一行）
 set PYTHONPATH=src
 .venv\Scripts\python -m autotest run --config config\settings.yaml
@@ -566,7 +569,7 @@ set PYTHONPATH=src
 `Get-Content output\<run_id>\run.log -Wait -Tail 20` 就能看到停在哪一步。
 加 `--verbose` 可以直接在屏幕上看。
 
-**退出码**：全 OK = `0`，有 NG = `1`，设定错误 = `2`
+**退出码**：全 OK = `0`，有 NG = `1`，设定错误 = `2`，**有要確認 = `3`**
 → 可直接接 タスクスケジューラ / Jenkins / GitLab CI。
 `run_test.bat` 从调度器启动时不会 `pause`，手动双击时才停留等按键。
 

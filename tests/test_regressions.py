@@ -1381,3 +1381,168 @@ class TestMaskAppliedOnlyInExcel(TmpDirCase):
                   if c.value is not None]
         self.assertNotIn("alice", values, "Excel に生値が出ている")
         self.assertIn("***MASKED***", values)
+
+
+# =============================================================================
+# manual: true は expected 無しでも成立すること（preflight で弾かない）
+# =============================================================================
+class TestManualWithoutExpected(TmpDirCase):
+    def _case(self, assertions):
+        from autotest.config import TestCase
+        return TestCase(case_id="T", name="T", source=self.tmp / "T.yaml", assertions=assertions)
+
+    def _settings(self):
+        exe = self.tmp / "b.exe"
+        exe.write_text("x", encoding="utf-8")
+        return self.write_settings({"work_dir": str(self.tmp / "w")},
+                                   extra={"batch": {"exe_path": str(exe)}})
+
+    def test_manual_db_without_expected_passes_preflight(self):
+        from autotest.orchestrator import preflight_case
+        problems = preflight_case(self._settings(),
+                                  self._case({"db": [{"table": "T_ORDER", "manual": True}]}))
+        self.assertEqual(problems, [], "manual 運用が preflight で成立しない")
+
+    def test_non_manual_db_still_requires_expected(self):
+        from autotest.orchestrator import preflight_case
+        problems = preflight_case(self._settings(),
+                                  self._case({"db": [{"table": "T_ORDER"}]}))
+        self.assertTrue(problems)
+        self.assertIn("manual", " ".join(problems), "対処方法を案内すること")
+
+
+# =============================================================================
+# teardown は異常経路でも実行されること
+# =============================================================================
+class TestTeardownOnFailure(TmpDirCase):
+    def test_teardown_runs_when_case_fails_midway(self):
+        """証跡採取で落ちても、setup が入れたデータを DB に残さないこと。"""
+        from autotest import db as dbm, render
+        from autotest.config import TestCase
+        from autotest.orchestrator import CaseRunner
+
+        executed = []
+
+        class FakeClient:
+            def query(self, sql, params=None):
+                return [], []
+
+            def execute_script(self, sql):
+                executed.append(sql.strip())
+
+            def close(self):
+                pass
+
+        exe = self.tmp / "b.exe"
+        exe.write_text("x", encoding="utf-8")
+        (self.tmp / "w").mkdir()
+        settings = self.write_settings({"work_dir": str(self.tmp / "w"), "log_dir": str(self.tmp / "w")},
+                                       extra={"batch": {"exe_path": str(exe)}})
+        case = TestCase(case_id="T", name="T", source=self.tmp / "T.yaml",
+                        setup={"sql": ["SETUP"]}, teardown={"sql": ["TEARDOWN"]},
+                        collect={"folder_evidence": ["work_dir"]})
+
+        saved_create, saved_listing = dbm.create_client, render.Renderer.folder_listing
+        try:
+            dbm.create_client = lambda *a, **k: FakeClient()
+            render.Renderer.folder_listing = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("撮影失敗"))
+            result = CaseRunner(settings, self.tmp / "out").run(case)
+        finally:
+            dbm.create_client, render.Renderer.folder_listing = saved_create, saved_listing
+
+        self.assertIn("SETUP", executed)
+        self.assertIn("TEARDOWN", executed, "異常終了時に teardown が実行されていない")
+        self.assertEqual(result.verdict, "ERROR")
+
+
+# =============================================================================
+# dry-run はフォルダを作らない / 通常実行も無関係な論理名は作らない
+# =============================================================================
+class TestDirectoryCreationScope(TmpDirCase):
+    def _settings(self):
+        exe = self.tmp / "b.exe"
+        exe.write_text("x", encoding="utf-8")
+        return self.write_settings(
+            {"input_dir": str(self.tmp / "sb" / "in"),
+             "log_dir": str(self.tmp / "sb" / "log"),
+             "other_batch_dir": str(self.tmp / "OTHER" / "data")},
+            extra={"batch": {"exe_path": str(exe)},
+                   "folder_evidence": {"targets": ["input_dir"]}})
+
+    def _case(self):
+        from autotest.config import TestCase
+        return TestCase(case_id="T", name="T", source=self.tmp / "T.yaml",
+                        setup={"clean_dirs": ["input_dir"]})
+
+    def test_unrelated_alias_not_created(self):
+        """他機能のフォルダまで作らないこと（到達不能な共有で巻き添えになる）。"""
+        from autotest.orchestrator import CaseRunner
+        runner = CaseRunner(self._settings(), self.tmp / "out")
+        used = runner._aliases_used_by(self._case())
+        self.assertIn("input_dir", used)
+        self.assertIn("log_dir", used)
+        self.assertNotIn("other_batch_dir", used)
+
+    def test_dry_run_creates_nothing(self):
+        from autotest import db as dbm, render
+        from autotest.orchestrator import CaseRunner
+
+        saved_create, saved_listing = dbm.create_client, render.Renderer.folder_listing
+        try:
+            render.Renderer.folder_listing = lambda self_, d, e, a, p, m: self_.out_dir / "x.png"
+            CaseRunner(self._settings(), self.tmp / "out", dry_run=True).run(self._case())
+        finally:
+            dbm.create_client, render.Renderer.folder_listing = saved_create, saved_listing
+
+        self.assertFalse((self.tmp / "sb").exists(), "dry-run がフォルダを作っている")
+        self.assertFalse((self.tmp / "OTHER").exists())
+
+
+# =============================================================================
+# ケース定義のスキーマ検証
+# =============================================================================
+class TestCaseSchemaValidation(TmpDirCase):
+    def _load(self, body):
+        d = self.tmp / "cases"
+        d.mkdir(exist_ok=True)
+        (d / "x.yaml").write_text(body, encoding="utf-8")
+        return load_cases(d)
+
+    def _expect_error(self, body, fragment):
+        with self.assertRaises(ConfigError) as ctx:
+            self._load(body)
+        self.assertIn(fragment, str(ctx.exception))
+
+    def test_dict_without_alias_is_rejected(self):
+        """実行時に KeyError で落ちるのではなく、読込時に説明すること。"""
+        self._expect_error("id: A\nname: A\nsetup:\n  clean_dirs:\n    - {}\n", "alias")
+
+    def test_args_as_string_is_rejected(self):
+        """文字列を渡すと 1 文字ずつ .exe に渡ってしまう。"""
+        self._expect_error('id: B\nname: B\nexecute:\n  args: "--mode daily"\n', "リストで指定")
+
+    def test_quoted_false_is_treated_as_false(self):
+        """enabled: "false" を True と誤解しないこと。"""
+        with self.assertRaises(ConfigError) as ctx:
+            self._load('id: C\nname: C\nenabled: "false"\n')
+        self.assertIn("実行可能なケースが 0 件", str(ctx.exception))
+
+    def test_path_traversal_in_id_rejected(self):
+        self._expect_error('id: "../../etc/evil"\nname: D\n', "パス区切り")
+
+    def test_path_traversal_in_src_rejected(self):
+        self._expect_error(
+            'id: E\nname: E\nsetup:\n  input_files:\n    - src: "../../secret.csv"\n',
+            "上位フォルダ")
+
+    def test_unknown_key_is_rejected(self):
+        """綴り間違いを黙って無視しないこと。"""
+        self._expect_error("id: F\nname: F\nsetupp:\n  clean_dirs: [a]\n", "未知の項目")
+
+    def test_tags_must_be_list(self):
+        self._expect_error("id: G\nname: G\ntags: 正常系\n", "リストで指定")
+
+    def test_valid_case_loads(self):
+        got = self._load('id: H\nname: H\ntags: [正常系]\nexecute:\n  args: ["--mode", "daily"]\n')
+        self.assertEqual(got[0].case_id, "H")
+        self.assertEqual(got[0].execute["args"], ["--mode", "daily"])
