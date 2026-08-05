@@ -1,0 +1,84 @@
+# =============================================================================
+# TC010 異常系: 途中まで成功したあと、最後の UPDATE だけ失敗する
+#
+#   対象 batch の流れ:
+#     1. INSERT して COMMIT        … 成功する
+#     2. ファイルを処理済へ移動      … 成功する
+#     3. UPLOAD_TIME を UPDATE     … ★ここだけ失敗させる
+#
+#   このケースが確認するのは「失敗したこと」ではなく、
+#   失敗したあとにどんな状態が残るかである:
+#     - INSERT は COMMIT 済みなので取り消されない
+#     - ファイルは移動済みなので投入フォルダには戻らない
+#     - UPLOAD_TIME だけ NULL のまま
+#   つまり DB とファイルの整合が崩れた状態になる。これを再実行したとき
+#   二重登録にならないか、リカバリ手順が機能するかまで見るのが本題。
+#
+#   障害の注入方法は 3 つ用意してある。環境の制約で選ぶこと。
+#     A) sql/inject_update_failure_column_deny.sql … 列単位の DENY（最も侵襲が小さい）
+#     B) sql/inject_update_failure_check.sql       … CHECK 制約（権限を触れない環境向け）
+#     C) sql/inject_update_failure_trigger.sql     … トリガ（条件を細かく指定したい場合）
+#   下では B を使っている。A/C に変える場合は teardown も対応するものへ差し替える。
+#
+#   ★実 DB 前提。--offline では setup SQL が実行されないため既定は無効。
+# =============================================================================
+id: TC010_partial_failure
+name: "異常系：ファイル移動後の UPLOAD_TIME 更新失敗"
+description: "INSERT と ファイル移動が成功したあと UPLOAD_TIME の更新が失敗した場合、DB とファイルにどの状態が残るかを確認する"
+tags: [異常系, DB, 部分失敗]
+enabled: false          # ← 実 DB へ接続したら true にする
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  sql:
+    - file: sql/TC001_setup.sql                      # 試験前提のデータに戻す
+    - file: sql/inject_update_failure_check.sql      # ★障害注入
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+
+snapshot:
+  tables:
+    # UPLOAD_TIME を含めて取ること。ここが NULL のまま残るのが本ケースの核心
+    - name: T_ORDER
+      sql: >
+        SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS, UPLOAD_TIME, UPDATED_AT
+        FROM T_ORDER ORDER BY ORDER_ID
+
+execute:
+  args: ["--mode", "daily", "--date", "20260803"]
+
+collect:
+  files:
+    - dir: processed_dir
+      pattern: "*.csv"
+      preview: true
+
+assert:
+  exit_code: 1
+
+  db:
+    # 「INSERT は残り、UPLOAD_TIME だけ NULL」という中途半端な状態を期待値に固定する。
+    # ここを固定しておくと、リカバリ処理を入れたときに差分として現れる
+    - table: T_ORDER
+      expected: "expected/TC010_partial_failure/db_T_ORDER.csv"
+      key: [ORDER_ID]
+      ignore_columns: [UPDATED_AT]
+
+  files:
+    - name: "ファイルは移動済みのまま戻らないこと"
+      exists: {dir: processed_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "投入フォルダには戻っていないこと"
+      exists: {dir: input_dir, pattern: "*", count: 0}
+
+  log:
+    # 実際の batch が出すメッセージに合わせて調整すること
+    must_contain: ["処理異常終了"]
+    must_not_contain: ["処理正常終了"]
+
+# 注入した制約は必ず落とす。残ると以降 UPLOAD_TIME を一切更新できなくなる。
+# teardown は finally で実行されるため、途中で失敗しても実行される。
+# ただし --keep-env を付けた場合は実行されないので、調査後に手動で戻すこと。
+teardown:
+  sql:
+    - file: sql/inject_update_failure_check_teardown.sql

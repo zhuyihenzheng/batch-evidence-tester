@@ -1,0 +1,4 @@
+-- 方式 C の後始末。トリガが残ると以降すべての更新が失敗する
+IF OBJECT_ID('TRG_INJECT_UPDATE_FAIL', 'TR') IS NOT NULL
+    DROP TRIGGER TRG_INJECT_UPDATE_FAIL;
+GO

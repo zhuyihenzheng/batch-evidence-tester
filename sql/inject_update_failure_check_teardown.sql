@@ -1,0 +1,4 @@
+-- 方式 B の後始末。制約が残ると以降 UPLOAD_TIME を一切更新できなくなる
+IF EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_INJECT_UPLOAD_TIME')
+    ALTER TABLE dbo.T_ORDER DROP CONSTRAINT CK_INJECT_UPLOAD_TIME;
+GO
