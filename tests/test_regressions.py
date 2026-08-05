@@ -1546,3 +1546,80 @@ class TestCaseSchemaValidation(TmpDirCase):
         got = self._load('id: H\nname: H\ntags: [正常系]\nexecute:\n  args: ["--mode", "daily"]\n')
         self.assertEqual(got[0].case_id, "H")
         self.assertEqual(got[0].execute["args"], ["--mode", "daily"])
+
+
+# =============================================================================
+# .exe 終了後のログ書き込み待ち
+# =============================================================================
+class TestLogSettleWait(TmpDirCase):
+    """.exe 終了直後にログを読むと末尾が欠けることへの対策。
+
+    log4net / NLog の非同期アペンダはプロセス終了後に遅れて flush される。
+    すぐ読むと「処理正常終了」が見つからず誤って NG になる。
+    """
+
+    def _settings(self, log_dir):
+        return self.write_settings({"log_dir": str(log_dir)})
+
+    def _log_dir(self):
+        d = self.tmp / "log"
+        d.mkdir()
+        (d / "batch.log").write_text("start\n", encoding="utf-8")
+        return d
+
+    def test_waits_for_delayed_flush(self):
+        import threading
+        import time as _t
+
+        d = self._log_dir()
+        target = d / "batch.log"
+
+        def delayed():
+            _t.sleep(0.5)
+            with target.open("a", encoding="utf-8") as f:
+                f.write("処理正常終了\n")
+
+        offsets = logs.snapshot_offsets(self._settings(d), d)
+        threading.Thread(target=delayed).start()
+
+        logs.wait_until_stable(self._settings(d), d, max_wait_sec=6,
+                               min_wait_sec=1.0, stable_for_sec=0.6)
+        slices = logs.collect(self._settings(d), offsets, datetime.now(), datetime.now(), log_dir=d)
+        missing, _ = logs.check_keywords(slices, ["処理正常終了"], [])
+        self.assertEqual(missing, [], "遅延書き込みを取りこぼしている")
+
+    def test_returns_quickly_when_already_settled(self):
+        """既に書き終わっている場合に上限まで待たないこと。"""
+        d = self._log_dir()
+        waited = logs.wait_until_stable(self._settings(d), d, max_wait_sec=10,
+                                        min_wait_sec=0.3, stable_for_sec=0.3)
+        self.assertLess(waited, 3.0, "落ち着いているのに待ちすぎている")
+
+    def test_respects_max_wait(self):
+        """書き込みが続いていても上限で打ち切ること。"""
+        import threading
+        import time as _t
+
+        d = self._log_dir()
+        target = d / "batch.log"
+        stop = threading.Event()
+
+        def keep_writing():
+            while not stop.is_set():
+                with target.open("a", encoding="utf-8") as f:
+                    f.write("x\n")
+                _t.sleep(0.1)
+
+        writer = threading.Thread(target=keep_writing)
+        writer.start()
+        try:
+            waited = logs.wait_until_stable(self._settings(d), d, max_wait_sec=1.0,
+                                            min_wait_sec=0.2, stable_for_sec=0.5)
+        finally:
+            stop.set()
+            writer.join()
+        self.assertLess(waited, 3.0, "上限を超えて待ち続けている")
+
+    def test_disabled_when_zero(self):
+        d = self._log_dir()
+        self.assertEqual(logs.wait_until_stable(self._settings(d), d, max_wait_sec=0), 0.0)

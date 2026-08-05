@@ -19,6 +19,15 @@ batch:
   # 実行中に「N 秒経過」を run.log と画面へ出す間隔。
   # 固まっているのか単に時間がかかっているのかを区別するためのもの
   heartbeat_sec: 10
+  # .exe 終了後、ログの書き込みが落ち着くまで待つ設定。
+  # log4net / NLog の非同期アペンダはプロセス終了後に遅れて flush されるため、
+  # すぐ読むと末尾が欠け「処理正常終了」が見つからず誤 NG になる。
+  #   log_settle_min_sec  … 必ず待つ最低秒数。遅れて書く batch ではここを上げる
+  #   log_settle_stable_sec … この秒数だけ変化が無ければ書き終わりとみなす
+  #   log_settle_sec      … 待機の上限（0 にすると待たない）
+  log_settle_min_sec: 1
+  log_settle_stable_sec: 1
+  log_settle_sec: 5
   # .exe の標準出力/標準エラーの文字コード。日本語 Windows の既定は cp932
   console_encoding: "cp932"
   # 全ケース共通で渡す引数（ケース側 execute.args の前に付く）

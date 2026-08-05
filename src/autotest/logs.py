@@ -9,6 +9,7 @@
 
 import hashlib
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -100,6 +101,65 @@ def _head_signature(path: Path, size: int, limit: int = 4096) -> Tuple[int, str]
     with path.open("rb") as f:
         head = f.read(head_len)
     return head_len, hashlib.sha1(head).hexdigest()
+
+
+def wait_until_stable(
+    settings: Settings,
+    log_dir: Optional[Path] = None,
+    max_wait_sec: float = 5.0,
+    min_wait_sec: float = 1.0,
+    stable_for_sec: float = 1.0,
+    poll_interval_sec: float = 0.2,
+) -> float:
+    """ログの書き込みが落ち着くまで待つ。待った秒数を返す。
+
+    .exe が終了してもログが全部書き終わっているとは限らない。C# の
+    log4net / NLog は非同期アペンダを使うことがあり、プロセス終了後に
+    数百ミリ秒〜数秒遅れて flush される。すぐ読むと末尾が欠け、
+    「処理正常終了」が見つからず誤って NG になる。
+
+    判定は「min_wait_sec は必ず待つ。その後 stable_for_sec の間サイズが
+    変化しなければ書き終わりとみなす」。単に「N 回連続で変化なし」だと、
+    遅延書き込みがまだ始まっていない時間帯をたまたま拾って早期に
+    抜けてしまう（実際にそれで取りこぼした）。
+    """
+    log_dir = log_dir or settings.resolve_dir("log_dir")
+    patterns = settings.log.get("patterns", ["*.log"])
+    if max_wait_sec <= 0:
+        return 0.0
+
+    def sizes() -> Dict[Path, int]:
+        found: Dict[Path, int] = {}
+        for pattern in patterns:
+            for path in find_files(log_dir, pattern):
+                try:
+                    found[path] = path.stat().st_size
+                except OSError:
+                    continue
+        return found
+
+    started = time.time()
+    previous = sizes()
+    last_change = started
+
+    while True:
+        elapsed = time.time() - started
+        if elapsed >= max_wait_sec:
+            break
+        time.sleep(poll_interval_sec)
+
+        current = sizes()
+        if current != previous:
+            last_change = time.time()
+            previous = current
+
+        elapsed = time.time() - started
+        quiet_for = time.time() - last_change
+        # 最低待機を満たし、かつ一定時間変化が無ければ書き終わりとみなす
+        if elapsed >= min_wait_sec and quiet_for >= stable_for_sec:
+            break
+
+    return time.time() - started
 
 
 def collect(

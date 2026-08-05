@@ -261,6 +261,18 @@ class CaseRunner:
                 on_progress=self._progress,   # 実行中の経過を run.log と画面へ
             )
 
+            # .exe が終了してもログの書き込みが終わっているとは限らない。
+            # 落ち着くまで待ってから読む（既に落ち着いていれば即座に進む）
+            batch_cfg = self.settings.batch_profile(batch_name)
+            waited = logs.wait_until_stable(
+                self.settings, log_dir,
+                max_wait_sec=float(batch_cfg.get("log_settle_sec", 5)),
+                min_wait_sec=float(batch_cfg.get("log_settle_min_sec", 1)),
+                stable_for_sec=float(batch_cfg.get("log_settle_stable_sec", 1)),
+            )
+            if waited >= 0.5:
+                self._step("ログ書き込み待ち %.1f 秒" % waited)
+
             self._step("ログ収集")
             log_slices = logs.collect(
                 self.settings, offsets,
