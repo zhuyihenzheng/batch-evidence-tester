@@ -1281,3 +1281,103 @@ class TestManualReviewExcel(TmpDirCase):
         texts = [str(c.value) for row in ws.iter_rows() for c in row
                  if isinstance(c.value, str) and "要確認" in c.value and "記入" in c.value]
         self.assertTrue(texts, "確認手順の案内が出ていない")
+
+
+# =============================================================================
+# DB 値は整形せずそのまま（表示のための加工が判定を汚さないこと）
+# =============================================================================
+class TestDbValueLossless(unittest.TestCase):
+    """DB にある値をそのまま扱う。丸め・切り捨て・マスクは判定より後。
+
+    表示のための加工を判定より前に適用すると、値が違うのに一致と
+    みなされる（偽 OK）。実際に mask / binary / 秒精度 / Decimal 丸めの
+    4 パターンで発生していた。
+    """
+
+    def _compare(self, actual, expected, mask=None):
+        from autotest.db import to_text
+        a = Table("T", ["ID", "V"], [["1", to_text(actual)]], mask_columns=mask or [])
+        e = Table("T", ["ID", "V"], [["1", to_text(expected)]], mask_columns=mask or [])
+        return compare.compare_db_table("T", a, e, keys=["ID"])
+
+    def test_masked_column_still_detects_difference(self):
+        """マスク対象でも値が違えば NG。別人が同一視されてはいけない。"""
+        result = self._compare("bob", "alice", mask=["V"])
+        self.assertEqual(result.verdict, NG)
+
+    def test_masked_values_are_hidden_in_diff(self):
+        """差異は検出しつつ、差分表には生値を出さないこと。"""
+        result = self._compare("bob", "alice", mask=["V"])
+        shown = " ".join(str(v) for v in result.diff_table.rows[0])
+        self.assertNotIn("alice", shown)
+        self.assertNotIn("bob", shown)
+        self.assertIn("MASKED", shown)
+
+    def test_binary_tail_difference_detected(self):
+        """先頭が同じで後半だけ異なる BLOB を同一視しないこと。"""
+        head = bytes(range(16))
+        self.assertEqual(self._compare(head + b"AAAA", head + b"BBBB").verdict, NG)
+
+    def test_datetime_microseconds_preserved(self):
+        import datetime as _dt
+        a = _dt.datetime(2026, 8, 5, 9, 0, 0, 111111)
+        b = _dt.datetime(2026, 8, 5, 9, 0, 0, 999999)
+        self.assertEqual(self._compare(a, b).verdict, NG)
+
+    def test_decimal_not_rounded(self):
+        from decimal import Decimal as _Dec
+        self.assertEqual(
+            self._compare(_Dec("100.004"), _Dec("100.001")).verdict, NG)
+
+    def test_identical_values_are_ok(self):
+        import datetime as _dt
+        self.assertEqual(
+            self._compare(_dt.datetime(2026, 8, 5, 9, 0, 0, 1),
+                          _dt.datetime(2026, 8, 5, 9, 0, 0, 1)).verdict, OK)
+        self.assertEqual(self._compare("alice", "alice", mask=["V"]).verdict, OK)
+
+    def test_to_text_is_lossless(self):
+        import datetime as _dt
+        from decimal import Decimal as _Dec
+        from autotest.db import to_text
+        self.assertEqual(to_text(_dt.datetime(2026, 8, 5, 9, 0, 0, 123456)),
+                         "2026-08-05 09:00:00.123456")
+        self.assertEqual(to_text(_Dec("100.0040")), "100.0040", "末尾 0 も落とさない")
+        self.assertEqual(to_text(b"\x00\x01\xff"), "0x0001FF")
+        self.assertEqual(to_text(None), "(NULL)")
+        self.assertEqual(to_text("  空白  "), "  空白  ", "前後空白を残すこと")
+
+    def test_snapshot_does_not_mask_or_format(self):
+        """snapshot が返す Table は生値で、マスク列名だけを持つこと。"""
+        from autotest.db import DbClient
+
+        class FakeClient(DbClient):
+            def query(self, sql, params=None):
+                return ["ID", "NAME"], [["1", "alice"]]
+
+            def execute_script(self, sql):
+                pass
+
+        table = FakeClient().snapshot({"name": "T", "sql": "SELECT * FROM T", "mask": ["NAME"]}, {})
+        self.assertEqual(table.rows, [["1", "alice"]], "比較用データはマスクしない")
+        self.assertEqual(table.mask_columns, ["NAME"])
+
+
+class TestMaskAppliedOnlyInExcel(TmpDirCase):
+    def test_excel_output_is_masked(self):
+        from openpyxl import load_workbook
+        from autotest.excel import build_workbook
+        from autotest.models import RunResult
+
+        run = RunResult(run_id="ut", started_at=datetime.now(), finished_at=datetime.now())
+        case = CaseResult(case_id="TC", name="TC")
+        case.db_after["T"] = Table("T", ["ID", "NAME"], [["1", "alice"]], mask_columns=["NAME"])
+        case.checks.append(compare.CheckResult("c", "db", OK, "ok"))
+        run.cases.append(case)
+
+        out = self.tmp / "e.xlsx"
+        build_workbook(run, out, {})
+        values = [str(c.value) for row in load_workbook(out)["TC"].iter_rows() for c in row
+                  if c.value is not None]
+        self.assertNotIn("alice", values, "Excel に生値が出ている")
+        self.assertIn("***MASKED***", values)

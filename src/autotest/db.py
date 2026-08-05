@@ -1,7 +1,9 @@
-"""SQL Server アクセスと、取得値の Excel 向けフォーマット。
+"""SQL Server アクセスと、取得値の文字列化。
 
-DB 値はユーザ指示により画像化せず、Excel のネイティブセルとして書き出す。
-そのため「表示用に整形した文字列」を Table に詰めるのがこのモジュールの役割。
+DB 値は画像化せず Excel のネイティブセルとして書き出す。値は整形せず、
+情報を落とさずに文字列化するだけ（DB にあるものをそのまま出す）。
+丸めや桁の省略は「表示のための加工」であり、判定より前に適用すると
+値が違うのに一致とみなされるため行わない。
 
 offline モード:
   pyodbc / SQL Server が無い環境（macOS での動作確認など）で
@@ -29,53 +31,43 @@ class DbError(Exception):
 # =============================================================================
 
 
-def format_value(value: Any, fmt: Dict[str, Any], column: str = "") -> Any:
-    """DB の生値を Excel セルに入れる形へ整形する。
+NULL_TEXT = "(NULL)"
+MASKED_TEXT = "***MASKED***"
 
-    数値は Excel 側でも数値のままにしたい場合があるため int はそのまま返す。
-    Decimal は既定で文字列化する（Excel の float 丸めで桁落ちさせないため）。
+
+def to_text(value: Any) -> str:
+    """DB の値を「情報を落とさずに」文字列化する。
+
+    ここでの整形は一切行わない。丸め・切り捨て・桁の省略をすると、
+    表示は読みやすくなる代わりに、値が違うのに同じに見える状態が生まれ、
+    比較で偽 OK になる（実際に mask / binary 16 バイト / 秒精度 /
+    Decimal 丸めの 4 パターンで発生していた）。
+
+    「DB にあるものを、そのまま CSV に出す」が原則。
     """
     if value is None:
-        return fmt.get("null_text", "(NULL)")
+        return NULL_TEXT
 
     if isinstance(value, dt.datetime):
-        return value.strftime(fmt.get("datetime", "%Y-%m-%d %H:%M:%S"))
-    if isinstance(value, dt.date):
-        return value.strftime(fmt.get("date", "%Y-%m-%d"))
-    if isinstance(value, dt.time):
-        return value.strftime("%H:%M:%S")
+        # マイクロ秒まで残す。秒で切ると 09:00:00.111 と 09:00:00.999 が同一になる
+        return value.isoformat(sep=" ")
+    if isinstance(value, (dt.date, dt.time)):
+        return value.isoformat()
 
     if isinstance(value, decimal.Decimal):
-        places = (fmt.get("decimal_places") or {}).get(column)
-        if places is not None:
-            quant = decimal.Decimal(1).scaleb(-int(places))
-            value = value.quantize(quant, rounding=decimal.ROUND_HALF_UP)
-        return str(value) if fmt.get("decimal_as_text", True) else float(value)
+        # 丸めない。表示桁で丸めると 100.004 と 100.001 が同一になる
+        return str(value)
 
     if isinstance(value, (bytes, bytearray, memoryview)):
-        head = int(fmt.get("binary_head_bytes", 16))
-        raw = bytes(value)
-        hexed = "0x" + raw[:head].hex().upper()
-        return hexed + ("..." if len(raw) > head else "")
+        # 全バイトを 16 進で出す。先頭 N バイトで打ち切ると
+        # 後半だけ異なる BLOB を同一とみなしてしまう
+        return "0x" + bytes(value).hex().upper()
 
     if isinstance(value, bool):
         return "1" if value else "0"
 
-    if isinstance(value, str):
-        return value.rstrip() if fmt.get("trim_trailing_space", True) else value
-
-    return value
-
-
-def apply_mask(row: Dict[str, Any], mask_columns: List[str]) -> Dict[str, Any]:
-    """個人情報等をマスクする。証跡がそのまま共有されても問題ない状態にする。"""
-    if not mask_columns:
-        return row
-    masked = dict(row)
-    for col in mask_columns:
-        if col in masked and masked[col] is not None:
-            masked[col] = "***MASKED***"
-    return masked
+    # 文字列は前後の空白も含めてそのまま。固定長・EDI では空白に意味がある
+    return str(value)
 
 
 # =============================================================================
@@ -102,34 +94,30 @@ class DbClient(ABC):
     # 表示の絞り込みは excel.py 側の仕事。判定は常に全行で行う。
     JUDGE_ROW_CAP = 100000
 
-    def snapshot(self, spec: Dict[str, Any], fmt: Dict[str, Any], title_prefix: str = "") -> Table:
+    def snapshot(self, spec: Dict[str, Any], title_prefix: str = "") -> Table:
         """スナップショット定義 1 件を Table に変換する。
 
-        判定の元データになるため、表示都合の打ち切りはここでは行わない。
+        値は情報を落とさずに文字列化するだけで、整形もマスクも行わない。
+        いずれも「表示のための加工」であり、判定より手前で適用すると
+        値が違うのに一致とみなされる（偽 OK）。マスクは Excel へ書く
+        直前に適用する（mask_columns として Table に持たせる）。
         """
         table_name = str(spec.get("name") or spec.get("table") or "UNKNOWN")
         sql = spec.get("sql") or f"SELECT * FROM {table_name}"
         columns, rows = self.query(sql)
-
-        local_fmt = {**fmt, **(spec.get("format") or {})}
-        mask_columns = list(spec.get("mask") or [])
 
         total = len(rows)
         max_rows = self.JUDGE_ROW_CAP
         if total > max_rows:
             rows = rows[:max_rows]
 
-        formatted: List[List[Any]] = []
-        for row in rows:
-            as_dict = apply_mask(dict(zip(columns, row)), mask_columns)
-            formatted.append([format_value(as_dict[c], local_fmt, c) for c in columns])
-
         return Table(
             title=f"{title_prefix}{table_name}",
             columns=columns,
-            rows=formatted,
+            rows=[[to_text(v) for v in row] for row in rows],
             truncated_from=total if total > max_rows else None,
             note=f"SQL: {sql.strip()}",
+            mask_columns=list(spec.get("mask") or []),
         )
 
 

@@ -33,6 +33,7 @@ class Table:
         note: str = "",
         truncated_from: Optional[int] = None,
         mono_columns: Optional[List[int]] = None,
+        mask_columns: Optional[List[str]] = None,
     ) -> None:
         self.title = title
         self.columns = columns
@@ -43,6 +44,9 @@ class Table:
         self.truncated_from = truncated_from  # 元の行数（打ち切った場合）
         # 等幅フォントで表示する列インデックス（ログ本文など）
         self.mono_columns = mono_columns if mono_columns is not None else []
+        # 出力時にマスクする列名。比較は生値で行い、Excel へ書くときだけ伏せる。
+        # 比較前にマスクすると、値が違っても同じに見えて偽 OK になる
+        self.mask_columns = mask_columns if mask_columns is not None else []
 
     @property
     def row_count(self) -> int:

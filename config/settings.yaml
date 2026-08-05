@@ -119,17 +119,6 @@ database:
   # 取りこぼさないようこの秒数だけさかのぼる。
   batch_start_margin_sec: 5
 
-# DB 値を Excel に書くときの既定フォーマット（ケース側で個別上書き可）
-db_format:
-  datetime: "%Y-%m-%d %H:%M:%S"
-  date: "%Y-%m-%d"
-  null_text: "(NULL)"
-  # Decimal をそのまま Excel 数値にすると丸めが出るため既定は文字列化
-  decimal_as_text: true
-  # bytes 型カラムは 16 進表記に変換（先頭 N バイトのみ）
-  binary_head_bytes: 16
-  trim_trailing_space: true
-
 # -----------------------------------------------------------------------------
 # ログ収集
 #   ログは画像化せず、Excel のネイティブセル（行番号 + 本文）として出力する。

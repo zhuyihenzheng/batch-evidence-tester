@@ -130,10 +130,6 @@ class Settings:
         return self.raw.get("database", {})
 
     @property
-    def db_format(self) -> Dict[str, Any]:
-        return self.raw.get("db_format", {})
-
-    @property
     def log(self) -> Dict[str, Any]:
         return self.raw.get("log", {})
 

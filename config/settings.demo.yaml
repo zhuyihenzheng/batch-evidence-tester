@@ -64,13 +64,6 @@ database:
   login_timeout_sec: 15
   query_timeout_sec: 60
 
-db_format:
-  datetime: "%Y-%m-%d %H:%M:%S"
-  date: "%Y-%m-%d"
-  null_text: "(NULL)"
-  decimal_as_text: true
-  binary_head_bytes: 16
-  trim_trailing_space: true
 
 log:
   patterns: ["*.log"]

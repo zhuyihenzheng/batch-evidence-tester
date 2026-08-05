@@ -62,10 +62,9 @@ snapshot:
       sql: >
         SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS, UPDATED_AT
         FROM T_ORDER ORDER BY ORDER_ID
-      format:
-        decimal_places:
-          AMOUNT: 0
-      mask: []          # 個人情報列があればここに列名を書くと ***MASKED*** になる
+      # 個人情報列。比較は生値で行い、Excel へ書くときだけ ***MASKED*** にする
+      # （比較前にマスクすると、値が違っても同じに見えて偽 OK になる）
+      mask: []
 
 # --- batch 実行 ---------------------------------------------------------------
 execute:

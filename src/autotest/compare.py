@@ -63,6 +63,12 @@ def compare_db_table(
         return CheckResult(check_name, "db", NG, f"キー列が期待値に存在しません: {missing_keys}")
 
     compare_cols = [c for c in expected.columns if c not in ignore and c not in keys]
+    # 差分表へ出す値だけ伏せる。比較そのものは生値で行うので検出漏れはしない
+    masked = set(actual.mask_columns) | set(expected.mask_columns)
+
+    def shown(col: str, value: object) -> object:
+        return "***MASKED***" if col in masked and value not in ("", None, "(NULL)") else value
+
     exp_index, exp_dups = _index_by_key(expected, keys)
     act_index, act_dups = _index_by_key(actual, keys)
 
@@ -85,17 +91,18 @@ def compare_db_table(
         key_text = " / ".join(key)
         act_row = act_index.get(key)
         if act_row is None:
-            diff_rows.append(["期待のみ", key_text, "(レコード全体)", _row_digest(expected.columns, exp_row), ""])
+            diff_rows.append(["期待のみ", key_text, "(レコード全体)", _row_digest(expected.columns, exp_row, masked=masked), ""])
             continue
         for col in compare_cols:
             e = _norm(exp_row.get(col))
             a = _norm(act_row.get(col))
             if e != a:
-                diff_rows.append(["相違", key_text, col, exp_row.get(col, ""), act_row.get(col, "")])
+                diff_rows.append(["相違", key_text, col,
+                                  shown(col, exp_row.get(col, "")), shown(col, act_row.get(col, ""))])
 
     for key, act_row in act_index.items():
         if key not in exp_index:
-            diff_rows.append(["実績のみ", " / ".join(key), "(レコード全体)", "", _row_digest(actual.columns, act_row)])
+            diff_rows.append(["実績のみ", " / ".join(key), "(レコード全体)", "", _row_digest(actual.columns, act_row, masked=masked)])
 
     return _build_result(
         check_name, "db", diff_rows, DIFF_COLUMNS,
@@ -107,18 +114,26 @@ def _compare_by_position(check_name: str, category: str, actual: Table, expected
     """キー列が指定されない場合は行順で比較する（ORDER BY 済みが前提）。"""
     compare_cols = [c for c in expected.columns if c not in ignore]
     diff_rows: List[List[str]] = []
+    # 比較は生値、差分表への出力だけ伏せる
+    masked = set(actual.mask_columns) | set(expected.mask_columns)
+
+    def shown(col: str, value: object) -> object:
+        return "***MASKED***" if col in masked and value not in ("", None, "(NULL)") else value
 
     for i in range(max(len(expected.rows), len(actual.rows))):
         exp_row = dict(zip(expected.columns, expected.rows[i])) if i < len(expected.rows) else None
         act_row = dict(zip(actual.columns, actual.rows[i])) if i < len(actual.rows) else None
         if exp_row is None:
-            diff_rows.append(["実績のみ", f"{i + 1}行目", "(レコード全体)", "", _row_digest(actual.columns, act_row or {})])
+            diff_rows.append(["実績のみ", f"{i + 1}行目", "(レコード全体)", "",
+                              _row_digest(actual.columns, act_row or {}, masked=masked)])
         elif act_row is None:
-            diff_rows.append(["期待のみ", f"{i + 1}行目", "(レコード全体)", _row_digest(expected.columns, exp_row), ""])
+            diff_rows.append(["期待のみ", f"{i + 1}行目", "(レコード全体)",
+                              _row_digest(expected.columns, exp_row, masked=masked), ""])
         else:
             for col in compare_cols:
                 if _norm(exp_row.get(col)) != _norm(act_row.get(col)):
-                    diff_rows.append(["相違", f"{i + 1}行目", col, exp_row.get(col, ""), act_row.get(col, "")])
+                    diff_rows.append(["相違", f"{i + 1}行目", col,
+                                      shown(col, exp_row.get(col, "")), shown(col, act_row.get(col, ""))])
 
     return _build_result(
         check_name, category, diff_rows, DIFF_COLUMNS,
@@ -221,8 +236,11 @@ def _index_by_key(
     return index, duplicates
 
 
-def _row_digest(columns: List[str], row: Dict[str, object], limit: int = 6) -> str:
-    parts = [f"{c}={row.get(c, '')}" for c in columns[:limit]]
+def _row_digest(columns: List[str], row: Dict[str, object], limit: int = 6,
+                masked: Optional[Set[str]] = None) -> str:
+    masked = masked or set()
+    parts = [f"{c}=" + ("***MASKED***" if c in masked else str(row.get(c, "")))
+             for c in columns[:limit]]
     if len(columns) > limit:
         parts.append("...")
     return ", ".join(parts)

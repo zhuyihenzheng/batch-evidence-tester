@@ -472,7 +472,7 @@ class CaseRunner:
             resolved = dict(spec)
             if spec.get("sql"):
                 resolved["sql"] = self._expand_sql(str(spec["sql"]))
-            table = client.snapshot(resolved, self.settings.db_format)
+            table = client.snapshot(resolved)
             target[table.title] = table
 
     def _resolve_batch_start(self, case: TestCase, client: db_mod.DbClient):

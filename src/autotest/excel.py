@@ -443,9 +443,14 @@ def _write_table(
     row += 1
 
     mono = set(table.mono_columns)
+    # マスクは「書き出す直前」にだけ適用する。比較はマスク前の生値で
+    # 済んでいるので、別人の値が同一視されて OK になることはない
+    masked_idx = {i for i, name in enumerate(table.columns) if name in table.mask_columns}
     shown_rows = table.rows if display_limit is None else table.rows[:display_limit]
     for r, data_row in enumerate(shown_rows):
         for c_idx, value in enumerate(data_row):
+            if c_idx in masked_idx and value not in ("", None, "(NULL)"):
+                value = "***MASKED***"
             cell = _safe_cell(ws, row, c_idx + 1, value)
             cell.font = F_MONO if c_idx in mono else F_BODY
             cell.border = BORDER
