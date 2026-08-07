@@ -71,10 +71,12 @@ def resolve_font(candidates: List[str], size: int) -> ImageFont.FreeTypeFont:
 class Renderer:
     """1 テストケース分の画像を描くレンダラ。"""
 
-    def __init__(self, evidence_cfg: dict, out_dir: Path):
+    def __init__(self, evidence_cfg: dict, out_dir: Path, start_seq: int = 0):
         self.cfg = evidence_cfg
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        # start_seq は「同じフォルダへ 2 回に分けて描く」手動実施ケース用。
+        # 続きの番号から振ることで、実行前と実行後の画像が採取順に並ぶ
         self.width = int(evidence_cfg.get("image_width", 1180))
         size = int(evidence_cfg.get("font_size", 14))
         candidates = list(evidence_cfg.get("font_candidates", []))
@@ -82,7 +84,7 @@ class Renderer:
         self.font_bold = resolve_font(candidates, size + 1)
         self.font_small = resolve_font(candidates, max(10, size - 2))
         self.line_h = size + 10
-        self._seq = 0
+        self._seq = int(start_seq)
         self._classifier = LineClassifier(evidence_cfg)
 
     def _next_path(self, stem: str) -> Path:

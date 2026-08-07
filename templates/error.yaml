@@ -1,0 +1,72 @@
+# =============================================================================
+# {case_id} 異常系（不正データ）
+#
+#   autotest new --template error で生成したひな形。
+#   「異常なデータを投入したとき、batch が正しく異常終了し、正しく後始末するか」
+#   を見るためのもの。確認したいのは落ちること自体ではなく、落ちた後に
+#   どんな状態が残るか（ファイルはどこへ / DB はロールバックされたか）である。
+#
+#   cases/{case_id}/input/ に「異常データを含むファイル」を置いて使う。
+#   壊れたバイナリ（解凍エラー等）を試したい場合は input_files に corrupt を付ける:
+#     - src: "input/DATA.zip"
+#       dest_dir: input_dir
+#       corrupt: {mode: flip}         # データ部を反転 -> CRC エラー
+#       # mode: truncate（途中で切る）/ empty / garbage（先頭破壊）/ append
+#   正常な資材 1 つから決まった壊し方で生成するので、意図が定義に残る。
+# =============================================================================
+id: {case_id}
+name: "異常系：（何が不正なのかを書く）"
+description: "（不正データを投入したとき、どう振る舞えば正しいかを 1 文で書く）"
+tags: [異常系]
+enabled: false            # ← 準備ができたら true にする
+# ↑ 生成直後は false。投入ファイルを置き、下の定義を埋めてから true にすること。
+#   （false のうちは validate / run の対象外なので、作りかけでも他のケースを止めない）
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+
+  # sql:
+  #   - file: sql/{case_id}_setup.sql
+
+  input_files:
+    - src: "input/（異常データを含むファイル名）.csv"
+      dest_dir: input_dir
+
+# snapshot:
+#   tables:
+#     - name: T_ORDER
+#       sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS FROM T_ORDER ORDER BY ORDER_ID"
+
+execute:
+  args: ["--mode", "daily"]
+
+collect:
+  files:
+    - dir: error_dir
+      pattern: "*.csv"
+      preview: true                   # エラーフォルダへ退避された中身を証跡に残す
+
+assert:
+  # 実際の batch の仕様に合わせる（異常終了のコードは batch ごとに違う）
+  exit_code: 1
+
+  # 更新が失敗したのなら、DB は setup 直後から変化していないこと。
+  # ここが「ロールバックされているか（部分コミットが無いか）」の検証になる
+  # db:
+  #   - table: T_ORDER
+  #     expected: "expected/{case_id}/db_T_ORDER.csv"
+  #     key: [ORDER_ID]
+  #     ignore_columns: [UPDATED_AT]
+
+  files:
+    - name: "エラーフォルダへの退避"
+      exists: {dir: error_dir, pattern: "*.csv", count: 1}
+    - name: "処理済フォルダへ移動していないこと"
+      exists: {dir: processed_dir, pattern: "*", count: 0}
+    - name: "結果ファイルが出力されないこと"
+      exists: {dir: output_dir, pattern: "*.csv", count: 0}
+
+  log:
+    # 実際の batch が出すメッセージに合わせて書き換えること
+    must_contain: ["処理異常終了"]
+    must_not_contain: ["処理正常終了"]

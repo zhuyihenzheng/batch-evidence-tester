@@ -17,7 +17,8 @@ from typing import List, Optional, Tuple
 
 from . import compare, db as db_mod, fsops, logs, render, screenshot
 from .config import ConfigError, Settings, TestCase
-from .models import NG, OK, REVIEW, SKIP, CaseResult, CheckResult, ImageEvidence, Table
+from .models import (NG, OK, REVIEW, SKIP, CaseResult, CheckResult, ExecutionInfo,
+                     ImageEvidence, Table)
 from .runner import _resolve_exe, run_batch
 
 # {batch_start} / {batch_start:%Y%m%d} の両方を受ける
@@ -58,6 +59,20 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
                 problems.append("working_dir が存在しません: %s" % wd)
 
     aliases = settings.path_aliases
+
+    # --- manual ケースで使えない機能 -----------------------------------------
+    # replace_files と db_lock は「run() の finally で必ず元に戻す」前提の機能。
+    # manual は before と after が別プロセスなので、その finally が存在しない。
+    # 中途半端に対応すると「設定を差し替えたまま」「ロックを握ったまま」で
+    # 終わる経路ができるため、定義の段階で断る。
+    if case.is_manual:
+        for key, what in (("replace_files", "設定ファイルの差し替え"),
+                          ("db_lock", "DB ロックの保持")):
+            if (case.setup or {}).get(key):
+                problems.append(
+                    "setup.%s は mode: manual のケースでは使えません（%s は自動実行の "
+                    "後始末に依存しており、手動の 2 段階実行では元に戻す担保が無いため）。"
+                    "手で配置・解除してください。" % (key, what))
 
     # --- clean_dirs / remove_dirs: 論理名の存在と、解決後パスの安全性 --------
     for key in ("clean_dirs", "remove_dirs"):
@@ -171,6 +186,20 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
             problems.append("assert.files の dir 論理名が paths に未定義です: %s" % actual_spec.get("dir"))
 
     return problems
+
+
+def _force_review(check: CheckResult) -> CheckResult:
+    """手動実施ケースの判定項目を「要確認」に落とす。
+
+    人が手で動かした実行の自動比較は、あくまで参考値。ここで OK を通すと
+    「人が確認していないのに合格」が成立してしまう。NG はそのまま NG
+    （確認を待たずに問題として扱う）。SKIP もそのまま。
+    """
+    if check.verdict != OK:
+        return check
+    check.verdict = REVIEW
+    check.detail = "自動比較は一致（%s）。手動実行のため、最終判定は目視で行ってください。" % check.detail
+    return check
 
 
 def _apply_manual(check: CheckResult, manual: bool) -> CheckResult:
@@ -377,6 +406,200 @@ class CaseRunner:
                 client.close()
 
         return result
+
+    # ==================================================================
+    # 手動実施（mode: manual）
+    #   run() を before / after の 2 つに割ったもの。工程そのものは
+    #   run() と同じヘルパを呼ぶ —— ライフサイクルの知識を 2 か所に
+    #   持たせると、片方だけ直して静かにずれる。
+    # ==================================================================
+    def run_manual_before(self, case: TestCase, session_dir: Path):
+        """前処理と実行前の証跡採取まで行い、引き継ぎ情報を返す。
+
+        この後、人が手で batch を動かす。戻り値の ManualSession を
+        session_dir に保存しておけば、別プロセスの after が続きを行える。
+        """
+        from . import manual as manual_mod
+
+        self.settings.set_base_date(case.execute.get("date") or self._default_date)
+
+        problems = preflight_case(self.settings, case)
+        if problems:
+            raise ConfigError(
+                "事前チェック（preflight）で不合格。破壊的操作は行っていません:\n  - "
+                + "\n  - ".join(problems))
+
+        started = datetime.now()
+        renderer = render.Renderer(self.settings.evidence, session_dir / "evidence" / case.case_id)
+        client = db_mod.create_client(self.settings, self.offline, case.case_id, dry_run=False)
+        try:
+            self._step("前処理（フォルダ準備・SQL・データ投入）")
+            self._setup(case, client)
+
+            self._step("フォルダ撮影（実行前）")
+            images = self._capture_folders(renderer, "実行前", case)
+
+            self._batch_start_mark = self._resolve_batch_start(case, client)
+
+            self._step("DBスナップショット（実行前）")
+            result = CaseResult(case_id=case.case_id, name=case.name)
+            self._snapshot_db(case, client, result, phase="before")
+            # 実行前スナップショットは CSV として残す。after は別プロセスなので
+            # メモリ上の Table を引き継げない。既存の期待値 CSV と同じ書式なので
+            # db_mod.read_expected_csv でそのまま読み戻せる
+            self._save_snapshot_csvs(result.db_before, session_dir / "before")
+
+            batch_name = case.execute.get("batch")
+            log_dir = self._log_dir_for(batch_name)
+            self._step("ログ位置の記録")
+            offsets = logs.snapshot_offsets(self.settings, log_dir)
+        finally:
+            client.close()
+
+        # 撮影済みの画像は after プロセスが証跡へ組み込む。画像ファイル自体は
+        # session フォルダに残るが、表題と説明はメモリ上にしか無いので
+        # session.json へ引き継ぐ。ここを落とすと証跡から「実行前」が丸ごと消える
+        return manual_mod.ManualSession(
+            session_id=session_dir.name,
+            case_id=case.case_id,
+            case_source=str(case.source),
+            base_date=self.settings.base_date.strftime("%Y%m%d"),
+            batch_name=batch_name,
+            log_dir=str(log_dir),
+            offline=self.offline,
+            phase=manual_mod.PHASE_BEFORE_DONE,
+            before_started_at=started,
+            before_finished_at=datetime.now(),
+            log_offsets=manual_mod.ManualSession.encode_offsets(offsets),
+            snapshot_tables=sorted(result.db_before),
+            before_images=manual_mod.ManualSession.encode_images(images, session_dir),
+        )
+
+    def run_manual_after(self, case: TestCase, session, session_dir: Path) -> CaseResult:
+        """人が batch を動かした後の証跡採取と判定。
+
+        判定結果は必ず「要確認」で頭打ちにする。人が手で動かした以上、
+        自動比較の一致は参考値であって合格の根拠にはならない。
+        """
+        from . import manual as manual_mod
+
+        # 基準日は session から復元する。当日の日付で展開すると、
+        # before と after が日をまたいだときに {date} を含むパターンが
+        # 静かに外れて「出力が無い」と誤判定する
+        self.settings.set_base_date(session.base_date)
+
+        result = CaseResult(case_id=case.case_id, name=case.name,
+                            description=case.description, tags=case.tags)
+        evidence_dir = session_dir / "evidence" / case.case_id
+        # before プロセスが同じフォルダへ描いた画像の続きから番号を振る
+        already = len(list(evidence_dir.glob("*.png"))) if evidence_dir.is_dir() else 0
+        renderer = render.Renderer(self.settings.evidence, evidence_dir, start_seq=already)
+        collected_at = datetime.now()
+
+        client = db_mod.create_client(self.settings, self.offline, case.case_id, dry_run=False)
+        try:
+            # 実行前スナップショットを CSV から復元する（before プロセスの成果）
+            for name in session.snapshot_tables:
+                path = session_dir / "before" / ("db_%s.csv" % name)
+                if path.exists():
+                    table = db_mod.read_expected_csv(path)
+                    table.title = name
+                    result.db_before[name] = table
+
+            log_dir = Path(session.log_dir) if session.log_dir else self._log_dir_for(session.batch_name)
+
+            self._step("ログ書き込み待ち")
+            batch_cfg = self.settings.batch_profile(session.batch_name)
+            logs.wait_until_stable(
+                self.settings, log_dir,
+                max_wait_sec=float(batch_cfg.get("log_settle_sec", 5)),
+                min_wait_sec=float(batch_cfg.get("log_settle_min_sec", 1)),
+                stable_for_sec=float(batch_cfg.get("log_settle_stable_sec", 1)),
+            )
+
+            self._step("ログ収集")
+            log_slices = logs.collect(
+                self.settings, session.decode_offsets(),
+                session.before_finished_at, collected_at, log_dir=log_dir)
+
+            self._step("成果ファイル回収")
+            result.saved_artifacts = fsops.collect_artifacts(
+                self.settings, case.collect.get("files", []),
+                session_dir / "artifacts" / case.case_id)
+
+            self._step("DBスナップショット（実行後）")
+            self._snapshot_db(case, client, result, phase="after")
+
+            self._step("フォルダ撮影（実行後）")
+            folder_after = self._capture_folders(renderer, "実行後", case)
+
+            self._step("証跡生成")
+            result.log_tables = self._build_log_tables(log_slices, case, log_dir)
+            # 実行前の画像を先に置く。証跡は「実行前 → 実行後」の並びで読ませる
+            result.images.extend(session.decode_images(session_dir))
+            result.images.extend(folder_after)
+            result.images.extend(self._render_file_previews(renderer, case, result))
+
+            result.execution = ExecutionInfo(
+                command="（手動実行）batch は利用者が手で起動",
+                started_at=session.before_finished_at,
+                finished_at=collected_at,
+            )
+
+            self._step("判定")
+            converted = []
+            for check in self._assert_all(case, client, result, log_slices):
+                if check.category == "exit_code":
+                    # 手動起動では終了コードを取得できない。利用者の申告を
+                    # 受け付けると、検証できない値で合格が出せてしまう
+                    converted.append(CheckResult(
+                        "終了コード確認", "exit_code", SKIP,
+                        "手動実行のため終了コードは取得していません。"
+                        "異常終了したかどうかはログと DB の状態で判定してください。"))
+                else:
+                    converted.append(_force_review(check))
+            result.checks = [self._manual_banner()] + converted
+        finally:
+            try:
+                teardown_check = self._teardown(case, client)
+                if teardown_check is not None:
+                    result.checks.append(teardown_check)
+            except Exception as exc:
+                result.checks.append(CheckResult(
+                    "後処理（teardown）", "teardown", NG,
+                    "teardown 自体が失敗しました（環境が変更されたまま残っています）: %s" % exc))
+            client.close()
+
+        session.phase = manual_mod.PHASE_FINISHED
+        return result
+
+    @staticmethod
+    def _manual_banner() -> CheckResult:
+        """手動ケースであることを判定明細の先頭に必ず置く。
+
+        これがあるとケースの verdict は決して OK にならない（REVIEW が 1 件でも
+        あれば要確認）。判定項目が 1 つも無い手動ケースでも「確認待ち」で残る。
+        """
+        return CheckResult(
+            "実行方式", "manual", REVIEW,
+            "手動実行ケース。自動比較の結果は参考値です。証跡を確認して最終判定を記入してください。")
+
+    def _save_snapshot_csvs(self, tables, out_dir: Path) -> None:
+        """DB スナップショットを CSV として保存する。
+
+        値は db.to_text() 済みの文字列なので、そのまま書けば情報は落ちない
+        （整形や丸めは一切しない、というツール全体の原則と同じ）。
+        """
+        import csv
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for name, table in tables.items():
+            path = out_dir / ("db_%s.csv" % name)
+            with path.open("w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(table.columns)
+                for row in table.rows:
+                    writer.writerow(row)
 
     # ------------------------------------------------------------------
     def _setup(self, case: TestCase, client: db_mod.DbClient) -> None:

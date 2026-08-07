@@ -197,6 +197,9 @@ class RunResult:
         self.filter_description = filter_description
         self.total_available = total_available
         self.cases = []  # type: List[CaseResult]
+        # mode: manual のため今回実行しなかったケース ID。
+        # 「自動分は全 OK」を「全部通った」と読ませないために証跡へ残す
+        self.manual_pending = []  # type: List[str]
 
     @property
     def ok_count(self) -> int:

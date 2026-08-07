@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from . import result_store
 from .config import ConfigError, load_cases, load_settings
 from .excel import build_workbook
 from .models import OK, REVIEW, RunResult
@@ -90,8 +91,25 @@ def _project_root_for(config_path: Path) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autotest", description="batch(.exe) 自動テスト実行ツール")
-    parser.add_argument("command", choices=["run", "validate", "list", "dbcheck"],
-                        help="実行するコマンド（dbcheck: SQL Server へ実際に接続できるか確認）")
+    parser.add_argument("command",
+                        choices=["run", "validate", "list", "dbcheck", "new", "copy",
+                                 "manual", "report", "gui"],
+                        help="実行するコマンド（gui: 操作画面を開く / new: ひな形からケース作成 / "
+                             "copy: 既存ケースの複製 / manual: 手動実施ケースの証跡採取 / "
+                             "report: 証跡の結合 / dbcheck: SQL Server へ実際に接続できるか確認）")
+    parser.add_argument("--id", default=None, help="new / copy で作るケースID")
+    parser.add_argument("--template", default="normal",
+                        help="new で使うひな形（templates/ の名前。既定: normal）")
+    parser.add_argument("--from", dest="copy_from", default=None,
+                        help="copy の複製元ケースID")
+    parser.add_argument("--phase", choices=["before", "after"], default=None,
+                        help="manual の採取段階（before: 実行前 / after: 実行後）")
+    parser.add_argument("--session", default=None,
+                        help="manual --phase after で使う作業フォルダ名（省略時は自動選択）")
+    parser.add_argument("--force-new", action="store_true",
+                        help="manual --phase before で、未完了の作業があっても新しく始める")
+    parser.add_argument("--run", action="append", dest="runs",
+                        help="report で結合する実行フォルダ（output 配下の名前。複数指定可）")
     parser.add_argument("--config", default=None,
                         help="設定ファイル（既定: config/settings.local.yaml があればそれ、無ければ settings.yaml）")
     parser.add_argument("--cases-dir", default=None, help="ケース定義フォルダ（既定: <プロジェクトルート>/cases）")
@@ -132,10 +150,11 @@ def _list_cases(cases) -> int:
     id_w = max([_display_width(c.case_id) for c in cases] + [10]) + 2
     tag_w = max([_display_width("/".join(c.tags)) for c in cases] + [8]) + 2
 
-    print(_pad("ケースID", id_w) + _pad("区分", tag_w) + "ケース名")
-    print("-" * (id_w + tag_w + 40))
+    print(_pad("ケースID", id_w) + _pad("区分", tag_w) + _pad("実行方式", 10) + "ケース名")
+    print("-" * (id_w + tag_w + 50))
     for c in cases:
-        print(_pad(c.case_id, id_w) + _pad("/".join(c.tags), tag_w) + c.name)
+        mode = "手動" if c.is_manual else "自動"
+        print(_pad(c.case_id, id_w) + _pad("/".join(c.tags), tag_w) + _pad(mode, 10) + c.name)
 
     # 使えるタグを提示する。--tag に何を渡せるか分からないと使えないため
     counts = {}
@@ -253,6 +272,10 @@ def _dbcheck(settings, timeout_sec: int = 10) -> int:
     print("[OK] 接続成功（%.2f 秒）" % elapsed)
 
     # --- 接続先の実体を確認（設定ミスで別 DB に繋がっていないか）--------------
+    # 「繋がったか」だけでは足りない。繋がった先が設定と違えば、別の DB を
+    # 見た結果が正常な証跡として残る —— 最も気づきにくい誤りなので、
+    # 成功扱いにはしない（終了コードでも区別できるようにする）。
+    mismatch = False
     try:
         cur = conn.cursor()
         cur.execute("SELECT @@VERSION, DB_NAME(), SUSER_NAME(), @@SERVERNAME")
@@ -263,7 +286,11 @@ def _dbcheck(settings, timeout_sec: int = 10) -> int:
         print("    ログイン   : %s" % login)
         print("    バージョン : %s" % str(version).splitlines()[0].strip())
         if dbname != db.get("database"):
+            mismatch = True
             print("\n[警告] 接続先 DB が設定値 '%s' と異なります。" % db.get("database"))
+            print("       このまま試験すると、別の DB を見た結果が証跡として残ります。")
+            print("       settings の database.database と、ログインの既定データベースを")
+            print("       確認してください。")
         cur.close()
     except Exception as exc:
         print("\n[警告] 接続はできましたが情報取得に失敗しました: %s" % exc)
@@ -271,6 +298,10 @@ def _dbcheck(settings, timeout_sec: int = 10) -> int:
         conn.close()
 
     print("\n" + "=" * 66)
+    if mismatch:
+        print(" 接続はできましたが、接続先が設定と違います。上の警告を解消してください。")
+        print("=" * 66)
+        return 1
     print(" 接続確認 OK。次は python -m autotest validate で設定全体を確認してください。")
     print("=" * 66)
     return 0
@@ -366,6 +397,272 @@ def _validate(settings, cases, args, project_root: Path) -> int:
     return 0
 
 
+def _scaffold(args, project_root: Path, cases_dir: Path) -> int:
+    """new / copy コマンド。ケース定義の読み込みより先に処理する。
+
+    new は「まだ存在しないケース」を作るコマンドなので、先に load_cases を
+    通すと無関係な既存ケースの不備で作成できなくなる。
+    """
+    from . import scaffold
+
+    if not args.id:
+        print("[設定エラー] --id でケースIDを指定してください。\n"
+              "  例: python -m autotest %s --id TC010_new%s"
+              % (args.command, " --from TC001_normal" if args.command == "copy" else ""),
+              file=sys.stderr)
+        return 2
+
+    config_hint = args.config or ""
+    try:
+        if args.command == "new":
+            created = scaffold.create_case(project_root, cases_dir, args.id, args.template)
+            print("ひな形 '%s' からケースを作成しました。" % args.template)
+        else:
+            if not args.copy_from:
+                print("[設定エラー] --from で複製元のケースIDを指定してください。\n"
+                      "  例: python -m autotest copy --from TC001_normal --id TC010_new",
+                      file=sys.stderr)
+                return 2
+            created = scaffold.copy_case(project_root, cases_dir, args.copy_from, args.id)
+            print("ケース %s を %s として複製しました。" % (args.copy_from, args.id))
+    except ConfigError as exc:
+        print("[設定エラー] %s" % exc, file=sys.stderr)
+        return 2
+
+    for path in created:
+        print("  作成: %s" % path)
+    print("\n次にやること:")
+    for line in scaffold.next_steps(project_root, cases_dir, args.id, config_hint):
+        print("  %s" % line)
+    return 0
+
+
+def _open_log(run_dir: Path, verbose: bool):
+    """工程ログを開き、(書き込み関数, ファイル) を返す。
+
+    処理が止まったとき「どこで止まっているか」を後から追えるようにする。
+    手動実施は 2 回に分けて実行するので追記モードで開く。
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_file = (run_dir / "run.log").open("a", encoding="utf-8")
+
+    def write_log(message: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        log_file.write("%s  %s\n" % (stamp, message))
+        log_file.flush()  # ハング時に読めないと意味がないので都度フラッシュ
+
+    return write_log, log_file
+
+
+def _manual(args, settings, cases, out_dir: Path) -> int:
+    """手動実施ケースの証跡採取（before / after）。"""
+    from . import manual as manual_mod
+    from . import result_store
+
+    if not args.phase:
+        print("[設定エラー] --phase before か --phase after を指定してください。", file=sys.stderr)
+        return 2
+    if not args.cases or len(args.cases) != 1:
+        print("[設定エラー] --case でケースIDを 1 件だけ指定してください。", file=sys.stderr)
+        return 2
+
+    case_id = args.cases[0]
+    target = [c for c in cases if c.case_id == case_id]
+    if not target:
+        print("[設定エラー] ケース %s が見つかりません（enabled: false ではありませんか）。" % case_id,
+              file=sys.stderr)
+        return 2
+    case = target[0]
+    if not case.is_manual:
+        print("[設定エラー] %s は mode: manual ではありません。\n"
+              "  自動実行してください: python -m autotest run --case %s" % (case_id, case_id),
+              file=sys.stderr)
+        return 2
+
+    open_sessions = manual_mod.find_sessions(out_dir, case_id)
+
+    if args.phase == "before":
+        if open_sessions and not args.force_new:
+            print("[設定エラー] このケースには未完了の手動作業があります:", file=sys.stderr)
+            for path in open_sessions:
+                print("    %s" % path, file=sys.stderr)
+            print("  続きを採取する : python -m autotest manual --case %s --phase after" % case_id,
+                  file=sys.stderr)
+            print("  やり直す       : 上のコマンドに --force-new を付けて before から始める",
+                  file=sys.stderr)
+            return 2
+
+        started = datetime.now()
+        session_dir = out_dir / manual_mod.new_session_id(case_id, started)
+        write_log, log_file = _open_log(session_dir, args.verbose)
+        write_log("手動実施 before 開始 case=%s config=%s offline=%s"
+                  % (case_id, settings.source, args.offline))
+        print("=== 手動実施：実行前の採取  %s ===" % case_id)
+        try:
+            runner = CaseRunner(settings, session_dir, offline=args.offline,
+                                default_date=args.date)
+            runner._progress = _progress_printer(write_log, args.verbose, case_id)
+            session = runner.run_manual_before(case, session_dir)
+            session.config_path = str(settings.source)
+            session.save(session_dir)
+        except ConfigError as exc:
+            write_log("失敗: %s" % exc)
+            print("[設定エラー] %s" % exc, file=sys.stderr)
+            return 2
+        except Exception as exc:  # noqa: BLE001 - 利用者に原因を見せて終わる
+            write_log("失敗: %s" % exc)
+            print("[エラー] 実行前の採取に失敗しました: %s" % exc, file=sys.stderr)
+            return 1
+        finally:
+            log_file.close()
+
+        print("\n実行前の証跡を採取しました。")
+        print("  作業フォルダ : %s" % session_dir)
+        print("\n次にやること:")
+        print("  1) batch を手で実行してください（必要な手動操作もこの間に）")
+        print("  2) 終わったら実行後の採取:")
+        print("       python -m autotest manual --case %s --phase after%s"
+              % (case_id, _config_option(args)))
+        return 0
+
+    # --- after --------------------------------------------------------------
+    if args.session:
+        session_dir = out_dir / args.session
+        if not session_dir.is_dir():
+            print("[設定エラー] 作業フォルダがありません: %s" % session_dir, file=sys.stderr)
+            return 2
+    elif not open_sessions:
+        print("[設定エラー] %s の未完了の手動作業がありません。\n"
+              "  先に実行前の採取を行ってください:\n"
+              "    python -m autotest manual --case %s --phase before%s"
+              % (case_id, case_id, _config_option(args)), file=sys.stderr)
+        return 2
+    elif len(open_sessions) > 1:
+        print("[設定エラー] 未完了の手動作業が複数あります。--session でどれか 1 つを指定してください:",
+              file=sys.stderr)
+        for path in open_sessions:
+            print("    --session %s" % path.name, file=sys.stderr)
+        return 2
+    else:
+        session_dir = open_sessions[0]
+
+    write_log, log_file = _open_log(session_dir, args.verbose)
+    write_log("手動実施 after 開始 case=%s session=%s" % (case_id, session_dir.name))
+    print("=== 手動実施：実行後の採取  %s ===" % case_id)
+    try:
+        session = manual_mod.ManualSession.load(session_dir)
+        if session.case_id != case_id:
+            raise ConfigError(
+                "作業フォルダのケース（%s）と指定（%s）が違います。" % (session.case_id, case_id))
+        if session.phase != manual_mod.PHASE_BEFORE_DONE:
+            raise ConfigError(
+                "この作業フォルダは既に採取済みです（phase=%s）: %s\n"
+                "  やり直す場合は before から始めてください。" % (session.phase, session_dir))
+
+        runner = CaseRunner(settings, session_dir, offline=session.offline,
+                            default_date=args.date)
+        runner._progress = _progress_printer(write_log, args.verbose, case_id)
+        result = runner.run_manual_after(case, session, session_dir)
+    except ConfigError as exc:
+        write_log("失敗: %s" % exc)
+        print("[設定エラー] %s" % exc, file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001
+        write_log("失敗: %s" % exc)
+        print("[エラー] 実行後の採取に失敗しました: %s" % exc, file=sys.stderr)
+        return 1
+    finally:
+        log_file.close()
+
+    run = RunResult(
+        run_id=session_dir.name,
+        started_at=session.before_started_at or datetime.now(),
+        finished_at=datetime.now(),
+        env_name=str(settings.env.get("name", "")),
+        tester=settings.tester,
+        exe_path=str(settings.batch.get("exe_path", "")),
+        db_server=str(settings.database.get("server", "")),
+        db_name=str(settings.database.get("database", "")),
+        filter_description="手動実施: %s" % case_id,
+        total_available=1,
+    )
+    run.cases.append(result)
+
+    result_store.save_case_result(result, session_dir)
+    result_store.save_run_meta(run, session_dir)
+    session.save(session_dir)   # phase = finished
+
+    excel_path = build_workbook(run, out_dir / ("TestEvidence_%s.xlsx" % session_dir.name),
+                                settings.excel)
+    print("=" * 60)
+    print("判定 : %s（%d 件が確認待ち / NG %d 件）"
+          % (result.verdict, result.review_count, result.ng_count))
+    print("証跡Excel: %s" % excel_path)
+    print("作業フォルダ: %s" % session_dir)
+    print("\n※ 手動実施ケースは自動では合格になりません。")
+    print("  Excel の黄色い欄に確認結果を記入してください。")
+    print("\n自動実行分と 1 冊にまとめる:")
+    print("  python -m autotest report --run <自動実行のrun_id> --run %s --out output/提出用.xlsx"
+          % session_dir.name)
+    if result.ng_count:
+        return 1
+    return 3
+
+
+def _progress_printer(write_log, verbose: bool, case_id: str):
+    def on_step(step: str) -> None:
+        write_log("    %s: %s" % (case_id, step))
+        if verbose:
+            print("      > %s" % step, flush=True)
+        else:
+            print("  %s ..." % step, flush=True)
+    return on_step
+
+
+def _config_option(args) -> str:
+    return (" --config %s" % args.config) if args.config else ""
+
+
+def _report(args, settings, out_dir: Path) -> int:
+    """複数の実行結果を 1 冊の証跡 Excel にまとめる。"""
+    from . import result_store
+
+    if not args.runs:
+        print("[設定エラー] --run で結合する実行フォルダを指定してください（複数指定可）。\n"
+              "  例: python -m autotest report --run 20260807_101500_123 "
+              "--run manual_TC008_20260807_103000_456 --out output/提出用.xlsx",
+              file=sys.stderr)
+        return 2
+
+    runs = []
+    sources = []
+    try:
+        for name in args.runs:
+            run_dir = Path(name)
+            if not run_dir.is_absolute():
+                run_dir = out_dir / name
+            if not run_dir.is_dir():
+                raise ConfigError("実行フォルダがありません: %s" % run_dir)
+            runs.append(result_store.load_run_dir(run_dir))
+            sources.append(run_dir.name)
+        merged = result_store.merge_runs(runs, sources)
+    except ConfigError as exc:
+        print("[設定エラー] %s" % exc, file=sys.stderr)
+        return 2
+
+    out_path = Path(args.out) if args.out else out_dir / ("TestEvidence_%s.xlsx" % merged.run_id)
+    excel_path = build_workbook(merged, out_path, settings.excel)
+
+    print("=" * 60)
+    print("結合元 : %s" % ", ".join(sources))
+    print("総合判定 : %s   OK %d / NG %d / 要確認 %d"
+          % (merged.verdict, merged.ok_count, merged.ng_count, merged.review_count))
+    print("証跡Excel: %s" % excel_path)
+    if merged.verdict == REVIEW:
+        return 3
+    return 0 if merged.verdict == OK else 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     _prepare_console()
     args = build_parser().parse_args(argv)
@@ -373,6 +670,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     config_path = Path(args.config) if args.config else _default_config()
     project_root = _project_root_for(config_path)
     cases_dir = Path(args.cases_dir) if args.cases_dir else project_root / "cases"
+
+    if args.command in ("new", "copy"):
+        return _scaffold(args, project_root, cases_dir)
+
+    if args.command == "gui":
+        # 遅延 import。画面の無い環境（タスクスケジューラ等）で tkinter の
+        # import に失敗しても、他のコマンドを巻き添えにしないため
+        from . import gui
+        return gui.main(project_root,
+                        config_path=Path(args.config) if args.config else None,
+                        cases_dir=cases_dir)
 
     try:
         settings = load_settings(config_path, project_root=project_root)
@@ -393,12 +701,45 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "validate":
         return _validate(settings, cases, args, project_root)
 
+    # 成果物の既定の置き場。run では --out で差し替えられるが、report の --out は
+    # 「出力する Excel のパス」なので、結合元を探す場所は常にこちらを使う
+    default_out_dir = settings.resolve_dir(str(settings.excel.get("output_dir", "./output")))
+
+    if args.command == "manual":
+        return _manual(args, settings, cases,
+                       Path(args.out).resolve() if args.out else default_out_dir)
+
+    if args.command == "report":
+        return _report(args, settings, default_out_dir)
+
+    out_dir = Path(args.out).resolve() if args.out else default_out_dir
+
     # --- run --------------------------------------------------------------
+    # mode: manual のケースは自動実行しない。ただし「実行しなかった」ことは
+    # 証跡に残す —— 自動分が全 OK でも、それは全体の合格ではない
+    manual_cases = [c for c in cases if c.is_manual]
+    cases = [c for c in cases if not c.is_manual]
+    if not cases:
+        print("[設定エラー] 実行対象が手動実施ケースだけです: %s\n"
+              "  手動ケースは次のコマンドで採取してください:\n"
+              "    python -m autotest manual --case %s --phase before%s"
+              % ([c.case_id for c in manual_cases],
+                 manual_cases[0].case_id if manual_cases else "<ID>", _config_option(args)),
+              file=sys.stderr)
+        return 2
+    if args.cases:
+        # 手動ケースを名指しされた場合は、黙って飛ばさず案内する
+        named = [c.case_id for c in manual_cases if c.case_id in set(args.cases)]
+        if named:
+            print("[設定エラー] %s は mode: manual です。run では実行できません。\n"
+                  "  python -m autotest manual --case %s --phase before%s"
+                  % (named, named[0], _config_option(args)), file=sys.stderr)
+            return 2
+
     started = datetime.now()
     # ミリ秒まで含める。秒精度だと同一秒に 2 回起動した場合に
     # 証跡フォルダと Excel が同名になり、互いに上書きされる
     run_id = started.strftime("%Y%m%d_%H%M%S") + "_%03d" % (started.microsecond // 1000)
-    out_dir = Path(args.out).resolve() if args.out else settings.resolve_dir(str(settings.excel.get("output_dir", "./output")))
     run_dir = out_dir / run_id
 
     run = RunResult(
@@ -412,6 +753,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         filter_description=_filter_description(args),
         total_available=total_available,
     )
+    run.manual_pending = [c.case_id for c in manual_cases]
 
     mode_note = " [offline]" if args.offline else ""
     mode_note += " [dry-run]" if args.dry_run else ""
@@ -451,6 +793,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             runner._progress = on_step
             result = runner.run(case)
             run.cases.append(result)
+            # ケースごとに即時保存する。途中で落ちてもここまでの結果は残り、
+            # 後から report で 1 冊にまとめられる
+            result_store.save_case_result(result, run_dir)
 
             detail = f" ({result.ng_count} 件 NG)" if result.ng_count else ""
             print(f"{'      => ' if args.verbose else ''}{result.verdict}{detail}")
@@ -462,6 +807,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         log_file.close()
 
     run.finished_at = datetime.now()
+    result_store.save_run_meta(run, run_dir)
 
     # file_name_format では {run_id} のほか {filter} も使える
     # （例: "TestEvidence_{run_id}_{filter}.xlsx" -> TestEvidence_..._tag-受注.xlsx）
@@ -482,6 +828,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1 if failed else 0
 
     print(f"総合判定 : {run.verdict}   OK {run.ok_count} / NG {run.ng_count} / 要確認 {run.review_count}")
+    if run.manual_pending:
+        # 自動分だけの結果を「全部通った」と読ませない
+        print(f"※ 手動実施ケース {len(run.manual_pending)} 件は今回実行していません: "
+              f"{', '.join(run.manual_pending)}")
+        print(f"   python -m autotest manual --case {run.manual_pending[0]} --phase before"
+              f"{_config_option(args)}")
     if run.verdict == "SKIP":
         print("※ 実際に判定されたケースがありません（全件 SKIP）。終了コードは 1 になります。")
     if run.review_count:

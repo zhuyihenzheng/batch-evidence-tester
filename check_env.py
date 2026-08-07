@@ -153,6 +153,16 @@ def main():
     for import_name, display_name, min_version, reason in OPTIONAL_PACKAGES:
         check_package(import_name, display_name, min_version, reason, False)
 
+    # 操作画面（run_gui.bat）用。標準ライブラリなので通常は入っているが、
+    # Linux の一部ディストリや最小構成の Python では別パッケージになっている。
+    # 無くてもコマンドラインからは全機能が使えるため、任意扱いにする。
+    try:
+        import tkinter
+        print("  [OK] tkinter    Tk %s  操作画面 run_gui.bat 用" % tkinter.TkVersion)
+    except ImportError:
+        print("  [--] tkinter    未導入  → 操作画面は使えません")
+        print("                  （コマンドラインからは通常どおり全機能が使えます）")
+
     print("")
     print("=" * 74)
     if ok:

@@ -238,6 +238,7 @@ class TestCase:
         collect: Optional[Dict[str, Any]] = None,
         assertions: Optional[Dict[str, Any]] = None,
         teardown: Optional[Dict[str, Any]] = None,
+        mode: str = "auto",
     ) -> None:
         self.case_id = case_id
         self.name = name
@@ -245,6 +246,7 @@ class TestCase:
         self.description = description
         self.tags = tags if tags is not None else []
         self.enabled = enabled
+        self.mode = mode
         self.setup = setup if setup is not None else {}
         self.snapshot = snapshot if snapshot is not None else {}
         self.execute = execute if execute is not None else {}
@@ -257,14 +259,24 @@ class TestCase:
         """ケース固有の資材（投入ファイル等）を置くフォルダ。"""
         return self.source.parent / self.case_id if (self.source.parent / self.case_id).is_dir() else self.source.parent
 
+    @property
+    def is_manual(self) -> bool:
+        """人が手で batch を動かすケースか。autotest run の対象外になる。"""
+        return self.mode == "manual"
+
 
 # ケース定義で使えるトップレベル項目。ここに無いキーは綴り間違いとして扱う。
 # 黙って無視すると「書いたのに効かない」状態が静かに続く。
 CASE_TOP_KEYS = {
-    "id", "name", "description", "tags", "enabled",
+    "id", "name", "description", "tags", "enabled", "mode",
     "setup", "snapshot", "execute", "collect", "assert", "teardown",
 }
-SETUP_KEYS = {"clean_dirs", "remove_dirs", "sql", "input_files", "replace_files"}
+# 実行方式。
+#   auto   … autotest run が .exe を起動して自動判定する（既定）
+#   manual … 人が手で batch を動かす。run からは除外され、
+#            autotest manual --phase before / after で証跡だけ採る
+CASE_MODES = ("auto", "manual")
+SETUP_KEYS = {"clean_dirs", "remove_dirs", "sql", "input_files", "replace_files", "db_lock"}
 COLLECT_KEYS = {"files", "folder_evidence"}
 EXECUTE_KEYS = {"batch", "args", "date", "expected_exit_code"}
 ASSERT_KEYS = {"exit_code", "db", "files", "log"}
@@ -298,16 +310,28 @@ def _check_unknown_keys(data: Dict[str, Any], allowed: set, where: str, path: Pa
             % (where, sorted(unknown), sorted(allowed))]
 
 
+def validate_case_id(case_id: Any) -> List[str]:
+    """ケース ID として使える文字列かを検証する。問題の一覧を返す（空なら合格）。
+
+    ID は証跡フォルダ名と Excel シート名にそのまま使うため、パス区切りや
+    Windows で使えない記号を弾く。ケース定義の検証と scaffold（新規作成・複製）
+    で同じ規則を使うために切り出してある。
+    """
+    problems: List[str] = []
+    text = str(case_id)
+    if not text.strip():
+        problems.append("id が空です")
+        return problems
+    if any(ch in text for ch in "/\\:*?\"<>|") or text in (".", ".."):
+        problems.append("id にパス区切りや記号は使えません: %r" % case_id)
+    return problems
+
+
 def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> List[str]:
     """ケース定義の型と項目名を検証する。実行時に KeyError で落ちるのを防ぐ。"""
     problems: List[str] = []
     problems += _check_unknown_keys(data, CASE_TOP_KEYS, "トップレベル", path)
-
-    if not str(case_id).strip():
-        problems.append("id が空です")
-    # 証跡フォルダ名やシート名に使うため、区切り文字を含む ID は許可しない
-    if any(ch in str(case_id) for ch in "/\\:*?\"<>|") or str(case_id) in (".", ".."):
-        problems.append("id にパス区切りや記号は使えません: %r" % case_id)
+    problems += validate_case_id(case_id)
 
     if "enabled" in data:
         try:
@@ -319,11 +343,21 @@ def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> Lis
     if tags is not None and not isinstance(tags, list):
         problems.append("tags はリストで指定してください（指定値: %r）" % tags)
 
+    if "mode" in data and data["mode"] not in CASE_MODES:
+        problems.append(
+            "mode は %s のいずれかで指定してください（指定値: %r）"
+            % (" / ".join(CASE_MODES), data["mode"]))
+
     setup = data.get("setup") or {}
     if not isinstance(setup, dict):
         problems.append("setup はマッピングで指定してください")
         setup = {}
     problems += _check_unknown_keys(setup, SETUP_KEYS, "setup", path)
+
+    # batch 実行中だけ別接続で保持するロック（DB 更新失敗の再現用）。
+    # リストや辞書を渡されても orchestrator は文字列として扱うため、先に弾く
+    if "db_lock" in setup and not isinstance(setup["db_lock"], str):
+        problems.append("setup.db_lock は SQL 文字列で指定してください（指定値: %r）" % setup["db_lock"])
 
     for key in ("clean_dirs", "remove_dirs"):
         for i, spec in enumerate(setup.get(key) or []):
@@ -442,26 +476,7 @@ def load_cases(cases_dir: Union[str, Path], only: Optional[List[str]] = None, ta
             raise ConfigError(
                 "ケース定義に問題があります: %s\n  - %s" % (path, "\n  - ".join(schema_problems)))
 
-        case = TestCase(
-            case_id=case_id,
-            name=str(data.get("name") or case_id),
-            source=path,
-            description=str(data.get("description") or ""),
-            # サブフォルダ名を暗黙のタグとして足す。機能別にフォルダを切れば
-            # そのまま --tag <機能名> で絞り込める（宣言済みのタグは重複させない）
-            tags=_folder_tags(path, cases_dir) + [
-                t for t in (data.get("tags") or []) if t not in _folder_tags(path, cases_dir)
-            ],
-            enabled=_as_bool(data.get("enabled", True), "enabled"),
-            setup=data.get("setup") or {},
-            snapshot=data.get("snapshot") or {},
-            execute=data.get("execute") or {},
-            collect=data.get("collect") or {},
-            # "assert" は Python の予約語なので属性名を変える
-            assertions=data.get("assert") or {},
-            teardown=data.get("teardown") or {},
-        )
-        cases.append(case)
+        cases.append(_build_case(data, path, case_id, cases_dir))
 
     if not cases:
         raise ConfigError(f"{cases_dir} にテストケース (*.yaml) がありません")
@@ -500,3 +515,26 @@ def load_cases(cases_dir: Union[str, Path], only: Optional[List[str]] = None, ta
             f"  少なくとも 1 件を enabled にするか、絞り込み条件を見直してください。"
         )
     return enabled_cases
+
+
+def _build_case(data: Dict[str, Any], path: Path, case_id: str, cases_dir: Path) -> TestCase:
+    """検証済みの生 dict から TestCase を組み立てる。"""
+    folder_tags = _folder_tags(path, cases_dir)
+    return TestCase(
+        case_id=case_id,
+        name=str(data.get("name") or case_id),
+        source=path,
+        description=str(data.get("description") or ""),
+        # サブフォルダ名を暗黙のタグとして足す。機能別にフォルダを切れば
+        # そのまま --tag <機能名> で絞り込める（宣言済みのタグは重複させない）
+        tags=folder_tags + [t for t in (data.get("tags") or []) if t not in folder_tags],
+        enabled=_as_bool(data.get("enabled", True), "enabled"),
+        mode=str(data.get("mode") or "auto"),
+        setup=data.get("setup") or {},
+        snapshot=data.get("snapshot") or {},
+        execute=data.get("execute") or {},
+        collect=data.get("collect") or {},
+        # "assert" は Python の予約語なので属性名を変える
+        assertions=data.get("assert") or {},
+        teardown=data.get("teardown") or {},
+    )

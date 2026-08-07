@@ -1,0 +1,82 @@
+# =============================================================================
+# {case_id} 手動実施ケース（mode: manual）
+#
+#   autotest new --template manual で生成したひな形。
+#   「自動では再現できない / 実行中に人の操作が要る」ケース用。
+#   自動実行（autotest run）からは除外され、代わりに 2 段階で証跡を採る。
+#
+#   ★ 使い方（3 ステップ）
+#     1) 実行前の採取（フォルダ準備・SQL・データ投入・DB スナップショット・フォルダ撮影）
+#          python -m autotest manual --case {case_id} --phase before
+#     2) batch を手で実行する。必要な手動操作もこの間に行う
+#          （途中で止める、別端末から操作する、タイミングを合わせる…など）
+#     3) 実行後の採取（ログ増分・成果回収・DB スナップショット・フォルダ撮影・判定）
+#          python -m autotest manual --case {case_id} --phase after
+#
+#   ★ 判定は必ず「要確認」になる（自動で OK にはならない）
+#     人が手で動かした以上、自動比較の結果は参考値にすぎない。
+#     Excel の黄色い欄に確認結果を記入して、人が最終判定する。終了コードは 3。
+#     終了コードの判定は行わない（手動実行では取得できないため。
+#     自己申告を受け付けると検証できない値で合格になってしまう）。
+#
+#   ★ manual ケースでは使えない項目
+#     setup.replace_files / setup.db_lock は、自動実行の finally で必ず元に戻す
+#     前提の機能。before と after は別プロセスなので戻し役がいない。
+#     必要な場合は手で配置し、after の後に手で戻すこと（preflight が検出して止める）。
+# =============================================================================
+id: {case_id}
+name: "手動：（何を手で確認するのかを書く）"
+description: "（人が何をして、何が確認できれば合格かを 1 文で書く）"
+tags: [手動]
+mode: manual
+enabled: false            # ← 準備ができたら true にする
+# ↑ 生成直後は false。投入ファイルを置き、下の定義を埋めてから true にすること。
+#   （false のうちは validate / run の対象外なので、作りかけでも他のケースを止めない）
+
+# --- 実行前の採取（--phase before でここまでが実行される）-----------------------
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+
+  # sql:
+  #   - file: sql/{case_id}_setup.sql
+
+  input_files:
+    - src: "input/（投入ファイル名）.csv"
+      dest_dir: input_dir
+
+# 実行前後の 2 時点で取得する。手動ケースではここが証跡の中心になるので、
+# 「人が見て判断したい列」を漏れなく入れておくこと
+# snapshot:
+#   tables:
+#     - name: T_ORDER
+#       sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS, UPLOAD_TIME FROM T_ORDER ORDER BY ORDER_ID"
+
+# --- 実行後の採取（--phase after）-----------------------------------------------
+collect:
+  files:
+    - dir: output_dir
+      pattern: "*.csv"
+      preview: true
+
+assert:
+  # exit_code は書いても SKIP になる（手動実行では取得できない）
+
+  # 期待値を置けば自動比較もするが、結果は「要確認」で止まる（参考値の扱い）
+  # db:
+  #   - table: T_ORDER
+  #     expected: "expected/{case_id}/db_T_ORDER.csv"
+  #     key: [ORDER_ID]
+  #     ignore_columns: [UPDATED_AT]
+
+  # 期待値を作れない／作る意味が薄い場合は manual: true にすると、
+  # 実行前後のスナップショットだけを証跡に残して人が目視で判定する
+  # db:
+  #   - table: T_ORDER
+  #     manual: true
+
+  files:
+    - name: "処理済フォルダへの移動"
+      exists: {dir: processed_dir, pattern: "*.csv", count: 1}
+
+  log:
+    must_not_contain: ["Exception"]

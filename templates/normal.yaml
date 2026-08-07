@@ -1,0 +1,85 @@
+# =============================================================================
+# {case_id} 正常系
+#
+#   autotest new で生成したひな形。このままでも実行できる状態にしてある。
+#   次の 3 つを埋めれば正式なケースになる:
+#     1. cases/{case_id}/input/ に投入ファイルを置き、下の input_files に書く
+#     2. snapshot.tables に、確認したいテーブルの SELECT を書く
+#     3. 一度実行し、結果を確認してから expected/{case_id}/ に期待値を置いて
+#        assert.db / assert.files のコメントを外す
+#
+#   ★ 期待値の作り方
+#     初回は assert に exit_code とログだけ書いて実行する。
+#     output/<run_id>/artifacts/{case_id}/ に実際の出力ファイルが、
+#     Excel の「実行後」DB 表に実際のレコードが残るので、内容を目視確認してから
+#     expected/{case_id}/ にコピーして基準（ベースライン）にする。
+#     以降の回帰はこの基準との差分だけを見ればよい。
+# =============================================================================
+id: {case_id}
+name: "正常系：（ここにケース名を書く）"
+description: "（何がどうなれば合格かを 1 文で書く。証跡 Excel にそのまま出る）"
+tags: [正常系]
+enabled: false            # ← 準備ができたら true にする
+# ↑ 生成直後は false。投入ファイルを置き、下の定義を埋めてから true にすること。
+#   （false のうちは validate / run の対象外なので、作りかけでも他のケースを止めない）
+
+# --- 前処理 -------------------------------------------------------------------
+setup:
+  # settings.paths の論理名でのみ指定できる（生パス指定は不可 = 誤削除防止）
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+
+  # DB を試験前提の状態に戻す SQL（不要なら丸ごと消す）
+  # sql:
+  #   - file: sql/{case_id}_setup.sql
+
+  # テストデータの投入。src は cases/{case_id}/ からの相対パス
+  input_files:
+    - src: "input/（投入ファイル名）.csv"
+      dest_dir: input_dir
+      # rename: "ORDER_{date}.csv"    # 投入時に改名したいとき（{date} 使用可）
+
+# --- DB スナップショット（実行前後の 2 時点を取得）-------------------------------
+# snapshot:
+#   tables:
+#     - name: T_ORDER
+#       sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS FROM T_ORDER ORDER BY ORDER_ID"
+#       # mask: [CUSTOMER_TEL]        # 個人情報の列は ***MASKED*** にして出す
+
+# --- 実行 ---------------------------------------------------------------------
+execute:
+  args: ["--mode", "daily"]
+  # batch: invoice                    # 既定以外の .exe を使うとき（settings.batches の名前）
+
+# --- 回収 ---------------------------------------------------------------------
+collect:
+  files:
+    - dir: output_dir
+      pattern: "*.csv"
+      preview: true                   # 中身も証跡画像として残す
+
+# --- 判定 ---------------------------------------------------------------------
+assert:
+  exit_code: 0
+
+  # 期待値を置いたらコメントを外す
+  # db:
+  #   - table: T_ORDER
+  #     expected: "expected/{case_id}/db_T_ORDER.csv"
+  #     key: [ORDER_ID]
+  #     ignore_columns: [UPDATED_AT]  # 実行時刻に依存する列は除外する
+
+  files:
+    # 「ファイルが出た / 移動した」という事実の確認は期待値なしで書ける
+    - name: "処理済フォルダへの移動"
+      exists: {dir: processed_dir, pattern: "*.csv", count: 1}
+    - name: "エラーフォルダが空であること"
+      exists: {dir: error_dir, pattern: "*", count: 0}
+    # - name: "結果ファイルの内容"
+    #   actual: {dir: output_dir, pattern: "RESULT_*.csv"}
+    #   expected: "expected/{case_id}/RESULT.csv"
+    #   encoding: cp932
+    #   ignore_line_patterns: ['^#作成日時']   # 時刻など毎回変わる行は除外
+
+  log:
+    must_contain: ["処理正常終了"]
+    must_not_contain: ["[ERROR]", "Exception", "異常終了"]

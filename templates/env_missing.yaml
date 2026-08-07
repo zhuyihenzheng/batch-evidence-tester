@@ -1,0 +1,51 @@
+# =============================================================================
+# {case_id} 環境不備
+#
+#   autotest new --template env_missing で生成したひな形。
+#   フォルダが無い / 権限が無いといった「環境側の不備」に batch がどう反応するかを見る。
+#
+#   ★ remove_dirs と clean_dirs の違い
+#     clean_dirs  … 中身を空にする（フォルダ自体は残る）
+#     remove_dirs … フォルダごと削除する。通常 paths のフォルダは実行前に自動作成
+#                   されるが、remove_dirs に挙げたものは自動作成の対象外になる。
+#
+#   ★ 同じフォルダへ input_files を投入すると、投入時にフォルダが再作成されて
+#     「フォルダが無い」状態を作れない。preflight が矛盾として検出して止める。
+# =============================================================================
+id: {case_id}
+name: "異常系：（どのフォルダ／どの権限が無いのかを書く）"
+description: "（環境不備の状態で起動したとき、どう振る舞えば正しいかを 1 文で書く）"
+tags: [異常系, 環境不備]
+enabled: false            # ← 準備ができたら true にする
+# ↑ 生成直後は false。投入ファイルを置き、下の定義を埋めてから true にすること。
+#   （false のうちは validate / run の対象外なので、作りかけでも他のケースを止めない）
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir]
+  remove_dirs: [output_dir]           # ← フォルダごと削除（自動作成もされない）
+
+  input_files:
+    - src: "input/（投入ファイル名）.csv"
+      dest_dir: input_dir             # ※ remove_dirs に挙げたフォルダは指定できない
+
+collect:
+  # 消したフォルダは撮影できないので、証跡の対象から外しておく
+  folder_evidence: [input_dir, processed_dir, error_dir]
+
+execute:
+  args: ["--mode", "daily"]
+
+assert:
+  # 実際の batch の仕様に合わせる
+  exit_code: 2
+
+  files:
+    # 異常終了なので、投入ファイルは処理されず投入フォルダに残ったままであること
+    - name: "投入ファイルが未処理のまま残ること"
+      exists: {dir: input_dir, pattern: "*.csv", count: 1}
+    - name: "処理済フォルダへ移動していないこと"
+      exists: {dir: processed_dir, pattern: "*", count: 0}
+
+  log:
+    must_contain: ["処理異常終了"]
+    must_not_contain: ["処理正常終了"]

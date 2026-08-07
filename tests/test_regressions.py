@@ -1123,6 +1123,73 @@ class TestCaseFolderStructure(TmpDirCase):
 
 
 # =============================================================================
+# 1 ファイル 1 ケース書式のベースライン
+#   これがこのツール唯一のケース定義書式。読み取りの解釈が変わっていないことを
+#   固定しておく（安価な保険）。
+# =============================================================================
+class TestSingleCaseFileFormat(TmpDirCase):
+    def _write(self, text, name="TC_SINGLE.yaml"):
+        root = self.tmp / "cases"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text, encoding="utf-8")
+        return root
+
+    def test_all_sections_are_read_as_written(self):
+        root = self._write(
+            "id: TC_SINGLE\n"
+            "name: 単一\n"
+            "tags: [正常系]\n"
+            "setup: {clean_dirs: [input_dir]}\n"
+            "assert: {exit_code: 0}\n")
+        case = load_cases(root)[0]
+        self.assertEqual(case.case_id, "TC_SINGLE")
+        self.assertEqual(case.name, "単一")
+        self.assertEqual(case.tags, ["正常系"])
+        self.assertEqual(case.setup["clean_dirs"], ["input_dir"])
+        self.assertEqual(case.assertions["exit_code"], 0)
+
+    def test_id_defaults_to_file_name(self):
+        """id: を書かない場合はファイル名がケース ID になること。"""
+        root = self._write("name: ID なし\n", name="TC_FROM_NAME.yaml")
+        self.assertEqual(load_cases(root)[0].case_id, "TC_FROM_NAME")
+
+    def test_unknown_top_level_key_is_rejected(self):
+        """綴り間違い（および廃止された cases: 形式）を黙って無視しないこと。"""
+        root = self._write("id: TC_X\nname: X\ncases: []\n")
+        with self.assertRaises(ConfigError) as ctx:
+            load_cases(root)
+        self.assertIn("cases", str(ctx.exception))
+
+
+class TestDbLockKey(TmpDirCase):
+    """orchestrator が読む項目は、ケース定義の許可キーにも入っていること。
+
+    許可キーから漏れていると、ドキュメントどおりに書いたケースが
+    「未知の項目」として読み込み時に弾かれる。
+    """
+
+    def _write(self, body):
+        root = self.tmp / "cases"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "TC_LOCK.yaml").write_text(body, encoding="utf-8")
+        return root
+
+    def test_db_lock_is_accepted(self):
+        root = self._write(
+            "id: TC_LOCK\nname: ロック\n"
+            "setup:\n  db_lock: \"BEGIN TRAN; UPDATE T WITH (TABLOCKX) SET A = A\"\n")
+        self.assertIn("BEGIN TRAN", load_cases(root)[0].setup["db_lock"])
+
+    def test_non_string_db_lock_is_rejected(self):
+        root = self._write(
+            "id: TC_LOCK\nname: ロック\n"
+            "setup:\n  db_lock: [\"BEGIN TRAN\", \"UPDATE T SET A = A\"]\n")
+        with self.assertRaises(ConfigError) as ctx:
+            load_cases(root)
+        self.assertIn("db_lock", str(ctx.exception))
+
+
+# =============================================================================
 # 絞り込み実行の証跡（何を実行しなかったかも残す）
 # =============================================================================
 class TestFilteredRunEvidence(TmpDirCase):

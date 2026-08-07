@@ -142,6 +142,13 @@ def _write_summary_sheet(ws: Worksheet, run: RunResult, sheet_names: Dict[str, s
         ("実行ケース数", _case_count_text(run)),
         ("OK / NG / 要確認", f"{run.ok_count} / {run.ng_count} / {run.review_count}"),
     ]
+    # 手動実施ケースは自動実行の対象外。「自動分は全 OK」を「全部通った」と
+    # 誤読させないため、未採取のものを証跡に明記する
+    if run.manual_pending:
+        meta.append((
+            "手動実施ケース",
+            "%d 件 未採取（autotest manual で採取してください）: %s"
+            % (len(run.manual_pending), ", ".join(run.manual_pending))))
     row = 3
     for label, value in meta:
         ws.cell(row, 1, label).font = F_HEADER

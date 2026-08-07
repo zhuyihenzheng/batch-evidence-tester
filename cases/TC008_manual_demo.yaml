@@ -1,0 +1,60 @@
+# =============================================================================
+# TC008【見本】手動実施ケース（mode: manual）
+#
+#   自動では再現できないケース——実行中に人の操作が要る、タイミングを合わせる
+#   必要がある、途中で止めて状態を見たい——のための書き方の見本。
+#   autotest run の対象外になり、代わりに 2 段階で証跡を採る。
+#
+#   ★ 手順（サンドボックスでそのまま試せる）
+#     1) 実行前の採取
+#          python -m autotest manual --case TC008_manual_demo --phase before \
+#              --config config/settings.demo.yaml --offline
+#     2) batch を手で実行（ここでは fake_batch を人が起動する体で）
+#          python demo/fake_batch.py --root ./sandbox --mode daily --date 20260803
+#     3) 実行後の採取
+#          python -m autotest manual --case TC008_manual_demo --phase after \
+#              --config config/settings.demo.yaml --offline
+#
+#   ★ 判定は必ず「要確認」になる（終了コードは 3）
+#     人が手で動かした以上、自動比較の一致は参考値にすぎない。
+#     Excel の黄色い欄に確認結果を記入して、人が最終判定する。
+#     終了コードの判定は行わない（手動起動では取得できないため）。
+# =============================================================================
+id: TC008_manual_demo
+name: "【見本】手動実施：受注ファイル取込を手で流す"
+description: "batch を手動起動したときの実行前後の状態を証跡として残し、人が最終判定する"
+tags: [見本, 手動]
+mode: manual
+enabled: true
+
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS FROM T_ORDER ORDER BY ORDER_ID"
+
+collect:
+  files:
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+
+assert:
+  # exit_code を書いても手動実施では SKIP になる（取得できないため）
+
+  db:
+    # 期待値を持たない目視確認。実行前後のスナップショットが証跡に残る
+    - table: T_ORDER
+      manual: true
+
+  files:
+    - name: "処理済フォルダへの移動"
+      exists: {dir: processed_dir, pattern: "ORDER_*.csv", count: 1}
+
+  log:
+    must_not_contain: ["Exception"]
