@@ -15,12 +15,43 @@ import os
 # PEP 585 の組み込みジェネリクス（3.9+）。3.6 では typing.List 等を使う必要がある
 BUILTIN_GENERICS = {"list", "dict", "tuple", "set", "frozenset", "type"}
 
-# 3.7 以降で追加されたキーワード引数
+# 3.7 以降で追加されたキーワード引数。
+# キーワード名だけで判定すると誤検出が出る（tkinter の text= など、
+# 無関係な API が同じ名前を使っている）。呼び出し先の名前とセットで見る。
+#   キー: キーワード名 -> (対象となる呼び出し名の集合, メッセージ)
 NEW_KWARGS = {
-    "capture_output": "subprocess.run(capture_output=) は Python 3.7+",
-    "text": "subprocess.run(text=) は Python 3.7+",
-    "onexc": "shutil.rmtree(onexc=) は Python 3.12+（バージョン分岐済みなら可）",
+    "capture_output": (
+        {"run", "subprocess.run"},
+        "subprocess.run(capture_output=) は Python 3.7+"),
+    "text": (
+        {"run", "Popen", "check_output", "call", "check_call",
+         "subprocess.run", "subprocess.Popen", "subprocess.check_output"},
+        "subprocess の text= は Python 3.7+（universal_newlines= を使う）"),
+    "onexc": (
+        {"rmtree", "shutil.rmtree"},
+        "shutil.rmtree(onexc=) は Python 3.12+（バージョン分岐済みなら可）"),
 }
+
+
+def _call_name(node):
+    """呼び出し先の名前を返す。foo.bar(...) なら "foo.bar" と "bar" の両方を見たいので
+    ドット付きの完全名を返し、照合側は末尾要素でも一致させる。"""
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        prefix = _call_name_of_value(func.value)
+        return (prefix + "." + func.attr) if prefix else func.attr
+    return ""
+
+
+def _call_name_of_value(value):
+    if isinstance(value, ast.Name):
+        return value.id
+    if isinstance(value, ast.Attribute):
+        prefix = _call_name_of_value(value.value)
+        return (prefix + "." + value.attr) if prefix else value.attr
+    return ""
 
 # 新しめのライブラリ API
 NEW_ATTRS = {
@@ -123,9 +154,14 @@ class Py36Checker(ast.NodeVisitor):
 
     # --- 新しい API ---------------------------------------------------------
     def visit_Call(self, node):
+        name = _call_name(node)
+        tail = name.rsplit(".", 1)[-1]
         for kw in node.keywords:
-            if kw.arg in NEW_KWARGS:
-                self.report(node, NEW_KWARGS[kw.arg])
+            if kw.arg not in NEW_KWARGS:
+                continue
+            targets, message = NEW_KWARGS[kw.arg]
+            if name in targets or tail in targets:
+                self.report(node, message)
         if isinstance(node.func, ast.Attribute) and node.func.attr in NEW_ATTRS:
             self.report(node, NEW_ATTRS[node.func.attr])
         self.generic_visit(node)
