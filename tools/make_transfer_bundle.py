@@ -35,13 +35,20 @@ MINIMAL_FILES = ("check_env.py", "requirements.txt", "pyproject.toml",
 
 
 def tracked_files():
-    """git 管理下のファイル一覧。.gitignore の除外がそのまま効く。"""
+    """git 管理下のファイル一覧。.gitignore の除外がそのまま効く。
+
+    -z（NUL 区切り）は必須。既定の git ls-files は非 ASCII のパスを
+    "cases/\\347\\222\\260..." のように 8 進エスケープ付きで引用して出すため、
+    そのまま使うと日本語名のファイルが「存在しないパス」になって
+    転送パックから黙って抜け落ちる。ケースをフォルダ名（＝タグ）で
+    分ける運用では日本語名が普通に出てくるので、ここは必ず -z で受ける。
+    """
     try:
-        out = subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "ls-files"])
+        out = subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "ls-files", "-z"])
     except (subprocess.CalledProcessError, OSError):
         print("git ls-files に失敗しました。git リポジトリ内で実行してください。", file=sys.stderr)
         raise SystemExit(1)
-    return sorted(out.decode("utf-8").splitlines())
+    return sorted(p for p in out.decode("utf-8").split("\0") if p)
 
 
 def select_files(minimal):
@@ -56,11 +63,19 @@ def build_zip(files):
     """指定ファイルを ZIP にまとめてバイト列で返す。"""
     buf = io.BytesIO()
     # 圧縮率を上げて貼り付け量を減らす
+    missing = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for rel in files:
             src = PROJECT_ROOT / rel
             if src.is_file():
                 zf.write(src, arcname=rel)
+            else:
+                missing.append(rel)
+    # 黙って落とすと、転送先で「なぜか動かない」まで気づけない
+    if missing:
+        print("[警告] 次のファイルを同梱できませんでした（%d 件）:" % len(missing), file=sys.stderr)
+        for rel in missing:
+            print("  - %s" % rel, file=sys.stderr)
     return buf.getvalue()
 
 
