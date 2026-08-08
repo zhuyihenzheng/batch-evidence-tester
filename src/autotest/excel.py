@@ -238,7 +238,12 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
         ("開始日時", exec_info.started_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if exec_info.started_at else "-"),
         ("終了日時", exec_info.finished_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if exec_info.finished_at else "-"),
         ("所要時間", f"{exec_info.elapsed_sec:.2f} 秒"),
-        ("終了コード", "TIMEOUT" if exec_info.timed_out else str(exec_info.exit_code)),
+        # 終了コードが無いのは手動実行のケース。"None" と出すと、証跡を読む人には
+        # 「取得できなかった」のか「異常な値だった」のか区別が付かない
+        ("終了コード",
+         "TIMEOUT" if exec_info.timed_out
+         else (str(exec_info.exit_code) if exec_info.exit_code is not None
+               else "－（手動実行のため取得なし）")),
         ("実施者 / 環境", f"{run.tester} / {run.env_name}"),
     ]
     for label, value in info:

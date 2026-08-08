@@ -498,12 +498,23 @@ class CaseRunner:
 
         client = db_mod.create_client(self.settings, self.offline, case.case_id, dry_run=False)
         try:
-            # 実行前スナップショットを CSV から復元する（before プロセスの成果）
+            # 実行前スナップショットを CSV から復元する（before プロセスの成果）。
+            # 取得元の SQL も付け直す —— 実行後だけに SQL が載っていて実行前に
+            # 無いと、証跡としては「この表が何を問い合わせた結果か」が片方だけ
+            # 不明な、読み手に不親切な状態になる
+            sql_by_table = {}
+            for spec in case.snapshot.get("tables", []):
+                table_name = str(spec.get("name") or spec.get("table") or "")
+                if table_name:
+                    sql_by_table[table_name] = str(
+                        spec.get("sql") or "SELECT * FROM %s" % table_name).strip()
             for name in session.snapshot_tables:
                 path = session_dir / "before" / ("db_%s.csv" % name)
                 if path.exists():
                     table = db_mod.read_expected_csv(path)
                     table.title = name
+                    if name in sql_by_table:
+                        table.note = "SQL: %s" % self._expand_sql(sql_by_table[name])
                     result.db_before[name] = table
 
             log_dir = Path(session.log_dir) if session.log_dir else self._log_dir_for(session.batch_name)

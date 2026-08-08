@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from autotest import compare, fsops, logs  # noqa: E402
 from autotest.config import ConfigError, Settings, load_cases  # noqa: E402
-from autotest.models import NG, OK, SKIP, CaseResult, RunResult, Table  # noqa: E402
+from autotest.models import NG, OK, REVIEW, SKIP, CaseResult, RunResult, Table  # noqa: E402
 
 
 def make_table(title, columns, rows, **kw):
@@ -69,6 +69,43 @@ class TestDbTruncationNotUsedForJudgment(unittest.TestCase):
             keys=["ID"],
         )
         self.assertEqual(result.verdict, NG, "501 行目の相違が検出されていない（偽 OK）")
+
+    def test_ignoring_every_value_column_is_not_a_pass(self):
+        """キー以外を全部 ignore_columns で外したら OK にしないこと。
+
+        「値が合わないから ignore に足す」を続けると、最後には何も照合して
+        いないのに緑になる。実際そうなっても気づけないのが一番の問題なので、
+        要確認として人の目に触れさせる。
+        """
+        result = compare.compare_db_table(
+            "T", make_table("T", ["ID", "VAL"], [["1", "BROKEN"]]),
+            make_table("T", ["ID", "VAL"], [["1", "ok"]]),
+            keys=["ID"], ignore_columns=["VAL"])
+        self.assertEqual(result.verdict, REVIEW, "値を一切見ていないのに合格になっている")
+        self.assertIn("ignore_columns", result.detail)
+
+    def test_partially_ignoring_columns_still_passes(self):
+        """時刻列だけ外すような通常の使い方は今までどおり OK。"""
+        result = compare.compare_db_table(
+            "T", make_table("T", ["ID", "VAL", "TS"], [["1", "ok", "10:00"]]),
+            make_table("T", ["ID", "VAL", "TS"], [["1", "ok", "09:00"]]),
+            keys=["ID"], ignore_columns=["TS"])
+        self.assertEqual(result.verdict, OK)
+
+    def test_expected_with_only_key_columns_is_a_valid_existence_check(self):
+        """期待値がキー列だけなのは「このレコードがあること」の確認。OK でよい。"""
+        result = compare.compare_db_table(
+            "T", make_table("T", ["ID"], [["1"]]),
+            make_table("T", ["ID"], [["1"]]), keys=["ID"])
+        self.assertEqual(result.verdict, OK)
+
+    def test_record_mismatch_stays_ng_even_when_all_columns_ignored(self):
+        """値を見ていなくても、レコードの過不足は NG のまま。"""
+        result = compare.compare_db_table(
+            "T", make_table("T", ["ID", "VAL"], [["2", "x"]]),
+            make_table("T", ["ID", "VAL"], [["1", "ok"]]),
+            keys=["ID"], ignore_columns=["VAL"])
+        self.assertEqual(result.verdict, NG)
 
     def test_truncated_table_is_rejected_for_comparison(self):
         """打ち切り済みの Table を判定に使ったら明示的に NG にすること。"""

@@ -9,7 +9,7 @@ import difflib
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .models import NG, OK, CheckResult, Table
+from .models import NG, OK, REVIEW, CheckResult, Table
 
 DIFF_COLUMNS = ["区分", "キー", "列名", "期待値", "実績値"]
 FILE_DIFF_COLUMNS = ["行", "区分", "期待値", "実績値"]
@@ -104,10 +104,23 @@ def compare_db_table(
         if key not in exp_index:
             diff_rows.append(["実績のみ", " / ".join(key), "(レコード全体)", "", _row_digest(actual.columns, act_row, masked=masked)])
 
-    return _build_result(
+    result = _build_result(
         check_name, "db", diff_rows, DIFF_COLUMNS,
         ok_detail=f"{len(exp_index)} 件一致（比較列 {len(compare_cols)} / 除外列 {sorted(ignore) or 'なし'}）",
     )
+
+    # キー以外の全列を ignore_columns で外すと、値は一切照合されないまま OK が出る。
+    # 「レコードの有無は見たが中身は見ていない」状態を合格として記録させない
+    # （0 件実行を成功にしないのと同じ理由）。ignore で外した結果そうなった場合
+    # だけを対象にする —— 期待値がキー列しか持たないのは、存在確認として妥当な使い方。
+    value_columns = [c for c in expected.columns if c not in keys]
+    if value_columns and not compare_cols and result.verdict == OK:
+        result.verdict = REVIEW
+        result.detail = (
+            "キー以外の全列（%s）が ignore_columns で除外されているため、値は照合していません。"
+            "レコードの有無だけを確認しました。除外列を見直すか、目視で確認してください。"
+            % ", ".join(value_columns))
+    return result
 
 
 def _compare_by_position(check_name: str, category: str, actual: Table, expected: Table, ignore: Set[str]) -> CheckResult:
