@@ -811,3 +811,120 @@ AUTO_TEST_BATCH\
   直接写 JOIN 的 SQL，把结果当成一张虚拟表比对。
 - **性能回归**：`ExecutionInfo.elapsed_sec` 已记录，加个阈值断言即可。
 
+---
+
+## 10. Excel → Layout TXT 生成工具
+
+用于从帐票 Layout 定义 Excel 自动制作 TXT 取入数据。Windows 上双击：
+
+```text
+run_layout_txt.bat
+```
+
+界面选择 Excel、sheet 和输出目录即可。默认列与照片中的定义一致：
+
+| 用途 | 默认列 | 示例值 |
+|---|---:|---|
+| FormID | B | `1001` |
+| LayoutID（布局识别） | C | `00001` |
+| ITEM_NAME | H | `傷病名1` / `生年月日` |
+| 数据类型 | I | `文字列` / `日付` / `カレンダー` / `チェックボックス` |
+| IME / 输入限制 | J | `ひらがな` / `数値のみ` / `小数点数値` / `半角カタカナ` / `半角英数` / `全タイプ` |
+| 最大位数 | K | `100` / `NULL` |
+| FieldID | L | `1001` / `1002`（`ELEMENT_ID`） |
+
+FormID、LayoutID 和 FieldID 会根据表头自动寻找：FormID 使用 B 列 `FORM_ID`，
+LayoutID 使用 C 列 `LAYOUT_ID`，FieldID 优先使用 L 列 `ELEMENT_ID`。
+**不会拿 `ITEM_NAME` 代替任何 ID**；
+界面里也可以填 Excel 列字母或准确表头名覆盖自动判断。数字 ID 若使用 `00000` 这种 Excel
+显示格式，会保留为 `00001`，不会变成 `1`。
+
+可生成三种数据：
+
+- `通常値`：生成不超过 K 列限制的代表性合法值。
+- `最大桁数ちょうど`：生成长度等于 K 的边界值。
+- `最大桁数 + 1`：生成超过 K 一位的异常测试值。
+
+具体值生成规则：
+
+- 普通 FormID：生成全账票正常数据，所有属性Flag固定为 `0`（正常识别），日期使用
+  `5/8/6/1`（和暦）。
+- `FORM_ID=4001`：默认生成24个独立的正常/异常Pattern，每个Pattern分别输出
+  `TXT + 同名TIF`。属性含义为 `0`（正常识别）、`1`（个数不对）、
+  `2`（识别不可）、`1,2`（1和2混在）。`1,2`使用半角逗号；由于整个值有双引号，
+  因此仍是一个属性字段。
+- 4001中的 `日付` / `日付 (From)` / `日付 (To)` / `カレンダー` 按顺序循环使用4种形式：
+  `5/8/6/1`（和暦）、`/2026/6/1`（西暦）、`5/2026/6/1`（元号+4位西暦）、
+  `5/8/6/1|5/8/6/2`（一行多日期）。GUI中也可以固定选择其中一种。
+- `選択肢`：生成数字 `1`。
+- `チェックボックス`等复数选择：生成 `1.2`，多个数字用半角点号 `.` 分隔。
+- `文字列` / `氏名`：不添加分隔符，优先使用该行 `ITEM_NAME`，并按 K 列最大长度处理。
+
+I 列为 `文字列` 时，`通常値` 优先使用该行的 `ITEM_NAME` 作为 OCR 测试值，并按 K 列
+最大长度截断；`最大桁数` 和 `最大桁数 + 1` 模式则以 `ITEM_NAME` 为种子补足目标长度。
+日期、checkbox、选择项等非文字类型仍生成对应格式的数据。
+
+普通 FormID 默认输出一组同名文件，例如 `1001.txt + 1001.tif`。全网罗 FormID 4001
+默认输出24组，例如 `4001_01_normal.txt + 4001_01_normal.tif`、
+`4001_03_count_missing.txt + 4001_03_count_missing.tif`。TXT使用 `cp932 + CRLF`；
+TIF为A4相当、200 DPI，显示该Pattern实际使用的FormID、ELEMENT_ID、ITEM_NAME、OCR值和属性，
+项目过多时会生成多页TIF。
+一个账票的全部数据只占一行，
+每个值都用双引号包裹并用逗号分隔，顺序为：
+
+```text
+"FormID","対象有無","FieldID","OCR文字識別結果","属性フラグ","座標情報",...
+```
+
+例如，普通账票 `1001.txt`：
+
+```text
+"1001","1","1001","傷病名1","0","0,0,0,0","1002","1","0","0,0,0,0"
+```
+
+全网罗账票的正常Pattern `4001_01_normal.txt`：
+
+```text
+"4001","1","2001","5/8/6/1","0","0,0,0,0","2002","/2026/6/1","0","0,0,0,0","2003","5/2026/6/1","0","0,0,0,0","2004","5/8/6/1|5/8/6/2","0","0,0,0,0"
+```
+
+4001的24个Pattern如下：
+
+| 分类 | Pattern | 实际生成内容 |
+|---|---|---|
+| 正常 | `normal` | 所有定义Field、属性0 |
+| 个数不对 | `count_zero` / `count_missing` / `count_extra` / `count_duplicate_all` | 0件、少1件、多1件、全体重复；属性1 |
+| ELEMENT_ID | `element_id_unknown` / `element_id_duplicate` / `element_id_empty` / `element_order_reverse` | 定义外、重复、空、顺序反转 |
+| 属性 | `unrecognizable` / `attribute_mixed_1_2` / `attribute_1_without_count_error` / `attribute_invalid` | 属性2、`1,2`混在、件数正常但属性1、未定义属性9 |
+| OCR值 | `ocr_empty` / `ocr_over_max` / `ocr_invalid_date` / `ocr_invalid_selection` / `ocr_invalid_ime` | 空值、最大位数超限、错误日期、非数字选择值/错误分隔、IME限制外字符 |
+| 坐标 | `coordinates_empty` / `coordinates_invalid` | 空坐标、非数字/负值坐标 |
+| 账票头 | `target_absent` / `target_empty` / `form_id_mismatch` / `form_id_empty` | 对象外、对象有无为空、FormID不一致、FormID为空 |
+
+其中“个数不对”不只是把属性改成1：TXT中的Field数据块数量也会真的减少、增加或重复。
+`ELEMENT_ID`不匹配则使用独立Pattern，便于明确判断系统报错原因。
+
+文件名可通过模板指定。支持 `{form_id}`、`{output_form_id}`、`{pattern}`、`{seq:02d}`、
+`{source}`。例如 `CASE_{form_id}_{seq:02d}_{pattern}`。模板没有写 `{pattern}` 或 `{seq}`
+但需要输出多个Pattern时，工具会自动追加序号和Pattern名，防止覆盖。TXT和TIF始终使用相同basename。
+
+默认采用最适合直接取入的“一账票一行”格式；可先选 `ラベル付き（確認用）` 核对内容。
+如果实际接口的属性 flag、坐标有固定格式，
+命令行可以覆盖这些默认值：
+
+```cmd
+set PYTHONPATH=src
+python -m autotest.layout_txt layout.xlsx ^
+    --sheet 帳票対象整理 ^
+    --out-dir output\layout_txt ^
+    --form-column B --layout-column C --field-column L ^
+    --date-mode coverage --coverage-form-id 4001 ^
+    --error-patterns all ^
+    --filename-template "CASE_{form_id}_{seq:02d}_{pattern}" ^
+    --profile normal --encoding cp932 ^
+    --attribute-flag 0 --coordinates 0,0,0,0
+```
+
+已有同名 TXT/TIF 时默认报错并保持原文件；明确传 `--overwrite` 才覆盖。
+不需要TIF时使用 `--no-tif`；只生成主要8种异常时使用 `--error-patterns core`；
+不生成异常Pattern时使用 `--error-patterns none`。运行 `python -m autotest.layout_txt --help`
+可查看单文件输出、TSV、UTF-8、自定义 I/J/K 列等选项。
