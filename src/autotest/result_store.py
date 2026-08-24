@@ -131,6 +131,9 @@ def case_result_to_dict(result, run_dir):
                 "category": c.category,
                 "verdict": c.verdict,
                 "detail": c.detail,
+                "confirmation_result": c.confirmation_result,
+                "confirmation_by": c.confirmation_by,
+                "confirmation_at": c.confirmation_at,
                 "diff_table": _table_to_dict(c.diff_table) if c.diff_table else None,
             }
             for c in result.checks
@@ -182,6 +185,9 @@ def case_result_from_dict(data, run_dir):
             verdict=str(item.get("verdict") or ""),
             detail=str(item.get("detail") or ""),
             diff_table=_table_from_dict(diff) if diff else None,
+            confirmation_result=str(item.get("confirmation_result") or ""),
+            confirmation_by=str(item.get("confirmation_by") or ""),
+            confirmation_at=str(item.get("confirmation_at") or ""),
         ))
 
     for key, target in (("db_before", result.db_before), ("db_after", result.db_after)):

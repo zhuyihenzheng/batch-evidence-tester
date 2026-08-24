@@ -187,6 +187,72 @@ class TestLogTruncationNotUsedForAssertion(TmpDirCase):
         self.assertIn("NEW-1", text, "差し替え後の先頭行が読めていない")
 
 
+class TestFirstLogLineCollection(TmpDirCase):
+    """初回起動で新しく作られたログの 1 行目を必ず採る。"""
+
+    def _settings(self, log_dir):
+        return self.write_settings(
+            {"log_dir": str(log_dir)},
+            extra={"log": {
+                "patterns": ["*.log"],
+                "encoding": "utf-8",
+                "encoding_fallbacks": ["cp932", "utf-8-sig"],
+                "timestamp_regex": r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})",
+                "timestamp_format": "%Y-%m-%d %H:%M:%S",
+                "slice_margin_sec": 3,
+            }})
+
+    def test_new_utf8_bom_log_keeps_first_line(self):
+        """C# StreamWriter が初回作成時に付ける BOM で時刻 regex を失敗させない。"""
+        log_dir = self.tmp / "log"
+        log_dir.mkdir()
+        path = log_dir / "batch.log"
+        path.write_bytes(
+            b"\xef\xbb\xbf2026-08-15 10:00:00 [INFO] first\n"
+            b"2026-08-15 10:00:01 [INFO] second\n")
+
+        slices = logs.collect(
+            self._settings(log_dir), {},
+            datetime(2026, 8, 15, 10, 0, 0), datetime(2026, 8, 15, 10, 0, 2),
+            log_dir=log_dir)
+
+        self.assertEqual(slices[0].method, "new")
+        self.assertEqual(slices[0].lines[0], "2026-08-15 10:00:00 [INFO] first")
+        self.assertEqual(len(slices[0].lines), 2)
+
+    def test_new_log_keeps_leading_header_without_timestamp(self):
+        """新規ファイルは全行が今回分なので、時刻の無い先頭ヘッダも捨てない。"""
+        log_dir = self.tmp / "log"
+        log_dir.mkdir()
+        (log_dir / "batch.log").write_text(
+            "Batch version 1.0\n2026-08-15 10:00:00 [INFO] start\n", encoding="utf-8")
+
+        slices = logs.collect(
+            self._settings(log_dir), {},
+            datetime(2026, 8, 15, 10, 0, 0), datetime(2026, 8, 15, 10, 0, 1),
+            log_dir=log_dir)
+        self.assertEqual(slices[0].lines[0], "Batch version 1.0")
+
+    def test_rotated_bom_log_keeps_first_timestamped_line(self):
+        """同名ローテートは時刻抽出するが、BOM 除去後に 1 行目も対象にする。"""
+        log_dir = self.tmp / "log"
+        log_dir.mkdir()
+        path = log_dir / "batch.log"
+        path.write_text("OLD-A\nOLD-B\nOLD-C\n", encoding="utf-8")
+        settings = self._settings(log_dir)
+        offsets = logs.snapshot_offsets(settings, log_dir)
+        path.write_bytes(
+            b"\xef\xbb\xbf2026-08-15 10:00:00 [INFO] first-after-rotate\n"
+            b"2026-08-15 10:00:01 [INFO] second-after-rotate\n")
+
+        slices = logs.collect(
+            settings, offsets,
+            datetime(2026, 8, 15, 10, 0, 0), datetime(2026, 8, 15, 10, 0, 2),
+            log_dir=log_dir)
+        self.assertEqual(slices[0].method, "timestamp")
+        self.assertIn("first-after-rotate", slices[0].lines[0])
+
+
 # =============================================================================
 # 5. クリア対象の実パスに危険なものを許してはならない
 # =============================================================================
@@ -1352,6 +1418,40 @@ class TestManualReview(unittest.TestCase):
         self.assertNotEqual(REVIEW, OK)
 
 
+class TestManualReviewAssertionTypes(TmpDirCase):
+    """DB/内容比較以外に manual を書いても黙って無視されないこと。"""
+
+    def _runner(self):
+        from autotest.orchestrator import CaseRunner
+        output = self.tmp / "out"
+        output.mkdir()
+        settings = self.write_settings({"output_dir": str(output)})
+        return CaseRunner(settings, self.tmp), output
+
+    def test_exists_ok_becomes_review(self):
+        runner, output = self._runner()
+        (output / "a.csv").write_text("x", encoding="utf-8")
+        checks = runner._assert_files({
+            "files": [{"name": "存在", "exists": {"dir": "output_dir", "pattern": "*.csv", "count": 1},
+                       "manual": True}]})
+        self.assertEqual(checks[0].verdict, REVIEW)
+
+    def test_log_ok_becomes_review(self):
+        runner, _ = self._runner()
+        check = runner._assert_log(
+            {"log": {"must_not_contain": ["ERROR"], "manual": True}}, [])
+        self.assertEqual(check.verdict, REVIEW)
+
+    def test_exit_code_ok_becomes_review(self):
+        from autotest.models import ExecutionInfo
+        runner, _ = self._runner()
+        result = CaseResult("T", "T")
+        result.execution = ExecutionInfo(exit_code=0)
+        check = runner._assert_exit_code(
+            {"exit_code": {"expected": 0, "manual": True}}, result)
+        self.assertEqual(check.verdict, REVIEW)
+
+
 class TestManualReviewExcel(TmpDirCase):
     def _build(self, verdicts):
         from openpyxl import load_workbook
@@ -1491,9 +1591,10 @@ class TestMaskAppliedOnlyInExcel(TmpDirCase):
 # manual: true は expected 無しでも成立すること（preflight で弾かない）
 # =============================================================================
 class TestManualWithoutExpected(TmpDirCase):
-    def _case(self, assertions):
+    def _case(self, assertions, snapshot=None, collect=None):
         from autotest.config import TestCase
-        return TestCase(case_id="T", name="T", source=self.tmp / "T.yaml", assertions=assertions)
+        return TestCase(case_id="T", name="T", source=self.tmp / "T.yaml",
+                        assertions=assertions, snapshot=snapshot, collect=collect)
 
     def _settings(self):
         exe = self.tmp / "b.exe"
@@ -1504,7 +1605,8 @@ class TestManualWithoutExpected(TmpDirCase):
     def test_manual_db_without_expected_passes_preflight(self):
         from autotest.orchestrator import preflight_case
         problems = preflight_case(self._settings(),
-                                  self._case({"db": [{"table": "T_ORDER", "manual": True}]}))
+                                  self._case({"db": [{"table": "T_ORDER", "manual": True}]},
+                                             snapshot={"tables": [{"name": "T_ORDER", "sql": "SELECT 1"}]}))
         self.assertEqual(problems, [], "manual 運用が preflight で成立しない")
 
     def test_non_manual_db_still_requires_expected(self):
@@ -1513,6 +1615,30 @@ class TestManualWithoutExpected(TmpDirCase):
                                   self._case({"db": [{"table": "T_ORDER"}]}))
         self.assertTrue(problems)
         self.assertIn("manual", " ".join(problems), "対処方法を案内すること")
+
+    def test_manual_file_without_preview_is_rejected(self):
+        from autotest.orchestrator import preflight_case
+        assertions = {"files": [{"name": "result", "actual": {"dir": "work_dir", "pattern": "*.csv"},
+                                  "manual": True}]}
+        problems = preflight_case(self._settings(), self._case(assertions))
+        self.assertIn("preview: true", " ".join(problems))
+
+    def test_manual_file_with_expected_still_requires_preview(self):
+        from autotest.orchestrator import preflight_case
+        expected = self.tmp / "expected.csv"
+        expected.write_text("x", encoding="utf-8")
+        assertions = {"files": [{"name": "result", "actual": {"dir": "work_dir", "pattern": "*.csv"},
+                                  "expected": "expected.csv", "manual": True}]}
+        problems = preflight_case(self._settings(), self._case(assertions))
+        self.assertIn("preview: true", " ".join(problems))
+
+    def test_manual_file_with_matching_preview_passes(self):
+        from autotest.orchestrator import preflight_case
+        assertions = {"files": [{"name": "result", "actual": {"dir": "work_dir", "pattern": "*.csv"},
+                                  "manual": True}]}
+        collect = {"files": [{"dir": "work_dir", "pattern": "*.csv", "preview": True}]}
+        problems = preflight_case(self._settings(), self._case(assertions, collect=collect))
+        self.assertEqual(problems, [])
 
 
 # =============================================================================
@@ -1642,6 +1768,32 @@ class TestCaseSchemaValidation(TmpDirCase):
     def test_unknown_key_is_rejected(self):
         """綴り間違いを黙って無視しないこと。"""
         self._expect_error("id: F\nname: F\nsetupp:\n  clean_dirs: [a]\n", "未知の項目")
+
+    def test_misspelled_manual_inside_db_is_rejected(self):
+        self._expect_error(
+            "id: F2\nname: F2\nassert:\n  db:\n    - table: T\n      expected: e.csv\n      manul: true\n",
+            "未知の項目")
+
+    def test_quoted_manual_false_is_rejected(self):
+        self._expect_error(
+            'id: F3\nname: F3\nassert:\n  db:\n    - table: T\n      expected: e.csv\n      manual: "false"\n',
+            "引用符")
+
+    def test_file_content_without_expected_or_manual_is_rejected(self):
+        self._expect_error(
+            "id: F4\nname: F4\nassert:\n  files:\n    - actual: {dir: output_dir, pattern: '*.csv'}\n",
+            "expected")
+
+    def test_manual_is_allowed_for_exists_and_log(self):
+        got = self._load(
+            "id: F5\nname: F5\nassert:\n"
+            "  files:\n    - exists: {dir: output_dir, pattern: '*.csv', count: 1}\n      manual: true\n"
+            "  log:\n    must_not_contain: ['ERROR']\n    manual: true\n")
+        self.assertTrue(got[0].assertions["files"][0]["manual"])
+
+    def test_empty_wrong_assert_types_are_not_hidden_by_defaults(self):
+        self._expect_error("id: F6\nname: F6\nassert: []\n", "マッピング")
+        self._expect_error("id: F7\nname: F7\nassert:\n  db: {}\n", "リスト")
 
     def test_tags_must_be_list(self):
         self._expect_error("id: G\nname: G\ntags: 正常系\n", "リストで指定")

@@ -52,6 +52,7 @@ PYTHONPATH=src python -m autotest new --id TC010_x --template normal|error|env_m
 PYTHONPATH=src python -m autotest copy --from TC001_normal --id TC011_x
 PYTHONPATH=src python -m autotest manual --case TC008_manual_demo --phase before|after
 PYTHONPATH=src python -m autotest report --run <run_id> --run <session> --out merged.xlsx
+PYTHONPATH=src python -m autotest finalize --run <run_id> --run <session> --excel merged.xlsx --out final.xlsx
 PYTHONPATH=src python -m autotest gui                 # 操作画面（需要 tkinter）
 ```
 
@@ -105,14 +106,19 @@ preflight → setup（清空/SQL/投入）→ 実行前快照+文件夹撮影 �
   マスク也只在写进 Excel 时施加，比较用生值（`Table.mask_columns`）。
 - 表示用的打切（`max_db_rows` / `max_lines_in_excel`）**不能进判定路径**。`truncated_from` 非空的 Table
   拿去比较会直接判 NG，而不是拿残缺数据比出个 OK。
+- **初回作成ログは時刻フィルタしない**。実行前に存在しなかったファイルは全行が今回分。
+  C# StreamWriter の UTF-8 BOM や時刻無しヘッダで先頭行を落とさない。ローテート時だけ時刻抽出する。
 - **执行 0 件不是成功**。`load_cases` 在没有可执行用例时抛 `ConfigError`；`RunResult.verdict` 里
   「全 SKIP」也不算 OK。筛选条件和未执行件数会写进 Excel サマリ，避免「3 件全 OK」被误读成全量通过。
 - `manual: true` 的项即使自动比较一致也只给 `REVIEW`（要確認），永不自动转 OK，退出码走 3。
+  子字段和 boolean 会严格校验；`review.py` 从 Excel 读取确认结果，自动 NG 不可覆盖，
+  `finalize` 另存最终 Excel 和审计 JSON，同时保留原始自动判定。
 - 同一 pattern 匹配到多个文件时判 NG 而不是取第一个——多出来的异常输出不能被静默忽略。
 - **`mode: manual` 的用例整体封顶为 REVIEW**（`_force_review` + 永远置顶的 banner check）。
   `exit_code` 一律 SKIP——手动起动取不到，**且不接受用户自报**（无法验证的值不能发合格证）。
 - **跳过的用例必须在证迹里留痕**：`RunResult.manual_pending` 会写进 Excel サマリ和控制台，
-  防止「自动分全 OK」被读成「全部通过」。同理筛选执行会记录未执行件数。
+  并让总合判定保持 REVIEW / 退出码 3，防止「自动分全 OK」被读成「全部通过」。
+  同理筛选执行会记录未执行件数。
 - **「连上了」不等于「连对了」**：`dbcheck` 会 `SELECT DB_NAME(), @@SERVERNAME` 问 DB 本身，
   实际库和 `database.database` 不一致时**返回 1 而不是 0**。连进错误的库还发合格证，
   等于让整轮试验的证迹失效却无人察觉。GUI 顶部的 DB 栏默认是「未確認」（琥珀）而不是绿色，

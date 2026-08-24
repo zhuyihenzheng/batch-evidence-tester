@@ -176,6 +176,22 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
         expected = settings.project_root / item["expected"]
         if not expected.exists():
             problems.append("期待値 CSV がありません: %s" % expected)
+
+    # DB 判定は実行後スナップショットを入力にする。ここを紐付け忘れると
+    # 実行後に初めて NG になるため、validate の時点で具体的に案内する。
+    snapshot_names = {
+        str(item.get("name") or item.get("table") or "")
+        for item in (case.snapshot or {}).get("tables", [])
+        if isinstance(item, dict)
+    }
+    for item in (case.assertions or {}).get("db", []):
+        table_name = str(item.get("table") or "")
+        if table_name and table_name not in snapshot_names:
+            problems.append(
+                "assert.db の %s が snapshot.tables にありません。"
+                "実行前後の証跡を採るため snapshot.tables に同じ名前で定義してください。"
+                % table_name)
+
     for item in (case.assertions or {}).get("files", []):
         if "expected" in item:
             expected = settings.project_root / item["expected"]
@@ -184,6 +200,25 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
         actual_spec = item.get("actual") or item.get("exists") or {}
         if actual_spec and actual_spec.get("dir", "output_dir") not in aliases:
             problems.append("assert.files の dir 論理名が paths に未定義です: %s" % actual_spec.get("dir"))
+
+        # 期待値を持たない目視確認は、実ファイルの中身が証跡に無ければ判定不能。
+        # 同じ採取指定（dir / pattern）に preview: true があることを必須にする。
+        if item.get("manual") is True and "actual" in item:
+            actual = item.get("actual") or {}
+            actual_dir = actual.get("dir", "output_dir")
+            actual_pattern = actual.get("pattern", "*")
+            matching_collect = [
+                c for c in (case.collect or {}).get("files", [])
+                if isinstance(c, dict)
+                and c.get("dir", "output_dir") == actual_dir
+                and c.get("pattern", "*") == actual_pattern
+                and c.get("preview") is True
+            ]
+            if not matching_collect:
+                problems.append(
+                    "assert.files の目視確認 (%s / %s) に対応する証跡がありません。"
+                    "collect.files に同じ dir / pattern と preview: true を指定してください。"
+                    % (actual_dir, actual_pattern))
 
     return problems
 
@@ -983,12 +1018,20 @@ class CaseRunner:
     def _assert_exit_code(self, spec: dict, result: CaseResult) -> CheckResult:
         if "exit_code" not in spec:
             return CheckResult("終了コード確認", "exit_code", SKIP, "期待値の指定なし")
-        expected = spec["exit_code"]
+        exit_spec = spec["exit_code"]
+        if isinstance(exit_spec, dict):
+            expected = exit_spec["expected"]
+            manual = exit_spec.get("manual") is True
+        else:
+            expected = exit_spec
+            manual = False
         actual = result.execution.exit_code
         if result.execution.timed_out:
             return CheckResult("終了コード確認", "exit_code", NG, "タイムアウトにより異常終了")
         if actual == expected:
-            return CheckResult("終了コード確認", "exit_code", OK, f"終了コード = {actual}")
+            return _apply_manual(
+                CheckResult("終了コード確認", "exit_code", OK, f"終了コード = {actual}"),
+                manual)
         return CheckResult("終了コード確認", "exit_code", NG, f"期待 {expected} に対し実績 {actual}")
 
     def _assert_db(self, spec: dict, result: CaseResult) -> List[CheckResult]:
@@ -1004,7 +1047,7 @@ class CaseRunner:
                     )
                 )
                 continue
-            manual = bool(item.get("manual"))
+            manual = item.get("manual") is True
 
             # 期待値なしで manual: true の場合、自動比較はせず証跡だけ残して人が見る
             if manual and not item.get("expected"):
@@ -1033,7 +1076,9 @@ class CaseRunner:
             name = item.get("name") or item.get("expected") or "ファイル"
 
             if "exists" in item:
-                checks.append(self._assert_file_exists(name, item["exists"]))
+                checks.append(_apply_manual(
+                    self._assert_file_exists(name, item["exists"]),
+                    item.get("manual") is True))
                 continue
 
             actual_spec = item.get("actual") or {}
@@ -1060,7 +1105,7 @@ class CaseRunner:
                 )
                 continue
             actual_path = matches[0]
-            manual = bool(item.get("manual"))
+            manual = item.get("manual") is True
 
             # 期待値なしで manual: true の場合、内容を証跡に残して人が判断する
             if manual and not item.get("expected"):
@@ -1102,6 +1147,11 @@ class CaseRunner:
 
         must = list(log_spec.get("must_contain") or [])
         must_not = list(log_spec.get("must_not_contain") or [])
+        manual = log_spec.get("manual") is True
+        if manual and not must and not must_not:
+            return CheckResult(
+                "ログ確認", "log", REVIEW,
+                "自動判定なし。本実行で採取したログを目視で確認してください。")
         missing, forbidden = logs.check_keywords(log_slices, must, must_not)
 
         problems = []
@@ -1111,7 +1161,7 @@ class CaseRunner:
             problems.append(f"禁止キーワード検出: {forbidden}")
         if problems:
             return CheckResult("ログ確認", "log", NG, " / ".join(problems))
-        return CheckResult(
+        return _apply_manual(CheckResult(
             "ログ確認", "log", OK,
             f"必須 {len(must)} 件すべて検出 / 禁止 {len(must_not)} 件すべて未検出",
-        )
+        ), manual)

@@ -3,8 +3,9 @@
 過去のログを丸ごと証跡に貼ると読めないので、当該実行の行だけを抽出する。
 切り出しは信頼できる順に 3 段構え:
   1) バイトオフセット差分 — 実行前にファイルサイズを控え、増分だけ読む（最も確実）
-  2) タイムスタンプ絞り込み — 新規/ローテートされたファイルは行頭時刻で絞る
-  3) 全文（末尾 N 行） — 上記が使えない場合の保険
+  2) 新規ファイル全文 — 実行前に無かったファイルは全行が今回分（先頭行も残す）
+  3) タイムスタンプ絞り込み — ローテートされたファイルは行頭時刻で絞る
+  4) 全文（末尾 N 行） — 上記が使えない場合の保険
 """
 
 import hashlib
@@ -57,7 +58,7 @@ class LogSlice:
         self,
         path: Path,
         lines: Optional[List[str]] = None,
-        method: str = "",  # offset | timestamp | full
+        method: str = "",  # offset | new | timestamp | full
         total_lines_before_trim: int = 0,
     ) -> None:
         self.path = path
@@ -191,6 +192,8 @@ def collect(
             seen.add(path)
 
             before = offsets.get(path)
+            is_new_file = before is None
+            rotated = False
             try:
                 current_size = path.stat().st_size
             except OSError:
@@ -202,6 +205,8 @@ def collect(
                 if head_len > 0 and (current_size < head_len
                                      or _head_signature(path, current_size, head_len)[1] != head_sig):
                     before = None  # 中身が入れ替わった → 先頭から読み直す
+                    is_new_file = False
+                    rotated = True
 
             if before is not None and current_size > before[0]:
                 lines = _read_from_offset(path, before[0], encoding, fallbacks)
@@ -210,9 +215,12 @@ def collect(
                 continue  # 増えていない = この実行とは無関係
             else:
                 text = read_text_file(path, encoding, fallbacks)
-                lines = text.splitlines()
-                method = "full"
-                if cfg.get("timestamp_regex") and started_at:
+                lines = _strip_initial_bom(text.splitlines())
+                # 実行前に存在しなかったファイルは、本実行中に作られたものなので
+                # 全行が今回分。時刻フィルタを掛けると C# StreamWriter の UTF-8 BOM や
+                # タイムスタンプ無しのヘッダ行により、まさに先頭行だけが落ちる。
+                method = "new" if is_new_file else "full"
+                if rotated and cfg.get("timestamp_regex") and started_at:
                     filtered = _filter_by_time(lines, cfg, started_at, finished_at)
                     if filtered:
                         lines, method = filtered, "timestamp"
@@ -232,10 +240,22 @@ def _read_from_offset(path: Path, offset: int, encoding: str, fallbacks: List[st
         raw = f.read()
     for enc in [encoding, *fallbacks]:
         try:
-            return raw.decode(enc).splitlines()
+            return _strip_initial_bom(raw.decode(enc).splitlines())
         except (UnicodeDecodeError, LookupError):
             continue
-    return raw.decode(encoding or "utf-8", errors="replace").splitlines()
+    return _strip_initial_bom(raw.decode(encoding or "utf-8", errors="replace").splitlines())
+
+
+def _strip_initial_bom(lines: List[str]) -> List[str]:
+    """UTF 系ログの先頭 BOM を本文から外す。
+
+    `encoding: utf-8` で UTF-8 BOM 付きファイルを読むと、デコード自体は成功するため
+    fallback の `utf-8-sig` へ進まず、先頭行に U+FEFF が残る。行頭正規表現と
+    must_contain の完全一致を壊さないよう、ファイル先頭に限って除去する。
+    """
+    if lines and lines[0].startswith("\ufeff"):
+        lines[0] = lines[0][1:]
+    return lines
 
 
 def _filter_by_time(
@@ -282,6 +302,7 @@ def to_table(
     """
     method_label = {
         "offset": "実行による増分",
+        "new": "本実行中新規作成（全文）",
         "timestamp": "実行時間帯で抽出",
         "full": "全文",
     }.get(sl.method, sl.method)

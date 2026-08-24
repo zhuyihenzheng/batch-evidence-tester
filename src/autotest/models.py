@@ -72,6 +72,9 @@ class CheckResult:
         verdict: str,  # OK | NG | SKIP | ERROR
         detail: str = "",
         diff_table: Optional[Table] = None,
+        confirmation_result: str = "",
+        confirmation_by: str = "",
+        confirmation_at: str = "",
     ) -> None:
         self.name = name
         self.category = category
@@ -79,13 +82,28 @@ class CheckResult:
         self.detail = detail
         # NG の根拠として Excel に展開する差分表
         self.diff_table = diff_table
+        # 自動判定は上書きせず、人による最終確認を別フィールドで保持する。
+        # 監査時に「機械が何を判定し、人が何を確定したか」を分けて読めるようにする。
+        self.confirmation_result = confirmation_result
+        self.confirmation_by = confirmation_by
+        self.confirmation_at = confirmation_at
+
+    @property
+    def effective_verdict(self) -> str:
+        if self.verdict == REVIEW and self.confirmation_result in (OK, NG):
+            return self.confirmation_result
+        return self.verdict
 
     @property
     def is_ng(self) -> bool:
-        return self.verdict in (NG, ERROR)
+        return self.effective_verdict in (NG, ERROR)
 
     @property
     def needs_review(self) -> bool:
+        return self.verdict == REVIEW and self.confirmation_result not in (OK, NG)
+
+    @property
+    def is_reviewable(self) -> bool:
         return self.verdict == REVIEW
 
 
@@ -154,7 +172,7 @@ class CaseResult:
         # 人の確認待ちが 1 つでもあれば、ケース全体を確定させない
         if any(c.needs_review for c in self.checks):
             return REVIEW
-        if all(c.verdict == SKIP for c in self.checks):
+        if all(c.effective_verdict == SKIP for c in self.checks):
             return SKIP
         return OK
 
@@ -219,6 +237,10 @@ class RunResult:
         """
         if self.ng_count:
             return NG
+        # mode: manual の未採取ケースが残っている実行は、自动分が全 OK でも
+        # テスト全体として未確定。表示だけでなく終了コードも REVIEW(3) にする。
+        if self.manual_pending:
+            return REVIEW
         if not self.cases:
             return SKIP
         # 確認待ちが残っている間は合格にしない（人が見て初めて確定する）
@@ -230,4 +252,4 @@ class RunResult:
 
     @property
     def review_count(self) -> int:
-        return sum(1 for c in self.cases if c.verdict == REVIEW)
+        return sum(1 for c in self.cases if c.verdict == REVIEW) + len(self.manual_pending)

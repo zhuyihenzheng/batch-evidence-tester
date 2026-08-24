@@ -97,6 +97,19 @@ class TestCaseResultRoundTrip(TmpRunDir):
         self.assertIsNotNone(check.diff_table)
         self.assertEqual(check.diff_table.rows, [["相違", "100", "200"]])
 
+    def test_human_confirmation_survives(self):
+        original = make_case_result(verdict=REVIEW)
+        original.checks[0].confirmation_result = OK
+        original.checks[0].confirmation_by = "山田"
+        original.checks[0].confirmation_at = "2026-08-15"
+        result_store.save_case_result(original, self.run_dir)
+        got = self._reload().cases[0].checks[0]
+        self.assertEqual(got.verdict, REVIEW, "自動判定は上書きしないこと")
+        self.assertEqual(got.confirmation_result, OK)
+        self.assertEqual(got.confirmation_by, "山田")
+        self.assertEqual(got.confirmation_at, "2026-08-15")
+        self.assertEqual(self._reload().verdict, OK)
+
     def test_image_paths_are_relative_so_the_folder_can_move(self):
         """証跡フォルダごと別の場所へ移しても画像を見失わないこと。"""
         evidence = self.run_dir / "evidence" / "TC001"
@@ -204,6 +217,8 @@ class TestMergeRuns(unittest.TestCase):
             ["r1", "manual_TC008"])
         self.assertEqual(merged.manual_pending, ["TC009"])
         self.assertEqual(merged.total_available, 3, "未採取分も全体件数に数える")
+        self.assertEqual(merged.verdict, REVIEW, "未採取が残るのに合格を返さないこと")
+        self.assertEqual(merged.review_count, 1)
 
     def test_mixed_environments_are_flagged(self):
         """別環境の結果を 1 冊にすると、どの環境の結果か分からなくなる。"""

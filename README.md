@@ -41,7 +41,7 @@ C# 制 batch（无界面 .exe）的自动化测试工具。运行环境：**Wind
 | 决策 | 做法 | 理由 |
 |---|---|---|
 | **证据图用代码渲染**（非屏幕截图） | PIL 画成 Explorer 窗口的样子 | 不需要交互式登录会话 → 可挂タスクスケジューラ无人值守跑；同输入同输出，可复现；不受分辨率和窗口位置影响 |
-| **日志只取增量** | 执行前记字节偏移，执行后只读新增部分 | 避免把历史日志全贴进证据。文件被 rotate 时降级为「时间戳过滤」，再降级为「全文」 |
+| **日志只取增量** | 执行前记字节偏移，执行后只读新增部分 | 避免把历史日志全贴进证据。执行中首次创建的日志取全文；同名 rotate 时降级为「时间戳过滤」，再降级为「全文」 |
 | **文件夹用论理名** | 用例只写 `input_dir`，物理路径只在 settings 里 | 换环境只改一个文件；且 `clean_dirs` 只接受论理名，防止设定失误清掉无关目录 |
 
 > 如果确实需要真实的 Explorer 窗口截图，把 `evidence.mode` 改成 `screen` 或 `both`，
@@ -328,6 +328,83 @@ assert:                                   # ⑨ 判定
 **期待值文件怎么来**：第一次跑通后，从 `output\<run_id>\artifacts\` 取实际输出、
 从 Excel 的「実行後」DB 表复制成 CSV，人工确认无误后放进 `expected\` 当基线。
 之后每次回归就是全自动的。
+
+### 期待结果需要人工确认：`manual: true`
+
+Batch 本身仍由工具自动执行，只把某个判定项留给人最终确认时，在该项加
+`manual: true`。这和后文的 `mode: manual` 不同：
+
+| 写法 | Batch 怎么执行 | 人确认什么 |
+|---|---|---|
+| `assert` 项里的 `manual: true` | `autotest run` 自动执行 | 只有指定的判定项 |
+| 用例顶层的 `mode: manual` | 人手动执行，before / after 分两次采集 | 整个用例 |
+
+DB 没有期待值、完全看执行前后证迹：
+
+```yaml
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: "SELECT ORDER_ID, STATUS, AMOUNT FROM T_ORDER ORDER BY ORDER_ID"
+assert:
+  db:
+    - table: T_ORDER
+      manual: true
+```
+
+DB 先自动比较，比较一致后仍由人最终确认：
+
+```yaml
+assert:
+  db:
+    - table: T_ORDER
+      expected: "expected/TC001/db_T_ORDER.csv"
+      key: [ORDER_ID]
+      manual: true
+```
+
+文件内容需要人工确认时，必须同时回收并预览同一个 `dir / pattern`，否则 Excel 里没有
+可供确认的内容，`validate` 会拦下来：
+
+```yaml
+collect:
+  files:
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+assert:
+  files:
+    - name: "結果ファイル内容"
+      actual: {dir: output_dir, pattern: "RESULT_*.csv"}
+      manual: true
+```
+
+有期待文件时，可在原来的文件比对项上直接加 `manual: true`，并保留同样的
+`collect.files + preview: true`。文件件数、日志和退出码也支持人工复核：
+
+```yaml
+assert:
+  exit_code: {expected: 0, manual: true}
+  files:
+    - name: "処理済ファイル件数"
+      exists: {dir: processed_dir, pattern: "*.csv", count: 1}
+      manual: true
+  log:
+    must_contain: ["処理正常終了"]
+    must_not_contain: ["Exception"]
+    manual: true
+```
+
+规则固定如下：自动判定为 NG 时仍是 **NG**，人工不能覆盖；自动判定一致时才变成
+「要確認」，退出码为 `3`。YAML 的 `manual` 只能写不带引号的 `true / false`；拼错字段
+或写成 `"false"` 会作为配置错误停止，不会静默忽略。
+
+人工确认的闭环顺序是：
+
+```text
+run / manual 采集 → report 合并（如有多个 run）→ 在最终 Excel 黄色栏填写
+→ finalize 校验并生成最终 Excel + 审计 JSON
+```
 
 ### 不同输入文件怎么组织
 
@@ -709,7 +786,8 @@ python -m autotest manual --case TC008_締め処理_手動 --phase after
 | `exit_code` | 一律 SKIP。手动起动取不到退出码，**也不接受你自己填**（填了就等于用没法验证的值发合格证） |
 | 退出码 | `3`（要確認） |
 
-Excel 里那一 sheet 的判定栏是黄色的，人看完证迹在里面写结论。
+Excel 里那一 sheet 的判定栏是黄色的。若还要和自动执行分合并，**此时先不要填写**；
+先执行下面的 `report`，只在合并后的最终 Excel 里填写，避免重建工作簿时丢失手填内容。
 
 > `mode: manual` 的用例不能用 `setup.replace_files` 和 `setup.db_lock`。
 > 这两个功能靠自动执行的 `finally` 保证「一定还原 / 一定释放」，而 before 和 after
@@ -721,6 +799,9 @@ Excel 里那一 sheet 的判定栏是黄色的，人看完证迹在里面写结�
 実行ケース数     | 6
 手動実施ケース   | 1 件 未採取（autotest manual で採取してください）: TC008_締め処理_手動
 ```
+
+只要还有未采集的手动用例，这一轮总合判定就是「要確認」、退出码为 `3`；自动部分全 OK
+也不会先返回成功。手动用例采集并合并后才重新计算总合判定。
 
 ### 把自动分和手动分合成一册提出用证迹
 
@@ -742,6 +823,27 @@ python -m autotest report ^
 > 附带好处：某一轮跑到一半崩了，已完成的用例结果也还在，可以直接 `report` 出册。
 
 **退出码**和 run 一致：`0`=全 OK、`1`=有 NG、`3`=有要確認。
+
+### 人工确认完成后生成最终判定
+
+先在 `report` 生成的 Excel 黄色栏中把每一项的「確認結果（OK/NG）／確認者／確認日」
+填完整，然后运行：
+
+```cmd
+python -m autotest finalize ^
+    --run 20260807_154253_817 ^
+    --run manual_TC008_締め処理_手動_20260807_154307_566 ^
+    --excel output\提出用.xlsx ^
+    --out output\提出用_final.xlsx
+```
+
+`finalize` 会验证 Excel 确实属于指定的 run、所有黄色栏都已填写、结果只能是 OK/NG、
+确认者和确认日不能为空。自动 NG 不能被人工覆盖。成功后输出：
+
+- `提出用_final.xlsx`：保留原始「自動判定」，并列显示人工确认和最终总合判定。
+- `提出用_final.review.json`：来源 run、确认明细、确认前 Excel 的 SHA-256 和最终判定。
+
+最终全 OK 的退出码为 `0`，任何自动 NG 或人工 NG 为 `1`，输入不完整或 Excel 不匹配为 `2`。
 
 ---
 
@@ -770,7 +872,7 @@ AUTO_TEST_BATCH\
 
 | 模块 | 职责 |
 |---|---|
-| `cli.py` | 命令行入口（`run` / `validate` / `list` / `new` / `copy` / `manual` / `report` / `gui`） |
+| `cli.py` | 命令行入口（`run` / `validate` / `list` / `new` / `copy` / `manual` / `report` / `finalize` / `gui`） |
 | `config.py` | 读取校验 settings 与用例；文件夹论理名 → 物理路径解析 |
 | `orchestrator.py` | 单个用例的生命周期编排（上图 ①〜⑨） |
 | `db.py` | SQL Server 连接、快照取得、值格式化；offline 模式的 CSV 替身 |
@@ -784,6 +886,7 @@ AUTO_TEST_BATCH\
 | `gui.py` | 操作画面（tkinter）。执行是 subprocess 调 CLI，不另起编排路径 |
 | `scaffold.py` | 从模板建用例 / 复制既有用例 |
 | `manual.py` | 手动实施用例的 before/after 中间状态（session.json） |
+| `review.py` | 读取 Excel 人工确认、校验完整性并输出最终判定和审计 JSON |
 | `result_store.py` | 判定结果的序列化。`report` 靠它重建合并的 Excel |
 
 ---
@@ -793,6 +896,7 @@ AUTO_TEST_BATCH\
 | 项目 | 说明 |
 |---|---|
 | **文字编码** | .exe 控制台输出多为 cp932，日志文件可能是 UTF-8 或 cp932。`batch.console_encoding` 和 `log.encoding` + `encoding_fallbacks` 分别指定，读取失败依次降级不会崩。控制台显示乱码时先 `chcp 65001` |
+| **首次创建日志** | 执行前不存在、由 Batch 首次创建的日志会整份作为本次证迹，并自动去掉 UTF-8 BOM。即使第一行没有时间戳也不会再被过滤掉 |
 | **字体** | 证据图用 `C:\Windows\Fonts\meiryo.ttc`（`evidence.font_candidates` 第一顺位），日文 Windows 标配 |
 | **文件被占用** | 清空文件夹时若 batch、Explorer、编辑器或杀软仍握着句柄会失败，报错会指出具体文件。只读属性会自动解除后重试 |
 | **路径** | YAML 里用正斜杠 `C:/app/batch` 即可，Python 在 Windows 下同样识别。相对路径一律以项目根目录为基准，不受启动目录影响 |

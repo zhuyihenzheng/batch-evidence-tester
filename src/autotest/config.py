@@ -280,6 +280,13 @@ SETUP_KEYS = {"clean_dirs", "remove_dirs", "sql", "input_files", "replace_files"
 COLLECT_KEYS = {"files", "folder_evidence"}
 EXECUTE_KEYS = {"batch", "args", "date", "expected_exit_code"}
 ASSERT_KEYS = {"exit_code", "db", "files", "log"}
+DB_ASSERT_KEYS = {"table", "expected", "key", "ignore_columns", "manual"}
+FILE_ASSERT_KEYS = {"name", "actual", "expected", "encoding", "ignore_line_patterns",
+                    "exists", "manual"}
+FILE_ACTUAL_KEYS = {"dir", "pattern"}
+FILE_EXISTS_KEYS = {"dir", "pattern", "count"}
+LOG_ASSERT_KEYS = {"must_contain", "must_not_contain", "manual"}
+EXIT_CODE_ASSERT_KEYS = {"expected", "manual"}
 
 
 def _as_bool(value: Any, where: str) -> bool:
@@ -308,6 +315,97 @@ def _check_unknown_keys(data: Dict[str, Any], allowed: set, where: str, path: Pa
         return []
     return ["%s: 未知の項目 %s（綴り間違いの可能性。使える項目: %s）"
             % (where, sorted(unknown), sorted(allowed))]
+
+
+def _check_manual(value: Any, where: str) -> List[str]:
+    """manual は厳密な YAML boolean だけを受け付ける。
+
+    bool("false") は True になるため、文字列を許すと利用者の指定と逆の動作に
+    なり得る。綴り間違いと同じく、実行前に設定エラーとして止める。
+    """
+    if value is None or isinstance(value, bool):
+        return []
+    return ["%s は true / false で指定してください（引用符は付けないでください。指定値: %r）"
+            % (where, value)]
+
+
+def _validate_assertions(assertions: Dict[str, Any], path: Path) -> List[str]:
+    """assert 配下を項目単位で検証し、書いたのに効かない設定を作らせない。"""
+    problems: List[str] = []
+
+    exit_code = assertions.get("exit_code")
+    if isinstance(exit_code, dict):
+        problems += _check_unknown_keys(
+            exit_code, EXIT_CODE_ASSERT_KEYS, "assert.exit_code", path)
+        problems += _check_manual(exit_code.get("manual"), "assert.exit_code.manual")
+        if "expected" not in exit_code:
+            problems.append("assert.exit_code に expected がありません")
+        elif not isinstance(exit_code.get("expected"), int) or isinstance(exit_code.get("expected"), bool):
+            problems.append("assert.exit_code.expected は整数で指定してください")
+    elif exit_code is not None and (not isinstance(exit_code, int) or isinstance(exit_code, bool)):
+        problems.append("assert.exit_code は整数、または {expected: 整数, manual: true} で指定してください")
+
+    db_items = assertions.get("db", [])
+    if db_items is None:
+        db_items = []
+    if not isinstance(db_items, list):
+        problems.append("assert.db はリストで指定してください")
+    else:
+        for i, item in enumerate(db_items):
+            where = "assert.db[%d]" % i
+            if not isinstance(item, dict):
+                problems.append("%s はマッピングで指定してください: %r" % (where, item))
+                continue
+            problems += _check_unknown_keys(item, DB_ASSERT_KEYS, where, path)
+            problems += _check_manual(item.get("manual"), where + ".manual")
+            if not item.get("table"):
+                problems.append("%s に table がありません" % where)
+            if not item.get("expected") and item.get("manual") is not True:
+                problems.append("%s に expected がありません（目視確認なら manual: true を指定してください）"
+                                % where)
+
+    file_items = assertions.get("files", [])
+    if file_items is None:
+        file_items = []
+    if not isinstance(file_items, list):
+        problems.append("assert.files はリストで指定してください")
+    else:
+        for i, item in enumerate(file_items):
+            where = "assert.files[%d]" % i
+            if not isinstance(item, dict):
+                problems.append("%s はマッピングで指定してください: %r" % (where, item))
+                continue
+            problems += _check_unknown_keys(item, FILE_ASSERT_KEYS, where, path)
+            problems += _check_manual(item.get("manual"), where + ".manual")
+            has_actual = "actual" in item
+            has_exists = "exists" in item
+            if has_actual == has_exists:
+                problems.append("%s は actual または exists のどちらか一方を指定してください" % where)
+                continue
+            location_key = "actual" if has_actual else "exists"
+            location = item.get(location_key)
+            if not isinstance(location, dict):
+                problems.append("%s.%s はマッピングで指定してください" % (where, location_key))
+                continue
+            problems += _check_unknown_keys(
+                location, FILE_ACTUAL_KEYS if has_actual else FILE_EXISTS_KEYS,
+                "%s.%s" % (where, location_key), path)
+            if has_actual and not item.get("expected") and item.get("manual") is not True:
+                problems.append("%s に expected がありません（目視確認なら manual: true を指定してください）"
+                                % where)
+            if has_exists and any(key in item for key in ("expected", "encoding", "ignore_line_patterns")):
+                problems.append("%s の exists 判定では expected / encoding / ignore_line_patterns は使えません"
+                                % where)
+
+    log_spec = assertions.get("log")
+    if log_spec is not None:
+        if not isinstance(log_spec, dict):
+            problems.append("assert.log はマッピングで指定してください")
+        else:
+            problems += _check_unknown_keys(log_spec, LOG_ASSERT_KEYS, "assert.log", path)
+            problems += _check_manual(log_spec.get("manual"), "assert.log.manual")
+
+    return problems
 
 
 def validate_case_id(case_id: Any) -> List[str]:
@@ -395,9 +493,12 @@ def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> Lis
     else:
         problems.append("collect はマッピングで指定してください")
 
-    assertions = data.get("assert") or {}
+    assertions = data.get("assert")
+    if assertions is None:
+        assertions = {}
     if isinstance(assertions, dict):
         problems += _check_unknown_keys(assertions, ASSERT_KEYS, "assert", path)
+        problems += _validate_assertions(assertions, path)
     else:
         problems.append("assert はマッピングで指定してください")
 

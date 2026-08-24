@@ -93,10 +93,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autotest", description="batch(.exe) 自動テスト実行ツール")
     parser.add_argument("command",
                         choices=["run", "validate", "list", "dbcheck", "new", "copy",
-                                 "manual", "report", "gui"],
+                                 "manual", "report", "finalize", "gui"],
                         help="実行するコマンド（gui: 操作画面を開く / new: ひな形からケース作成 / "
                              "copy: 既存ケースの複製 / manual: 手動実施ケースの証跡採取 / "
-                             "report: 証跡の結合 / dbcheck: SQL Server へ実際に接続できるか確認）")
+                             "report: 証跡の結合 / finalize: 人工確認済み Excel の確定 / "
+                             "dbcheck: SQL Server へ実際に接続できるか確認）")
     parser.add_argument("--id", default=None, help="new / copy で作るケースID")
     parser.add_argument("--template", default="normal",
                         help="new で使うひな形（templates/ の名前。既定: normal）")
@@ -109,7 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force-new", action="store_true",
                         help="manual --phase before で、未完了の作業があっても新しく始める")
     parser.add_argument("--run", action="append", dest="runs",
-                        help="report で結合する実行フォルダ（output 配下の名前。複数指定可）")
+                        help="report / finalize で使う実行フォルダ（output 配下の名前。複数指定可）")
+    parser.add_argument("--excel", default=None,
+                        help="finalize で読む、確認結果を記入済みの Excel")
     parser.add_argument("--config", default=None,
                         help="設定ファイル（既定: config/settings.local.yaml があればそれ、無ければ settings.yaml）")
     parser.add_argument("--cases-dir", default=None, help="ケース定義フォルダ（既定: <プロジェクトルート>/cases）")
@@ -600,10 +603,11 @@ def _manual(args, settings, cases, out_dir: Path) -> int:
     print("証跡Excel: %s" % excel_path)
     print("作業フォルダ: %s" % session_dir)
     print("\n※ 手動実施ケースは自動では合格になりません。")
-    print("  Excel の黄色い欄に確認結果を記入してください。")
+    print("  自動実行分と結合する場合は、先に report してから結合後 Excel の黄色欄を記入してください。")
     print("\n自動実行分と 1 冊にまとめる:")
     print("  python -m autotest report --run <自動実行のrun_id> --run %s --out output/提出用.xlsx"
           % session_dir.name)
+    print("  記入後は finalize で最終判定と監査 JSON を生成します。")
     if result.ng_count:
         return 1
     return 3
@@ -659,8 +663,65 @@ def _report(args, settings, out_dir: Path) -> int:
           % (merged.verdict, merged.ok_count, merged.ng_count, merged.review_count))
     print("証跡Excel: %s" % excel_path)
     if merged.verdict == REVIEW:
+        if merged.manual_pending:
+            print("次の手順: 未採取の手動実施ケースを先に採取してください: %s"
+                  % ", ".join(merged.manual_pending))
+            print("  python -m autotest manual --case %s --phase before"
+                  % merged.manual_pending[0])
+        else:
+            print("次の手順: この Excel の黄色欄をすべて記入して finalize を実行してください。")
+            print("  python -m autotest finalize %s --excel %s"
+                  % (" ".join("--run %s" % name for name in args.runs), excel_path))
         return 3
     return 0 if merged.verdict == OK else 1
+
+
+def _finalize(args, settings, out_dir: Path) -> int:
+    """Excel の人工確認欄を検証し、最終証跡と監査 JSON を生成する。"""
+    from . import review
+
+    if not args.runs:
+        print("[設定エラー] --run で元の実行フォルダを指定してください（複数指定可）",
+              file=sys.stderr)
+        return 2
+    if not args.excel:
+        print("[設定エラー] --excel で確認結果を記入済みの Excel を指定してください",
+              file=sys.stderr)
+        return 2
+
+    runs = []
+    sources = []
+    try:
+        for name in args.runs:
+            run_dir = Path(name)
+            if not run_dir.is_absolute():
+                run_dir = out_dir / name
+            if not run_dir.is_dir():
+                raise ConfigError("実行フォルダがありません: %s" % run_dir)
+            runs.append(result_store.load_run_dir(run_dir))
+            sources.append(run_dir.name)
+        run = runs[0] if len(runs) == 1 else result_store.merge_runs(runs, sources)
+
+        input_excel = Path(args.excel).resolve()
+        confirmations = review.apply_excel_confirmations(run, input_excel)
+        out_path = (Path(args.out).resolve() if args.out else
+                    input_excel.with_name(input_excel.stem + "_final.xlsx"))
+        if out_path == input_excel:
+            raise ConfigError("finalize の出力先は確認入力 Excel と別名にしてください（原本保全のため）")
+        excel_path = build_workbook(run, out_path, settings.excel)
+        audit_path = review.write_audit(
+            excel_path.with_suffix(".review.json"), run, sources, input_excel, confirmations)
+    except ConfigError as exc:
+        print("[設定エラー] %s" % exc, file=sys.stderr)
+        return 2
+
+    print("=" * 60)
+    print("人工確認 : %d 件を確定" % len(confirmations))
+    print("最終判定 : %s   OK %d / NG %d / 要確認 %d"
+          % (run.verdict, run.ok_count, run.ng_count, run.review_count))
+    print("最終Excel: %s" % excel_path)
+    print("監査JSON : %s" % audit_path)
+    return 0 if run.verdict == OK else 1
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -711,6 +772,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "report":
         return _report(args, settings, default_out_dir)
+
+    if args.command == "finalize":
+        return _finalize(args, settings, default_out_dir)
 
     out_dir = Path(args.out).resolve() if args.out else default_out_dir
 
@@ -836,9 +900,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{_config_option(args)}")
     if run.verdict == "SKIP":
         print("※ 実際に判定されたケースがありません（全件 SKIP）。終了コードは 1 になります。")
-    if run.review_count:
-        print(f"※ {run.review_count} 件が人の確認待ちです。証跡 Excel の黄色い欄に")
-        print("   確認結果を記入してください。確認が済むまで合格とはしません（終了コード 3）。")
+    assertion_reviews = sum(1 for case in run.cases if case.verdict == REVIEW)
+    if assertion_reviews:
+        print(f"※ {assertion_reviews} 件が人の確認待ちです。証跡 Excel の黄色い欄に")
+        print("   確認結果を記入し、finalize してください。確認が済むまで合格とはしません（終了コード 3）。")
     print(f"証跡Excel: {excel_path}")
     print(f"証跡画像 : {run_dir / 'evidence'}")
     print(f"回収物   : {run_dir / 'artifacts'}")

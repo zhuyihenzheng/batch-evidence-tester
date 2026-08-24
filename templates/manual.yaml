@@ -67,6 +67,7 @@ assert:
   #     expected: "expected/{case_id}/db_T_ORDER.csv"
   #     key: [ORDER_ID]
   #     ignore_columns: [UPDATED_AT]
+  #     manual: true                  # 項目自体も明示的な目視対象にする場合
 
   # 期待値を作れない／作る意味が薄い場合は manual: true にすると、
   # 実行前後のスナップショットだけを証跡に残して人が目視で判定する
@@ -77,6 +78,11 @@ assert:
   files:
     - name: "処理済フォルダへの移動"
       exists: {dir: processed_dir, pattern: "*.csv", count: 1}
+
+    # 期待値を持たず、collect.files で採った内容を目視確認する例
+    # - name: "結果ファイル内容"
+    #   actual: {dir: output_dir, pattern: "*.csv"}
+    #   manual: true
 
   log:
     must_not_contain: ["Exception"]

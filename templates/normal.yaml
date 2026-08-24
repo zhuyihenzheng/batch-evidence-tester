@@ -67,6 +67,12 @@ assert:
   #     expected: "expected/{case_id}/db_T_ORDER.csv"
   #     key: [ORDER_ID]
   #     ignore_columns: [UPDATED_AT]  # 実行時刻に依存する列は除外する
+  #     manual: true                  # 一致しても人が最終確認する場合
+  #
+  # 期待値を作らず、実行前後の DB 証跡を人が確認する場合:
+  # db:
+  #   - table: T_ORDER                # snapshot.tables に同名の定義が必要
+  #     manual: true
 
   files:
     # 「ファイルが出た / 移動した」という事実の確認は期待値なしで書ける
@@ -79,6 +85,10 @@ assert:
     #   expected: "expected/{case_id}/RESULT.csv"
     #   encoding: cp932
     #   ignore_line_patterns: ['^#作成日時']   # 時刻など毎回変わる行は除外
+    #   manual: true                  # 自動比較一致後も人が最終確認（同じ collect + preview が必須）
+    #
+    # 期待ファイル無しで目視確認する場合は expected を省き manual: true にする。
+    # その場合、上の collect.files に同じ dir / pattern と preview: true が必須。
 
   log:
     must_contain: ["処理正常終了"]

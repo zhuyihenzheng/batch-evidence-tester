@@ -278,7 +278,9 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
     # --- 判定明細 ---------------------------------------------------------
     row = _section(ws, row, section_no.next("判定明細"))
     # 要確認の項目がある場合だけ、人が書き込む欄を用意する
-    has_review = any(c.needs_review for c in case.checks)
+    # finalize 後も自動判定 REVIEW と人の確認結果を両方残す。確認済みだからと
+    # 列を消すと、誰が何を根拠に確定したか追えなくなる。
+    has_review = any(c.is_reviewable for c in case.checks)
     headers = ["No", "確認項目", "分類", "自動判定", "内容"]
     if has_review:
         headers += ["確認結果", "確認者", "確認日"]
@@ -296,22 +298,35 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
         vc.alignment = Alignment(horizontal="center")
 
         if has_review:
-            # 要確認の行だけ記入欄を色付けする。自動判定済みの行は塗らない
-            for col in range(6, 9):
-                cell = ws.cell(row, col, "")
+            values = [check.confirmation_result, check.confirmation_by, check.confirmation_at]
+            # 要確認の行だけ記入欄を用意する。自動判定済みの行は空欄のまま。
+            for col, value in zip(range(6, 9), values):
+                cell = _safe_cell(ws, row, col, value if check.is_reviewable else "")
                 cell.border = BORDER
                 if check.needs_review:
                     cell.fill = FILL_INPUT
+            if check.confirmation_result in (OK, NG):
+                result_cell = ws.cell(row, 6)
+                result_cell.fill = VERDICT_FILL[check.confirmation_result]
+                result_cell.font = VERDICT_FONT[check.confirmation_result]
+                result_cell.alignment = Alignment(horizontal="center")
         row += 1
     if not case.checks:
         ws.cell(row, 1, "（判定項目なし: 証跡採取のみ）").font = F_BODY
         row += 1
-    if has_review:
+    if any(c.needs_review for c in case.checks):
         note = ws.cell(row, 1,
                        "※「要確認」の項目は自動判定では確定しません。"
                        "下の証跡（DB スナップショット・実行ログ・証跡画像）を確認のうえ、"
                        "黄色の欄に確認結果（OK/NG）・確認者・確認日を記入してください。")
         note.font = Font(name="Meiryo UI", size=9, color="9C5700")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        row += 1
+    elif has_review:
+        note = ws.cell(row, 1,
+                       "※人工確認済み。自動判定は上書きせず、確認結果・確認者・確認日を"
+                       "監査情報として併記しています。")
+        note.font = Font(name="Meiryo UI", size=9, color="006100")
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
         row += 1
     row += 1
