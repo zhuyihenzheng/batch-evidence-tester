@@ -96,12 +96,22 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertEqual([field.field_id for field in fields],
                          ["1001", "1002", "1003", "1004", "1005", "1006", "1007",
                           "2001", "2002", "2003", "2004"])
-        self.assertEqual([field.value for field in fields],
-                         ["傷病名1", "1", "1.2", "5/8/6/1", "5/8/6/1",
-                          "5/8/6/1", "5/8/6/1", "5/8/6/1", "/2026/6/1",
-                          "5/2026/6/1", "5/8/6/1|5/8/6/2"])
+        self.assertEqual([field.value for field in fields[:6]],
+                         ["傷病名1", "1", "1", "5/8/6/1", "5/8/6/1",
+                          "5/8/6/1"])
+        calendar_values = fields[6].value.split("|")
+        self.assertEqual(len(calendar_values), 46)
+        self.assertEqual(calendar_values[0], "5/8/6/1")
+        self.assertEqual(calendar_values[-1], "5/8/7/16")
+        self.assertEqual([field.value for field in fields[7:]],
+                         ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
+                          "5/8/6/1|5/8/6/2"])
         self.assertEqual([field.attribute_flag for field in fields],
                          ["0"] * 11)
+        self.assertEqual(
+            [field.coordinates for field in fields],
+            [",".join(str(index * 4 + offset) for offset in range(1, 5))
+             for index in range(11)])
 
     def test_column_can_be_selected_by_header_or_letter(self):
         fields, _sheet, _header, columns = read_layout_fields(
@@ -143,14 +153,47 @@ class TestValueGeneration(unittest.TestCase):
             ("文字列", "半角カタカナ", 5, "ｱｲｳｴｵ"),
             ("文字列", "半角英数", 6, "Abc123"),
             ("文字列", "数値のみ", 4, "1234"),
-            ("文字列", "小数点数値", 6, "123.45"),
+            ("文字列", "小数点数値", 6, "1.0"),
             ("文字列", "全タイプ", 4, "あA1ｱ"),
-            ("チェックボックス", "NULL", None, "1.2"),
+            ("チェックボックス", "NULL", None, "1"),
             ("選択肢", "数値のみ", None, "1"),
-            ("カレンダー", "数値のみ", None, "5/8/6/1"),
         )
         for data_type, ime, digits, expected in cases:
             self.assertEqual(generate_ocr_value(data_type, ime, digits), expected)
+
+    def test_checkbox_and_choice_values_cycle_within_allowed_values(self):
+        self.assertEqual(
+            [generate_ocr_value("チェックボックス", "NULL", None,
+                                selection_index=index)
+             for index in range(4)],
+            ["1", "0", "1", "0"])
+        self.assertEqual(
+            [generate_ocr_value("選択肢", "数値のみ", None,
+                                selection_index=index)
+             for index in range(6)],
+            ["1", "2", "1.2", "1", "2", "1.2"])
+
+    def test_calendar_contains_46_consecutive_dates(self):
+        values = generate_ocr_value(
+            "カレンダー", "数値のみ", None).split("|")
+        self.assertEqual(len(values), 46)
+        self.assertEqual(values[:3], ["5/8/6/1", "5/8/6/2", "5/8/6/3"])
+        self.assertEqual(values[-1], "5/8/7/16")
+        self.assertEqual(len(values), len(set(values)))
+        self.assertEqual(
+            generate_ocr_value("カレンダー", "数値のみ", 3, profile="max"),
+            "|".join(values))
+
+    def test_name_value_obeys_ime_rule_instead_of_item_name(self):
+        self.assertEqual(
+            generate_ocr_value("氏名", "数値のみ", 10, item_name="患者氏名"),
+            "1234567890")
+        self.assertEqual(
+            generate_ocr_value("氏名", "小数点数値", 10, item_name="患者氏名"),
+            "1.0")
+        self.assertEqual(
+            generate_ocr_value("氏名", "ひらがな", 10, item_name="患者氏名"),
+            "あいうえお")
 
     def test_max_and_over_profiles_hit_boundary(self):
         self.assertEqual(generate_ocr_value("文字列", "ひらがな", 7, "max"), "あいうえおあい")
@@ -210,7 +253,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(
             text,
             '"1001","1","9901","画面修正値","2","1,2,3,4",'
-            '"1002","9","0","0,0,0,0"\n')
+            '"1002","9","0","5,6,7,8"\n')
 
     def test_tar_only_contains_txt_and_tif_without_loose_files(self):
         out = self.tmp / "tar_only"
@@ -264,23 +307,33 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(result.tif_files, [])
 
         text = (out / "1001.txt").read_bytes().decode("cp932")
+        values = next(csv.reader([text.strip()]))
+        self.assertEqual(values[:2], ["1001", "1"])
+        self.assertEqual(values[2::4],
+                         ["1001", "1002", "1003", "1004", "1005", "1006", "1007"])
+        self.assertEqual(values[3:27:4],
+                         ["傷病名1", "1", "1", "5/8/6/1", "5/8/6/1",
+                          "5/8/6/1"])
+        calendar_values = values[27].split("|")
+        self.assertEqual(len(calendar_values), 46)
+        self.assertEqual(calendar_values[0], "5/8/6/1")
+        self.assertEqual(calendar_values[-1], "5/8/7/16")
         self.assertEqual(
-            text,
-            '"1001","1","1001","傷病名1","0","0,0,0,0",'
-            '"1002","1","0","0,0,0,0",'
-            '"1003","1.2","0","0,0,0,0",'
-            '"1004","5/8/6/1","0","0,0,0,0",'
-            '"1005","5/8/6/1","0","0,0,0,0",'
-            '"1006","5/8/6/1","0","0,0,0,0",'
-            '"1007","5/8/6/1","0","0,0,0,0"\r\n')
+            values[5::4],
+            [",".join(str(index * 4 + offset) for offset in range(1, 5))
+             for index in range(7)])
 
         coverage = (out / "4001_01_normal.txt").read_bytes().decode("cp932")
+        coverage_values = next(csv.reader([coverage.strip()]))
+        self.assertEqual(coverage_values[:2], ["4001", "1"])
+        self.assertEqual(coverage_values[2::4], ["2001", "2002", "2003", "2004"])
+        self.assertEqual(coverage_values[3::4],
+                         ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
+                          "5/8/6/1|5/8/6/2"])
         self.assertEqual(
-            coverage,
-            '"4001","1","2001","5/8/6/1","0","0,0,0,0",'
-            '"2002","/2026/6/1","0","0,0,0,0",'
-            '"2003","5/2026/6/1","0","0,0,0,0",'
-            '"2004","5/8/6/1|5/8/6/2","0","0,0,0,0"\r\n')
+            coverage_values[5::4],
+            [",".join(str(index * 4 + offset) for offset in range(1, 5))
+             for index in range(7, 11)])
 
     def test_count_and_element_id_patterns_change_actual_structure(self):
         out = self.tmp / "patterns"
@@ -304,6 +357,15 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(extra[-2], "1")
         self.assertNotIn(unknown[2], ("2001", "2002", "2003", "2004"))
         self.assertEqual(duplicate[2], duplicate[6])
+        extra_coordinates = extra[5::4]
+        self.assertEqual(len(extra_coordinates), len(set(extra_coordinates)))
+
+        duplicate_all = next(csv.reader([
+            (out / "4001_09_count_duplicate_all.txt").read_text(
+                encoding="cp932").strip()]))
+        duplicate_all_coordinates = duplicate_all[5::4]
+        self.assertEqual(
+            len(duplicate_all_coordinates), len(set(duplicate_all_coordinates)))
 
     def test_mixed_attribute_uses_quoted_comma_as_one_value(self):
         out = self.tmp / "mixed"

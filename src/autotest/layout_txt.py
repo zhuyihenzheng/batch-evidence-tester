@@ -26,7 +26,7 @@ import sys
 import tarfile
 import tempfile
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -65,6 +65,10 @@ DATE_VALUES = (
     "5/2026/6/1",       # 元号 + 4 桁西暦
     "5/8/6/1|5/8/6/2",  # 帳票上の 1 行に複数記載
 )
+
+CHECKBOX_VALUES = ("1", "0")
+CHOICE_VALUES = ("1", "2", "1.2")
+CALENDAR_OCCURRENCES = 46
 
 # 4001 は全網羅データ用。1 と 2 が同じ項目に混在する場合はカンマ区切り。
 COVERAGE_ATTRIBUTE_FLAGS = ("0", "1", "2", "1,2")
@@ -194,21 +198,51 @@ def _date_value(date_mode: str, date_index: int) -> str:
     return modes[date_mode]
 
 
+def _calendar_value(date_mode: str, date_index: int,
+                    occurrences: int = CALENDAR_OCCURRENCES) -> str:
+    if date_mode == "cycle":
+        style = ("wareki", "seireki", "era-seireki", "wareki")[
+            date_index % len(DATE_VALUES)]
+    elif date_mode == "multiple":
+        style = "wareki"
+    else:
+        style = date_mode
+    if style not in ("wareki", "seireki", "era-seireki"):
+        raise LayoutTxtError("未対応のカレンダー生成形式です: %s" % date_mode)
+
+    values = []
+    start = date(2026, 6, 1)
+    for offset in range(occurrences):
+        current = start + timedelta(days=offset)
+        if style == "seireki":
+            value = "/%d/%d/%d" % (current.year, current.month, current.day)
+        elif style == "era-seireki":
+            value = "5/%d/%d/%d" % (current.year, current.month, current.day)
+        else:
+            value = "5/%d/%d/%d" % (
+                current.year - 2018, current.month, current.day)
+        values.append(value)
+    return "|".join(values)
+
+
 def _base_value(data_type: str, ime_name: str,
-                date_mode: str = "cycle", date_index: int = 0) -> Tuple[str, str]:
+                date_mode: str = "cycle", date_index: int = 0,
+                selection_index: int = 0) -> Tuple[str, str]:
     """代表値と値種別を返す。値種別は桁境界値の作り方に使う。"""
     dtype = _normalize(data_type)
     ime = _normalize(ime_name)
 
     if "チェックボックス" in dtype or "CHECKBOX" in dtype:
-        return "1.2", "fixed"
+        return CHECKBOX_VALUES[selection_index % len(CHECKBOX_VALUES)], "fixed"
     if "ラジオ" in dtype or "選択肢" in dtype or "RADIO" in dtype or "SELECT" in dtype:
-        return "1", "fixed"
-    if "カレンダー" in dtype or "日付" in dtype or "DATE" in dtype or "CALENDAR" in dtype:
+        return CHOICE_VALUES[selection_index % len(CHOICE_VALUES)], "fixed"
+    if "カレンダー" in dtype or "CALENDAR" in dtype:
+        return _calendar_value(date_mode, date_index), "date"
+    if "日付" in dtype or "DATE" in dtype:
         return _date_value(date_mode, date_index), "date"
 
     if "小数" in ime or "DECIMAL" in ime or "FLOAT" in ime:
-        return "123.45", "decimal"
+        return "1.0", "decimal"
     if "数値" in ime or "数字" in ime or "NUMERIC" in ime or "DIGIT" in ime:
         return "1234567890", "digits"
     if "半角カタカナ" in ime or "HANKAKUKATAKANA" in ime:
@@ -227,7 +261,8 @@ def _base_value(data_type: str, ime_name: str,
 
 def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
                        profile: str = "normal", item_name: str = "",
-                       date_mode: str = "cycle", date_index: int = 0) -> str:
+                       date_mode: str = "cycle", date_index: int = 0,
+                       selection_index: int = 0) -> str:
     """I/J/K の値から再現可能な OCR テスト値を作る。
 
     normal: 代表的な妥当値（最大桁数以内）
@@ -238,14 +273,24 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
         raise LayoutTxtError("未対応の生成パターンです: %s" % profile)
 
     base, kind = _base_value(
-        data_type, ime_name, date_mode=date_mode, date_index=date_index)
+        data_type, ime_name, date_mode=date_mode, date_index=date_index,
+        selection_index=selection_index)
     dtype = _normalize(data_type)
+    is_name = "氏名" in dtype or "NAME" in dtype
+    is_calendar = "カレンダー" in dtype or "CALENDAR" in dtype
+    is_selection = ("チェックボックス" in dtype or "選択肢" in dtype or
+                    "ラジオ" in dtype or "CHECKBOX" in dtype or
+                    "SELECT" in dtype or "RADIO" in dtype)
     # 文字列項目は ITEM_NAME 自体が最も識別しやすいテスト値になる。
     # 最大桁テストでも同じ名称を種にすることで、どの項目かを見失わない。
-    if item_name and ("文字列" in dtype or "氏名" in dtype or
-                      "STRING" in dtype or "TEXT" in dtype or "NAME" in dtype):
+    # 氏名は例外で、ELEMENT_IME_NAME の入力制約を優先する。
+    if item_name and not is_name and (
+            "文字列" in dtype or "STRING" in dtype or "TEXT" in dtype):
         base = item_name
         kind = "text"
+    # 選択系とカレンダーはK列の桁境界より、取入仕様で定めた値集合を優先する。
+    if is_selection or is_calendar:
+        return base
     if max_digits is None:
         return base
 
@@ -266,11 +311,23 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
     return _repeat_to_length(base, target)
 
 
+def _serial_coordinates(index: int) -> str:
+    start = (index * 4) + 1
+    return ",".join(str(start + offset) for offset in range(4))
+
+
+def _coordinate_value(coordinates: str, index: int) -> str:
+    raw = str(coordinates or "auto").strip()
+    if raw.lower() in ("auto", "serial") or raw == "連番":
+        return _serial_coordinates(index)
+    return raw
+
+
 class LayoutField(object):
     def __init__(self, form_id: str, layout_id: str, field_id: str, item_name: str,
                  data_type: str, ime_name: str, max_digits: Optional[int],
                  value: str, row_number: int,
-                 attribute_flag: str = "0", coordinates: str = "0,0,0,0",
+                 attribute_flag: str = "0", coordinates: str = "1,2,3,4",
                  input_attribute: str = "", input_rule: str = "",
                  notes: str = "", output_example: str = "") -> None:
         self.form_id = form_id
@@ -439,7 +496,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                        profile: str = "normal", date_mode: str = "coverage",
                        coverage_form_id: str = "4001",
                        attribute_flag: str = "0",
-                       coordinates: str = "0,0,0,0") -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
+                       coordinates: str = "auto") -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
     path = Path(excel_path)
     if not path.is_file():
         raise LayoutTxtError("Excel ファイルが見つかりません: %s" % path)
@@ -474,6 +531,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
         last_form_id = ""
         last_layout_id = ""
         date_counts = {}  # type: Dict[str, int]
+        selection_counts = {}  # type: Dict[Tuple[str, str], int]
         coverage_id = str(coverage_form_id or "").strip()
         if coverage_id and not coverage_id.isdigit():
             raise LayoutTxtError("全網羅用 FormID は数字で指定してください: %r" % coverage_id)
@@ -524,22 +582,32 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             dtype = _normalize(data_type)
             is_date = ("カレンダー" in dtype or "日付" in dtype or
                        "DATE" in dtype or "CALENDAR" in dtype)
+            is_checkbox = "チェックボックス" in dtype or "CHECKBOX" in dtype
+            is_choice = ("ラジオ" in dtype or "選択肢" in dtype or
+                         "RADIO" in dtype or "SELECT" in dtype)
             date_index = date_counts.get(form_id, 0)
+            selection_kind = "checkbox" if is_checkbox else "choice"
+            selection_key = (form_id, selection_kind)
+            selection_index = selection_counts.get(selection_key, 0)
             actual_date_mode = date_mode
             if date_mode == "coverage":
                 actual_date_mode = "cycle" if form_id == coverage_id else "wareki"
             value = generate_ocr_value(
                 data_type, ime_name, max_digits, profile=profile, item_name=item_name,
-                date_mode=actual_date_mode, date_index=date_index)
+                date_mode=actual_date_mode, date_index=date_index,
+                selection_index=selection_index)
             if is_date:
                 date_counts[form_id] = date_index + 1
+            if is_checkbox or is_choice:
+                selection_counts[selection_key] = selection_index + 1
 
             fields.append(LayoutField(
                 form_id=form_id, layout_id=layout_id,
                 field_id=field_id, item_name=item_name,
                 data_type=data_type, ime_name=ime_name, max_digits=max_digits,
                 value=value, row_number=row_number,
-                attribute_flag=attribute_flag, coordinates=coordinates,
+                attribute_flag=attribute_flag,
+                coordinates=_coordinate_value(coordinates, len(fields)),
                 input_attribute=input_attribute, input_rule=input_rule,
                 notes=notes, output_example=output_example))
 
@@ -614,6 +682,25 @@ def _copy_field(field: LayoutField) -> LayoutField:
 
 def _copy_fields(fields: Sequence[LayoutField]) -> List[LayoutField]:
     return [_copy_field(field) for field in fields]
+
+
+def _deduplicate_coordinates(fields: Sequence[LayoutField]) -> None:
+    numbers = []
+    for field in fields:
+        try:
+            numbers.extend(int(value) for value in field.coordinates.split(","))
+        except ValueError:
+            continue
+    next_number = max(numbers) + 1 if numbers else 1
+    seen = set()
+    for field in fields:
+        coordinate = field.coordinates
+        if coordinate and coordinate in seen:
+            field.coordinates = ",".join(
+                str(next_number + offset) for offset in range(4))
+            next_number += 4
+        if field.coordinates:
+            seen.add(field.coordinates)
 
 
 def _is_date_field(field: LayoutField) -> bool:
@@ -762,6 +849,7 @@ def _make_pattern_case(source_form_id: str, base_fields: Sequence[LayoutField],
     else:
         raise LayoutTxtError("未対応のエラーPatternです: %s" % pattern)
 
+    _deduplicate_coordinates(fields)
     return GeneratedCase(
         source_form_id=source_form_id, form_id=form_id, fields=fields,
         target_presence=target, pattern=pattern, sequence=sequence)
@@ -1003,7 +1091,7 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         output_format: str = "raw",
                         encoding: str = "cp932", split_by_form: bool = True,
                         overwrite: bool = False, target_presence: str = "1",
-                        attribute_flag: str = "0", coordinates: str = "0,0,0,0",
+                        attribute_flag: str = "0", coordinates: str = "auto",
                         crlf: bool = True, error_patterns: str = "all",
                         filename_template: str = "{form_id}",
                         generate_tif: bool = True,
@@ -1186,7 +1274,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overwrite", action="store_true", help="既存 TXT/TIF/TAR を上書きする")
     parser.add_argument("--target-presence", default="1", help="対象有無情報（既定: 1）")
     parser.add_argument("--attribute-flag", default="0", help="項目毎の属性フラグ（既定: 0）")
-    parser.add_argument("--coordinates", default="0,0,0,0", help="項目毎の座標情報")
+    parser.add_argument(
+        "--coordinates", default="auto",
+        help="項目毎の座標情報（既定: autoで1,2,3,4から連番）")
     parser.add_argument("--lf", action="store_true", help="改行を CRLF ではなく LF にする")
     return parser
 
