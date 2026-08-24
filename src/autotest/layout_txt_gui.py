@@ -41,12 +41,12 @@ FORMAT_LABELS = (
 )
 
 DATE_MODE_LABELS = (
-    ("通常Form=和暦 / 4001=4形式網羅（推奨）", "coverage"),
-    ("全Formで4形式を順番使用", "cycle"),
+    ("通常Form=和暦 / 4001=日付3・カレンダー4形式（推奨）", "coverage"),
+    ("日付3形式 / カレンダー4形式を順番使用", "cycle"),
     ("和暦: 5/8/6/1", "wareki"),
     ("西暦: /2026/6/1", "seireki"),
     ("元号+西暦: 5/2026/6/1", "era-seireki"),
-    ("複数: 5/8/6/1|5/8/6/2", "multiple"),
+    ("複数（カレンダーのみ）: 5/8/6/1|5/8/6/2", "multiple"),
 )
 
 ERROR_PATTERN_LABELS = (

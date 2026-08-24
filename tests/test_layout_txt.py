@@ -102,7 +102,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertEqual(fields[6].value, "5/8/6/1")
         self.assertEqual([field.value for field in fields[7:]],
                          ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
-                          "5/8/6/1|5/8/6/2"])
+                          "5/8/6/1"])
         self.assertEqual([field.attribute_flag for field in fields],
                          ["0"] * 11)
         self.assertEqual(
@@ -243,7 +243,7 @@ class TestValueGeneration(unittest.TestCase):
             "傷病名1傷病名")
 
     def test_four_date_notations(self):
-        expected = ("5/8/6/1", "/2026/6/1", "5/2026/6/1", "5/8/6/1|5/8/6/2")
+        expected = ("5/8/6/1", "/2026/6/1", "5/2026/6/1", "5/8/6/1")
         for index, value in enumerate(expected):
             self.assertEqual(
                 generate_ocr_value("日付", "数値のみ", None,
@@ -251,7 +251,15 @@ class TestValueGeneration(unittest.TestCase):
                 value)
         self.assertEqual(
             generate_ocr_value("日付", "数値のみ", None, date_mode="multiple"),
-            "5/8/6/1|5/8/6/2")
+            "5/8/6/1")
+        self.assertEqual(
+            generate_ocr_value("日付 (From)", "数値のみ", None,
+                               date_mode="multiple"),
+            "5/8/6/1")
+        self.assertEqual(
+            generate_ocr_value("日付 (To)", "数値のみ", None,
+                               date_mode="multiple"),
+            "5/8/6/1")
 
 
 class TestGenerateLayoutTxt(LayoutWorkbookCase):
@@ -356,7 +364,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(coverage_values[2::4], ["2001", "2002", "2003", "2004"])
         self.assertEqual(coverage_values[3::4],
                          ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
-                          "5/8/6/1|5/8/6/2"])
+                          "5/8/6/1"])
         self.assertEqual(
             coverage_values[5::4],
             [",".join(str(index * 4 + offset) for offset in range(1, 5))
@@ -431,7 +439,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertIn("FormID=1001", text)
         self.assertIn('"FieldID=1001"', text)
         self.assertIn("FormID=4001", text)
-        self.assertIn('"OCRText=5/8/6/1|5/8/6/2"', text)
+        self.assertIn('"OCRText=5/2026/6/1"', text)
         self.assertEqual(len(text.splitlines()), 2, "1 行が 1 帳票であること")
 
     def test_existing_file_is_not_overwritten_without_permission(self):

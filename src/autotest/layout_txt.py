@@ -183,15 +183,19 @@ def _repeat_to_length(seed: str, length: int) -> str:
     return (seed * ((length // len(seed)) + 1))[:length]
 
 
-def _date_value(date_mode: str, date_index: int) -> str:
+def _date_value(date_mode: str, date_index: int,
+                allow_multiple: bool = False) -> str:
     modes = {
         "wareki": DATE_VALUES[0],
         "seireki": DATE_VALUES[1],
         "era-seireki": DATE_VALUES[2],
-        "multiple": DATE_VALUES[3],
     }
     if date_mode == "cycle":
-        return DATE_VALUES[date_index % len(DATE_VALUES)]
+        values = DATE_VALUES if allow_multiple else DATE_VALUES[:3]
+        return values[date_index % len(values)]
+    if date_mode == "multiple":
+        # 複数日付はカレンダーだけに許可する。日付/From/Toは常に単一値。
+        return DATE_VALUES[3] if allow_multiple else DATE_VALUES[0]
     if date_mode not in modes:
         raise LayoutTxtError("未対応の日付生成形式です: %s" % date_mode)
     return modes[date_mode]
@@ -208,9 +212,12 @@ def _base_value(data_type: str, ime_name: str,
         return CHECKBOX_VALUES[selection_index % len(CHECKBOX_VALUES)], "fixed"
     if "ラジオ" in dtype or "選択肢" in dtype or "RADIO" in dtype or "SELECT" in dtype:
         return CHOICE_VALUES[selection_index % len(CHOICE_VALUES)], "fixed"
-    if ("カレンダー" in dtype or "日付" in dtype or
-            "CALENDAR" in dtype or "DATE" in dtype):
-        return _date_value(date_mode, date_index), "date"
+    if "カレンダー" in dtype or "CALENDAR" in dtype:
+        return _date_value(
+            date_mode, date_index, allow_multiple=True), "date"
+    if "日付" in dtype or "DATE" in dtype:
+        return _date_value(
+            date_mode, date_index, allow_multiple=False), "date"
 
     if "小数" in ime or "DECIMAL" in ime or "FLOAT" in ime:
         return "1.0", "decimal"
@@ -500,7 +507,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
         fields = []  # type: List[LayoutField]
         last_form_id = ""
         last_layout_id = ""
-        date_counts = {}  # type: Dict[str, int]
+        date_counts = {}  # type: Dict[Tuple[str, str], int]
         selection_counts = {}  # type: Dict[Tuple[str, str], int]
         coverage_id = str(coverage_form_id or "").strip()
         if coverage_id and not coverage_id.isdigit():
@@ -555,7 +562,10 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             is_checkbox = "チェックボックス" in dtype or "CHECKBOX" in dtype
             is_choice = ("ラジオ" in dtype or "選択肢" in dtype or
                          "RADIO" in dtype or "SELECT" in dtype)
-            date_index = date_counts.get(form_id, 0)
+            date_kind = "calendar" if (
+                "カレンダー" in dtype or "CALENDAR" in dtype) else "date"
+            date_key = (form_id, date_kind)
+            date_index = date_counts.get(date_key, 0)
             selection_kind = "checkbox" if is_checkbox else "choice"
             selection_key = (form_id, selection_kind)
             selection_index = selection_counts.get(selection_key, 0)
@@ -567,7 +577,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                 date_mode=actual_date_mode, date_index=date_index,
                 selection_index=selection_index)
             if is_date:
-                date_counts[form_id] = date_index + 1
+                date_counts[date_key] = date_index + 1
             if is_checkbox or is_choice:
                 selection_counts[selection_key] = selection_index + 1
 
