@@ -9,16 +9,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from autotest.layout_txt import (  # noqa: E402
     LayoutTxtError,
+    DEFAULT_EMPTY_VALUE,
     generate_layout_txt,
     generate_ocr_value,
     main as layout_main,
     read_layout_fields,
+    save_layout_default_values,
 )
 
 
@@ -130,6 +132,85 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertEqual(fields[0].notes, "テスト補足")
         self.assertEqual(fields[0].output_example, "傷病名サンプル")
         self.assertEqual(fields[1].input_attribute, "")
+
+    def test_existing_default_value_is_used_instead_of_generated_value(self):
+        wb = load_workbook(str(self.book))
+        ws = wb["帳票定義"]
+        ws["R2"] = "默认值"
+        ws["R3"] = "Excel保存値"
+        wb.save(str(self.book))
+        wb.close()
+
+        fields, _sheet, _header, columns = read_layout_fields(self.book)
+
+        self.assertEqual(columns["default_value"], 18)
+        self.assertEqual(fields[0].value, "Excel保存値")
+        self.assertEqual(fields[1].value, "1")
+
+    def test_default_value_column_can_be_ignored(self):
+        wb = load_workbook(str(self.book))
+        ws = wb["帳票定義"]
+        ws["R2"] = "OCR_DEFAULT_VALUE"
+        ws["R3"] = "使用しない値"
+        wb.save(str(self.book))
+        wb.close()
+
+        fields, _sheet, _header, columns = read_layout_fields(
+            self.book, default_value_column="none")
+
+        self.assertNotIn("default_value", columns)
+        self.assertEqual(fields[0].value, "傷病名1")
+
+    def test_saved_default_values_are_read_on_next_load(self):
+        path, column, count = save_layout_default_values(
+            self.book,
+            {"3:1": "画面修正値", "4:1": "9", "5:1": ""},
+            sheet_name="帳票定義")
+
+        self.assertEqual(path, self.book)
+        self.assertEqual(column, 18)
+        self.assertEqual(count, 3)
+        wb = load_workbook(str(self.book), data_only=True)
+        ws = wb["帳票定義"]
+        self.assertEqual(ws["R2"].value, "OCR_DEFAULT_VALUE")
+        self.assertEqual(ws["R3"].value, "画面修正値")
+        self.assertEqual(ws["R4"].value, "9")
+        self.assertEqual(ws["R5"].value, DEFAULT_EMPTY_VALUE)
+        wb.close()
+
+        fields, _sheet, _header, _columns = read_layout_fields(self.book)
+        self.assertEqual([field.value for field in fields[:3]], ["画面修正値", "9", ""])
+
+    def test_calendar_defaults_share_one_multiline_excel_cell(self):
+        expected = ["手動値%d" % index for index in range(1, 47)]
+        values = {"9:%d" % index: value
+                  for index, value in enumerate(expected, 1)}
+
+        _path, column, count = save_layout_default_values(
+            self.book, values, sheet_name="帳票定義")
+
+        self.assertEqual(column, 18)
+        self.assertEqual(count, 1)
+        wb = load_workbook(str(self.book), data_only=True)
+        ws = wb["帳票定義"]
+        self.assertEqual(ws["R9"].value.split("\n"), expected)
+        self.assertTrue(ws["R9"].alignment.wrap_text)
+        wb.close()
+
+        fields, _sheet, _header, _columns = read_layout_fields(self.book)
+        self.assertEqual([field.value for field in fields[6:52]], expected)
+
+    def test_calendar_default_count_mismatch_is_rejected(self):
+        wb = load_workbook(str(self.book))
+        ws = wb["帳票定義"]
+        ws["R2"] = "OCR_DEFAULT_VALUE"
+        ws["R9"] = "1件目\n2件目"
+        wb.save(str(self.book))
+        wb.close()
+
+        with self.assertRaises(LayoutTxtError) as ctx:
+            read_layout_fields(self.book)
+        self.assertIn("1件または46件", str(ctx.exception))
 
     def test_optional_columns_can_be_disabled(self):
         fields, _sheet, _header, columns = read_layout_fields(

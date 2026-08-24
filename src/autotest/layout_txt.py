@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 
@@ -54,6 +55,10 @@ HEADER_ALIASES = {
     "input_rule": ("入力規則", "INPUT_RULE", "INPUTRULE"),
     "notes": ("補足", "NOTES", "NOTE", "REMARKS"),
     "output_example": ("出力例", "OUTPUT_EXAMPLE", "OUTPUTEXAMPLE"),
+    "default_value": (
+        "OCR_DEFAULT_VALUE", "OCRDEFAULTVALUE", "DEFAULT_VALUE", "DEFAULTVALUE",
+        "OCR既定値", "既定値", "デフォルト値", "默认值",
+    ),
 }
 
 NULL_WORDS = ("", "NULL", "NONE", "N/A", "NA", "－", "-")
@@ -69,6 +74,8 @@ DATE_VALUES = (
 CHECKBOX_VALUES = ("1", "0")
 CHOICE_VALUES = ("1", "2", "1.2")
 CALENDAR_OCCURRENCES = 46
+DEFAULT_VALUE_HEADER = "OCR_DEFAULT_VALUE"
+DEFAULT_EMPTY_VALUE = "<EMPTY_OCR>"
 
 # 4001 は全網羅データ用。1 と 2 が同じ項目に混在する場合はカンマ区切り。
 COVERAGE_ATTRIBUTE_FLAGS = ("0", "1", "2", "1,2")
@@ -442,7 +449,8 @@ def _resolve_columns(ws, header_row: int, form_column: str, layout_column: str,
                      input_attribute_column: str = "auto",
                      input_rule_column: str = "auto",
                      notes_column: str = "auto",
-                     output_example_column: str = "auto") -> Dict[str, Optional[int]]:
+                     output_example_column: str = "auto",
+                     default_value_column: str = "auto") -> Dict[str, Optional[int]]:
     headers = _header_map(ws, header_row)
     selectors = {
         "form_id": form_column,
@@ -456,6 +464,7 @@ def _resolve_columns(ws, header_row: int, form_column: str, layout_column: str,
         "input_rule": input_rule_column,
         "notes": notes_column,
         "output_example": output_example_column,
+        "default_value": default_value_column,
     }
     columns = {}
     for role, selector in selectors.items():
@@ -474,6 +483,34 @@ def _value_at(row: Sequence, column: Optional[int]) -> str:
     return _cell_text(row[column - 1])
 
 
+def _raw_value_at(row: Sequence, column: Optional[int]):
+    """Return a cell value without stripping meaningful default-value whitespace."""
+    if column is None or column < 1 or column > len(row):
+        return None
+    value = row[column - 1].value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return _cell_text(row[column - 1])
+
+
+def _default_values(raw_value, occurrence_count: int,
+                    row_number: int) -> Optional[List[str]]:
+    if raw_value is None or raw_value == "":
+        return None
+    normalized = str(raw_value).replace("\r\n", "\n").replace("\r", "\n")
+    values = normalized.split("\n")
+    values = ["" if value == DEFAULT_EMPTY_VALUE else value for value in values]
+    if len(values) == 1:
+        return values * occurrence_count
+    if len(values) != occurrence_count:
+        raise LayoutTxtError(
+            "%d 行目の既定値は1件または%d件（セル内改行区切り）にしてください: %d件"
+            % (row_number, occurrence_count, len(values)))
+    return values
+
+
 def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                        header_row: Optional[int] = None,
                        form_column: str = "auto", layout_column: str = "auto",
@@ -487,7 +524,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                        profile: str = "normal", date_mode: str = "coverage",
                        coverage_form_id: str = "4001",
                        attribute_flag: str = "0",
-                       coordinates: str = "auto") -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
+                       coordinates: str = "auto",
+                       default_value_column: str = "auto") -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
     path = Path(excel_path)
     if not path.is_file():
         raise LayoutTxtError("Excel ファイルが見つかりません: %s" % path)
@@ -516,7 +554,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             input_attribute_column=input_attribute_column,
             input_rule_column=input_rule_column,
             notes_column=notes_column,
-            output_example_column=output_example_column)
+            output_example_column=output_example_column,
+            default_value_column=default_value_column)
 
         fields = []  # type: List[LayoutField]
         last_form_id = ""
@@ -540,6 +579,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             input_rule = _value_at(row, raw_columns.get("input_rule"))
             notes = _value_at(row, raw_columns.get("notes"))
             output_example = _value_at(row, raw_columns.get("output_example"))
+            default_raw = _raw_value_at(row, raw_columns.get("default_value"))
 
             # 値を引き継ぐ前に、完全な空行を表末尾として無視する。
             if not any((raw_form_id, raw_layout_id, field_id, item_name,
@@ -587,6 +627,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             if date_mode == "coverage":
                 actual_date_mode = "cycle" if form_id == coverage_id else "wareki"
             occurrence_count = CALENDAR_OCCURRENCES if date_kind == "calendar" else 1
+            saved_defaults = _default_values(
+                default_raw, occurrence_count, row_number)
             for occurrence_index in range(1, occurrence_count + 1):
                 date_index = date_counts.get(date_key, 0)
                 coordinate_index = coordinate_counts.get(form_id, 0)
@@ -594,6 +636,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                     data_type, ime_name, max_digits, profile=profile, item_name=item_name,
                     date_mode=actual_date_mode, date_index=date_index,
                     selection_index=selection_index)
+                if saved_defaults is not None:
+                    value = saved_defaults[occurrence_index - 1]
 
                 fields.append(LayoutField(
                     form_id=form_id, layout_id=layout_id,
@@ -622,6 +666,124 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
         return fields, ws.title, actual_header_row, columns
     finally:
         wb.close()
+
+
+def _default_column_for_write(ws, header_row: int, selector: str) -> int:
+    headers = _header_map(ws, header_row)
+    raw = str(selector or "auto").strip()
+    if raw.lower() == "none":
+        raise LayoutTxtError("既定値列が none のためExcelへ保存できません。")
+    if raw.lower() == "auto":
+        for alias in HEADER_ALIASES["default_value"]:
+            positions = headers.get(_normalize(alias), [])
+            if positions:
+                return positions[0]
+        column = ws.max_column + 1
+        ws.cell(row=header_row, column=column, value=DEFAULT_VALUE_HEADER)
+        return column
+    if re.match(r"^[A-Za-z]{1,3}$", raw):
+        try:
+            column = column_index_from_string(raw.upper())
+        except ValueError:
+            column = 0
+        if column:
+            header_cell = ws.cell(row=header_row, column=column)
+            if header_cell.value in (None, ""):
+                header_cell.value = DEFAULT_VALUE_HEADER
+            return column
+    positions = headers.get(_normalize(raw), [])
+    if positions:
+        return positions[0]
+    column = ws.max_column + 1
+    ws.cell(row=header_row, column=column, value=raw)
+    return column
+
+
+def _instance_position(value) -> Tuple[int, int]:
+    raw = str(value).strip()
+    matched = re.match(r"^(\d+)(?::(\d+))?$", raw)
+    if not matched:
+        raise LayoutTxtError("Excel行キーが不正です: %r" % raw)
+    return int(matched.group(1)), int(matched.group(2) or "1")
+
+
+def save_layout_default_values(
+        excel_path: Path, values_by_instance: Dict,
+        sheet_name: Optional[str] = None,
+        header_row: Optional[int] = None,
+        default_value_column: str = "auto") -> Tuple[Path, int, int]:
+    """Persist GUI OCR values into one default-value column in the source Excel."""
+    path = Path(excel_path)
+    if not path.is_file():
+        raise LayoutTxtError("Excel ファイルが見つかりません: %s" % path)
+    if path.suffix.lower() not in (".xlsx", ".xlsm"):
+        raise LayoutTxtError(".xlsx / .xlsm のみ対応しています: %s" % path.name)
+    if not values_by_instance:
+        raise LayoutTxtError("Excelへ保存するOCR値がありません。")
+
+    grouped = {}  # type: Dict[int, List[Tuple[int, str]]]
+    for instance_key, value in values_by_instance.items():
+        row_number, occurrence_index = _instance_position(instance_key)
+        grouped.setdefault(row_number, []).append((occurrence_index, str(value)))
+
+    try:
+        wb = load_workbook(
+            str(path), data_only=False, keep_vba=path.suffix.lower() == ".xlsm")
+    except Exception as exc:
+        raise LayoutTxtError("Excel を開けません: %s" % exc)
+
+    temp_name = None
+    try:
+        if sheet_name:
+            if sheet_name not in wb.sheetnames:
+                raise LayoutTxtError(
+                    "シート %r がありません。候補: %s"
+                    % (sheet_name, ", ".join(wb.sheetnames)))
+            ws = wb[sheet_name]
+        else:
+            ws = wb.active
+        actual_header_row = header_row or _find_header_row(ws)
+        column = _default_column_for_write(
+            ws, actual_header_row, default_value_column)
+
+        for row_number, indexed_values in grouped.items():
+            if row_number <= actual_header_row or row_number > ws.max_row:
+                raise LayoutTxtError("既定値の保存先Excel行が範囲外です: %d" % row_number)
+            indexed_values.sort(key=lambda item: item[0])
+            indexes = [item[0] for item in indexed_values]
+            if indexes != list(range(1, len(indexes) + 1)):
+                raise LayoutTxtError(
+                    "%d 行目の展開番号が連続していません: %s"
+                    % (row_number, ", ".join(str(index) for index in indexes)))
+            encoded = [value if value != "" else DEFAULT_EMPTY_VALUE
+                       for _index, value in indexed_values]
+            cell = ws.cell(row=row_number, column=column)
+            cell.value = "\n".join(encoded)
+            if len(encoded) > 1:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        handle, temp_name = tempfile.mkstemp(
+            prefix=path.stem + ".", suffix=path.suffix, dir=str(path.parent))
+        os.close(handle)
+        wb.save(temp_name)
+        wb.close()
+        wb = None
+        os.replace(temp_name, str(path))
+        temp_name = None
+        return path, column, len(grouped)
+    except LayoutTxtError:
+        raise
+    except Exception as exc:
+        raise LayoutTxtError(
+            "既定値をExcelへ保存できません。Excelを閉じて再試行してください: %s" % exc)
+    finally:
+        if wb is not None:
+            wb.close()
+        if temp_name:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
 
 
 def _safe_filename(value: str) -> str:
@@ -1108,7 +1270,8 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         selected_rows: Optional[Sequence] = None,
                         field_overrides: Optional[Dict] = None,
                         create_tar: bool = False, tar_name: str = "",
-                        tar_only: bool = False) -> GenerationResult:
+                        tar_only: bool = False,
+                        default_value_column: str = "auto") -> GenerationResult:
     fields, actual_sheet, actual_header, columns = read_layout_fields(
         excel_path=excel_path, sheet_name=sheet_name, header_row=header_row,
         form_column=form_column, layout_column=layout_column,
@@ -1119,6 +1282,7 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
         input_rule_column=input_rule_column,
         notes_column=notes_column,
         output_example_column=output_example_column,
+        default_value_column=default_value_column,
         profile=profile, date_mode=date_mode,
         coverage_form_id=coverage_form_id,
         attribute_flag=attribute_flag, coordinates=coordinates)
@@ -1253,6 +1417,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="補足列（見出し名 / 列記号 / auto / none）")
     parser.add_argument("--output-example-column", default="auto",
                         help="出力例列（見出し名 / 列記号 / auto / none）")
+    parser.add_argument("--default-value-column", default="auto",
+                        help="OCR既定値列（見出し名 / 列記号 / auto / none）")
     parser.add_argument("--profile", choices=["normal", "max", "over"], default="normal",
                         help="normal=代表値 / max=最大桁 / over=最大桁+1")
     parser.add_argument("--date-mode",
@@ -1330,6 +1496,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             input_rule_column=args.input_rule_column,
             notes_column=args.notes_column,
             output_example_column=args.output_example_column,
+            default_value_column=args.default_value_column,
             profile=args.profile, date_mode=args.date_mode,
             coverage_form_id=args.coverage_form_id,
             error_patterns=args.error_patterns,

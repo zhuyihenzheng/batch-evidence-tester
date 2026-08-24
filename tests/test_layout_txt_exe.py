@@ -7,7 +7,7 @@ import layout_txt_exe
 
 def test_version_does_not_import_gui(capsys):
     assert layout_txt_exe.main(["--version"]) == 0
-    assert capsys.readouterr().out.strip() == "LayoutTxtGenerator 0.3.5"
+    assert capsys.readouterr().out.strip() == "LayoutTxtGenerator 0.3.6"
 
 
 def test_prepare_source_path_is_idempotent():
