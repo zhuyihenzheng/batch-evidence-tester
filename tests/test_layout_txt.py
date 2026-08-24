@@ -32,11 +32,16 @@ class LayoutWorkbookCase(unittest.TestCase):
         ws.append(["説明行"])
         headers = ["予備A", "FORM_ID", "LAYOUT_ID", "CYOUHYOU_NAME", "LAYOUT_ID",
                    "GROUP_ID", "GROUP_NAME", "ITEM_NAME", "ELEMENT_DATA_TYPE_NAME",
-                   "ELEMENT_IME_NAME", "MAX_NUM_DIGITS", "ELEMENT_ID", "CONTROL_ID"]
+                   "ELEMENT_IME_NAME", "MAX_NUM_DIGITS", "ELEMENT_ID", "CONTROL_ID",
+                   "入力属性", "入力規則", "補足", "出力例"]
         ws.append(headers)
         ws.append([None, 1001, 1, "帳票A", 1, 1, "基本", "傷病名1",
                    "文字列", "ひらがな", 100, 1001, 1001])
         ws["C3"].number_format = "00000"
+        ws["N3"] = "必須"
+        ws["O3"] = "全角100文字以内"
+        ws["P3"] = "テスト補足"
+        ws["Q3"] = "傷病名サンプル"
         ws.append([None, 1001, 1, "帳票A", 1, 2, "初診", "退院区分1",
                    "選択肢", "数値のみ", "NULL", 1002, 1002])
         ws["C4"].number_format = "00000"
@@ -105,6 +110,25 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             max_digits_column="MAX_NUM_DIGITS")
         self.assertEqual(len(fields), 11)
         self.assertEqual(columns["field_id"], 12)
+
+    def test_optional_columns_are_appended_when_present(self):
+        fields, _sheet, _header, columns = read_layout_fields(self.book)
+        self.assertEqual(columns["input_attribute"], 14)
+        self.assertEqual(columns["input_rule"], 15)
+        self.assertEqual(columns["notes"], 16)
+        self.assertEqual(columns["output_example"], 17)
+        self.assertEqual(fields[0].input_attribute, "必須")
+        self.assertEqual(fields[0].input_rule, "全角100文字以内")
+        self.assertEqual(fields[0].notes, "テスト補足")
+        self.assertEqual(fields[0].output_example, "傷病名サンプル")
+        self.assertEqual(fields[1].input_attribute, "")
+
+    def test_optional_columns_can_be_disabled(self):
+        fields, _sheet, _header, columns = read_layout_fields(
+            self.book, input_attribute_column="none", input_rule_column="none",
+            notes_column="none", output_example_column="none")
+        self.assertNotIn("input_attribute", columns)
+        self.assertEqual(fields[0].input_attribute, "")
 
     def test_missing_sheet_is_reported_with_candidates(self):
         with self.assertRaises(LayoutTxtError) as ctx:

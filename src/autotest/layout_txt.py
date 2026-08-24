@@ -50,6 +50,10 @@ HEADER_ALIASES = {
     # 元資料の見出しは ELEMENT_IME_NAME。IME/IME の表記揺れも許容する。
     "ime": ("ELEMENT_IME_NAME", "ELEMENTIMENAME", "IME_NAME", "IMENAME"),
     "max_digits": ("MAX_NUM_DIGITS", "MAXNUMDIGITS", "MAX_DIGITS", "MAXDIGITS"),
+    "input_attribute": ("入力属性", "INPUT_ATTRIBUTE", "INPUTATTRIBUTE"),
+    "input_rule": ("入力規則", "INPUT_RULE", "INPUTRULE"),
+    "notes": ("補足", "NOTES", "NOTE", "REMARKS"),
+    "output_example": ("出力例", "OUTPUT_EXAMPLE", "OUTPUTEXAMPLE"),
 }
 
 NULL_WORDS = ("", "NULL", "NONE", "N/A", "NA", "－", "-")
@@ -266,7 +270,9 @@ class LayoutField(object):
     def __init__(self, form_id: str, layout_id: str, field_id: str, item_name: str,
                  data_type: str, ime_name: str, max_digits: Optional[int],
                  value: str, row_number: int,
-                 attribute_flag: str = "0", coordinates: str = "0,0,0,0") -> None:
+                 attribute_flag: str = "0", coordinates: str = "0,0,0,0",
+                 input_attribute: str = "", input_rule: str = "",
+                 notes: str = "", output_example: str = "") -> None:
         self.form_id = form_id
         self.layout_id = layout_id
         self.field_id = field_id
@@ -278,6 +284,10 @@ class LayoutField(object):
         self.row_number = row_number
         self.attribute_flag = attribute_flag
         self.coordinates = coordinates
+        self.input_attribute = input_attribute
+        self.input_rule = input_rule
+        self.notes = notes
+        self.output_example = output_example
 
 
 class GenerationResult(object):
@@ -380,7 +390,11 @@ def _column_from_selector(selector: str, role: str,
 def _resolve_columns(ws, header_row: int, form_column: str, layout_column: str,
                      field_column: str,
                      item_column: str, data_type_column: str, ime_column: str,
-                     max_digits_column: str) -> Dict[str, Optional[int]]:
+                     max_digits_column: str,
+                     input_attribute_column: str = "auto",
+                     input_rule_column: str = "auto",
+                     notes_column: str = "auto",
+                     output_example_column: str = "auto") -> Dict[str, Optional[int]]:
     headers = _header_map(ws, header_row)
     selectors = {
         "form_id": form_column,
@@ -390,6 +404,10 @@ def _resolve_columns(ws, header_row: int, form_column: str, layout_column: str,
         "data_type": data_type_column,
         "ime": ime_column,
         "max_digits": max_digits_column,
+        "input_attribute": input_attribute_column,
+        "input_rule": input_rule_column,
+        "notes": notes_column,
+        "output_example": output_example_column,
     }
     columns = {}
     for role, selector in selectors.items():
@@ -414,6 +432,10 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                        field_column: str = "auto",
                        item_column: str = "auto", data_type_column: str = "I",
                        ime_column: str = "J", max_digits_column: str = "K",
+                       input_attribute_column: str = "auto",
+                       input_rule_column: str = "auto",
+                       notes_column: str = "auto",
+                       output_example_column: str = "auto",
                        profile: str = "normal", date_mode: str = "coverage",
                        coverage_form_id: str = "4001",
                        attribute_flag: str = "0",
@@ -442,7 +464,11 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             raise LayoutTxtError("見出し行が範囲外です: %s" % actual_header_row)
         raw_columns = _resolve_columns(
             ws, actual_header_row, form_column, layout_column, field_column, item_column,
-            data_type_column, ime_column, max_digits_column)
+            data_type_column, ime_column, max_digits_column,
+            input_attribute_column=input_attribute_column,
+            input_rule_column=input_rule_column,
+            notes_column=notes_column,
+            output_example_column=output_example_column)
 
         fields = []  # type: List[LayoutField]
         last_form_id = ""
@@ -460,6 +486,10 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             data_type = _value_at(row, raw_columns.get("data_type"))
             ime_name = _value_at(row, raw_columns.get("ime"))
             max_raw = _value_at(row, raw_columns.get("max_digits"))
+            input_attribute = _value_at(row, raw_columns.get("input_attribute"))
+            input_rule = _value_at(row, raw_columns.get("input_rule"))
+            notes = _value_at(row, raw_columns.get("notes"))
+            output_example = _value_at(row, raw_columns.get("output_example"))
 
             # 値を引き継ぐ前に、完全な空行を表末尾として無視する。
             if not any((raw_form_id, raw_layout_id, field_id, item_name,
@@ -509,7 +539,9 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                 field_id=field_id, item_name=item_name,
                 data_type=data_type, ime_name=ime_name, max_digits=max_digits,
                 value=value, row_number=row_number,
-                attribute_flag=attribute_flag, coordinates=coordinates))
+                attribute_flag=attribute_flag, coordinates=coordinates,
+                input_attribute=input_attribute, input_rule=input_rule,
+                notes=notes, output_example=output_example))
 
         if not fields:
             raise LayoutTxtError("見出し行より下に生成対象のデータがありません。")
@@ -575,7 +607,9 @@ def _copy_field(field: LayoutField) -> LayoutField:
         data_type=field.data_type, ime_name=field.ime_name,
         max_digits=field.max_digits, value=field.value,
         row_number=field.row_number, attribute_flag=field.attribute_flag,
-        coordinates=field.coordinates)
+        coordinates=field.coordinates,
+        input_attribute=field.input_attribute, input_rule=field.input_rule,
+        notes=field.notes, output_example=field.output_example)
 
 
 def _copy_fields(fields: Sequence[LayoutField]) -> List[LayoutField]:
@@ -960,6 +994,10 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         field_column: str = "auto",
                         item_column: str = "auto", data_type_column: str = "I",
                         ime_column: str = "J", max_digits_column: str = "K",
+                        input_attribute_column: str = "auto",
+                        input_rule_column: str = "auto",
+                        notes_column: str = "auto",
+                        output_example_column: str = "auto",
                         profile: str = "normal", date_mode: str = "coverage",
                         coverage_form_id: str = "4001",
                         output_format: str = "raw",
@@ -979,7 +1017,12 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
         form_column=form_column, layout_column=layout_column,
         field_column=field_column, item_column=item_column,
         data_type_column=data_type_column, ime_column=ime_column,
-        max_digits_column=max_digits_column, profile=profile, date_mode=date_mode,
+        max_digits_column=max_digits_column,
+        input_attribute_column=input_attribute_column,
+        input_rule_column=input_rule_column,
+        notes_column=notes_column,
+        output_example_column=output_example_column,
+        profile=profile, date_mode=date_mode,
         coverage_form_id=coverage_form_id,
         attribute_flag=attribute_flag, coordinates=coordinates)
 
@@ -1105,6 +1148,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-type-column", default="I", help="データ型列（既定: I）")
     parser.add_argument("--ime-column", default="J", help="IME/入力制限列（既定: J）")
     parser.add_argument("--max-digits-column", default="K", help="最大桁数列（既定: K）")
+    parser.add_argument("--input-attribute-column", default="auto",
+                        help="入力属性列（見出し名 / 列記号 / auto / none）")
+    parser.add_argument("--input-rule-column", default="auto",
+                        help="入力規則列（見出し名 / 列記号 / auto / none）")
+    parser.add_argument("--notes-column", default="auto",
+                        help="補足列（見出し名 / 列記号 / auto / none）")
+    parser.add_argument("--output-example-column", default="auto",
+                        help="出力例列（見出し名 / 列記号 / auto / none）")
     parser.add_argument("--profile", choices=["normal", "max", "over"], default="normal",
                         help="normal=代表値 / max=最大桁 / over=最大桁+1")
     parser.add_argument("--date-mode",
@@ -1176,6 +1227,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             field_column=args.field_column,
             item_column=args.item_column, data_type_column=args.data_type_column,
             ime_column=args.ime_column, max_digits_column=args.max_digits_column,
+            input_attribute_column=args.input_attribute_column,
+            input_rule_column=args.input_rule_column,
+            notes_column=args.notes_column,
+            output_example_column=args.output_example_column,
             profile=args.profile, date_mode=args.date_mode,
             coverage_form_id=args.coverage_form_id,
             error_patterns=args.error_patterns,
