@@ -1,0 +1,3 @@
+# Reproducible Windows EXE build for Anaconda 5.2 / Python 3.6.
+# PyInstaller 4.10 is the final release line used by this project for Python 3.6.
+pyinstaller==4.10

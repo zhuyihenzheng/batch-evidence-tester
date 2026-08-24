@@ -959,3 +959,37 @@ python -m autotest.layout_txt layout.xlsx ^
 不需要TIF时使用 `--no-tif`；只生成主要8种异常时使用 `--error-patterns core`；
 不生成异常Pattern时使用 `--error-patterns none`。运行 `python -m autotest.layout_txt --help`
 可查看单文件输出、TSV、UTF-8、自定义 I/J/K 列等选项。
+
+### 构建Windows EXE
+
+在目标Windows机器的 **Anaconda Prompt** 中执行：
+
+```cmd
+build_layout_exe.bat --install
+```
+
+首次执行会安装固定版本 `PyInstaller 4.10`，然后构建并自动做依赖冒烟检查。完成后的程序位于：
+
+```text
+dist\LayoutTxtGenerator\LayoutTxtGenerator.exe
+```
+
+这是稳定性优先的 `onedir` 版本。交付时请复制整个
+`dist\LayoutTxtGenerator` 文件夹，不能只复制其中的EXE。目标电脑不需要另外安装Python。
+以后构建环境不变时直接执行 `build_layout_exe.bat` 即可。
+
+如果要明确使用Anaconda 5.2的Python：
+
+```cmd
+set LAYOUT_BUILD_PYTHON=C:\ProgramData\Anaconda3\python.exe
+build_layout_exe.bat --install
+```
+
+PyInstaller不是交叉编译器，因此Windows EXE必须在Windows上构建；macOS/Linux只能验证源码和
+spec，不能产出可运行的Windows EXE。构建环境支持Python 3.6～3.10，本项目基准为
+Anaconda 5.2 / Python 3.6.5。
+
+推送上述相关文件到 `main` 后，GitHub Actions的 `Build Layout Generator EXE` 也会自动
+在Windows上执行同样的测试、构建和冒烟检查。成功后可以从该次Actions运行的
+`Artifacts` 下载 `LayoutTxtGenerator-windows-x64`，解压后双击
+`LayoutTxtGenerator.exe`，有效期默认30天；也可以在Actions页面手动执行该workflow。
