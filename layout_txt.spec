@@ -1,11 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 project_root = Path(SPECPATH)
+sys.path.insert(0, str(project_root))
+
+# Anaconda 5.2 backported a private sysconfig function with an incompatible
+# required argument.  Patch it before PyInstaller 4.10 loads its built-in
+# distutils and sysconfig hooks.
+from pyinstaller_compat import patch_anaconda_sysconfig
+
+patch_anaconda_sysconfig()
+
 hidden_imports = collect_submodules("openpyxl") + collect_submodules("PIL")
 data_files = collect_data_files("openpyxl")
 
