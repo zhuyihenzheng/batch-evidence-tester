@@ -26,7 +26,7 @@ import sys
 import tarfile
 import tempfile
 from collections import OrderedDict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -68,7 +68,6 @@ DATE_VALUES = (
 
 CHECKBOX_VALUES = ("1", "0")
 CHOICE_VALUES = ("1", "2", "1.2")
-CALENDAR_OCCURRENCES = 46
 
 # 4001 は全網羅データ用。1 と 2 が同じ項目に混在する場合はカンマ区切り。
 COVERAGE_ATTRIBUTE_FLAGS = ("0", "1", "2", "1,2")
@@ -198,33 +197,6 @@ def _date_value(date_mode: str, date_index: int) -> str:
     return modes[date_mode]
 
 
-def _calendar_value(date_mode: str, date_index: int,
-                    occurrences: int = CALENDAR_OCCURRENCES) -> str:
-    if date_mode == "cycle":
-        style = ("wareki", "seireki", "era-seireki", "wareki")[
-            date_index % len(DATE_VALUES)]
-    elif date_mode == "multiple":
-        style = "wareki"
-    else:
-        style = date_mode
-    if style not in ("wareki", "seireki", "era-seireki"):
-        raise LayoutTxtError("未対応のカレンダー生成形式です: %s" % date_mode)
-
-    values = []
-    start = date(2026, 6, 1)
-    for offset in range(occurrences):
-        current = start + timedelta(days=offset)
-        if style == "seireki":
-            value = "/%d/%d/%d" % (current.year, current.month, current.day)
-        elif style == "era-seireki":
-            value = "5/%d/%d/%d" % (current.year, current.month, current.day)
-        else:
-            value = "5/%d/%d/%d" % (
-                current.year - 2018, current.month, current.day)
-        values.append(value)
-    return "|".join(values)
-
-
 def _base_value(data_type: str, ime_name: str,
                 date_mode: str = "cycle", date_index: int = 0,
                 selection_index: int = 0) -> Tuple[str, str]:
@@ -236,9 +208,8 @@ def _base_value(data_type: str, ime_name: str,
         return CHECKBOX_VALUES[selection_index % len(CHECKBOX_VALUES)], "fixed"
     if "ラジオ" in dtype or "選択肢" in dtype or "RADIO" in dtype or "SELECT" in dtype:
         return CHOICE_VALUES[selection_index % len(CHOICE_VALUES)], "fixed"
-    if "カレンダー" in dtype or "CALENDAR" in dtype:
-        return _calendar_value(date_mode, date_index), "date"
-    if "日付" in dtype or "DATE" in dtype:
+    if ("カレンダー" in dtype or "日付" in dtype or
+            "CALENDAR" in dtype or "DATE" in dtype):
         return _date_value(date_mode, date_index), "date"
 
     if "小数" in ime or "DECIMAL" in ime or "FLOAT" in ime:
@@ -277,7 +248,6 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
         selection_index=selection_index)
     dtype = _normalize(data_type)
     is_name = "氏名" in dtype or "NAME" in dtype
-    is_calendar = "カレンダー" in dtype or "CALENDAR" in dtype
     is_selection = ("チェックボックス" in dtype or "選択肢" in dtype or
                     "ラジオ" in dtype or "CHECKBOX" in dtype or
                     "SELECT" in dtype or "RADIO" in dtype)
@@ -288,8 +258,8 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
             "文字列" in dtype or "STRING" in dtype or "TEXT" in dtype):
         base = item_name
         kind = "text"
-    # 選択系とカレンダーはK列の桁境界より、取入仕様で定めた値集合を優先する。
-    if is_selection or is_calendar:
+    # 選択系はK列の桁境界より、取入仕様で定めた値集合を優先する。
+    if is_selection:
         return base
     if max_digits is None:
         return base

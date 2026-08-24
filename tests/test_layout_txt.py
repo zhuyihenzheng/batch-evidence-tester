@@ -99,10 +99,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertEqual([field.value for field in fields[:6]],
                          ["傷病名1", "1", "1", "5/8/6/1", "5/8/6/1",
                           "5/8/6/1"])
-        calendar_values = fields[6].value.split("|")
-        self.assertEqual(len(calendar_values), 46)
-        self.assertEqual(calendar_values[0], "5/8/6/1")
-        self.assertEqual(calendar_values[-1], "5/8/7/16")
+        self.assertEqual(fields[6].value, "5/8/6/1")
         self.assertEqual([field.value for field in fields[7:]],
                          ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
                           "5/8/6/1|5/8/6/2"])
@@ -140,6 +137,44 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertNotIn("input_attribute", columns)
         self.assertEqual(fields[0].input_attribute, "")
 
+    def test_46_calendar_rows_generate_46_independent_items(self):
+        calendar_book = self.tmp / "46_calendars.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append([
+            "FORM_ID", "LAYOUT_ID", "CYOUHYOU_NAME", "予備1", "予備2",
+            "予備3", "予備4", "ITEM_NAME", "ELEMENT_DATA_TYPE_NAME",
+            "ELEMENT_IME_NAME", "MAX_NUM_DIGITS", "ELEMENT_ID",
+        ])
+        for index in range(46):
+            ws.append([
+                4001, 1, "カレンダー帳票", "", "", "", "",
+                "カレンダー%d" % (index + 1), "カレンダー", "数値のみ",
+                "NULL", 3001 + index,
+            ])
+        wb.save(str(calendar_book))
+
+        fields, _sheet, _header, _columns = read_layout_fields(calendar_book)
+
+        self.assertEqual(len(fields), 46)
+        self.assertEqual(len(set(field.field_id for field in fields)), 46)
+        self.assertEqual(
+            [field.value for field in fields[:4]],
+            ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
+             "5/8/6/1|5/8/6/2"])
+        self.assertEqual(sum("|" in field.value for field in fields), 11)
+        self.assertEqual(len(set(field.coordinates for field in fields)), 46)
+        self.assertEqual(fields[0].coordinates, "1,2,3,4")
+        self.assertEqual(fields[-1].coordinates, "181,182,183,184")
+
+        output = self.tmp / "46_calendar_output"
+        generate_layout_txt(
+            calendar_book, output, error_patterns="none", generate_tif=False)
+        txt_values = next(csv.reader([
+            (output / "4001.txt").read_text(encoding="cp932").strip()]))
+        self.assertEqual((len(txt_values) - 2) // 4, 46)
+        self.assertEqual(txt_values[3::4], [field.value for field in fields])
+
     def test_missing_sheet_is_reported_with_candidates(self):
         with self.assertRaises(LayoutTxtError) as ctx:
             read_layout_fields(self.book, sheet_name="存在しない")
@@ -173,16 +208,11 @@ class TestValueGeneration(unittest.TestCase):
              for index in range(6)],
             ["1", "2", "1.2", "1", "2", "1.2"])
 
-    def test_calendar_contains_46_consecutive_dates(self):
-        values = generate_ocr_value(
-            "カレンダー", "数値のみ", None).split("|")
-        self.assertEqual(len(values), 46)
-        self.assertEqual(values[:3], ["5/8/6/1", "5/8/6/2", "5/8/6/3"])
-        self.assertEqual(values[-1], "5/8/7/16")
-        self.assertEqual(len(values), len(set(values)))
+    def test_calendar_item_can_contain_multiple_dates(self):
         self.assertEqual(
-            generate_ocr_value("カレンダー", "数値のみ", 3, profile="max"),
-            "|".join(values))
+            generate_ocr_value("カレンダー", "数値のみ", None,
+                               date_mode="multiple"),
+            "5/8/6/1|5/8/6/2")
 
     def test_name_value_obeys_ime_rule_instead_of_item_name(self):
         self.assertEqual(
@@ -314,10 +344,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(values[3:27:4],
                          ["傷病名1", "1", "1", "5/8/6/1", "5/8/6/1",
                           "5/8/6/1"])
-        calendar_values = values[27].split("|")
-        self.assertEqual(len(calendar_values), 46)
-        self.assertEqual(calendar_values[0], "5/8/6/1")
-        self.assertEqual(calendar_values[-1], "5/8/7/16")
+        self.assertEqual(values[27], "5/8/6/1")
         self.assertEqual(
             values[5::4],
             [",".join(str(index * 4 + offset) for offset in range(1, 5))
