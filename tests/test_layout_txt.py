@@ -4,6 +4,7 @@
 import csv
 import shutil
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from autotest.layout_txt import (  # noqa: E402
     LayoutTxtError,
     generate_layout_txt,
     generate_ocr_value,
+    main as layout_main,
     read_layout_fields,
 )
 
@@ -156,6 +158,75 @@ class TestValueGeneration(unittest.TestCase):
 
 
 class TestGenerateLayoutTxt(LayoutWorkbookCase):
+    def test_selected_form_id_and_custom_filename(self):
+        out = self.tmp / "selected"
+        result = generate_layout_txt(
+            self.book, out, selected_form_ids=["4001"],
+            error_patterns="none", filename_template="CUSTOM_FORM",
+            generate_tif=False)
+        self.assertEqual(result.form_count, 1)
+        self.assertEqual(result.field_count, 4)
+        self.assertEqual([path.name for path in result.txt_files], ["CUSTOM_FORM.txt"])
+        self.assertTrue((out / "CUSTOM_FORM.txt").is_file())
+
+    def test_selected_rows_and_screen_edits_are_written(self):
+        out = self.tmp / "edited"
+        result = generate_layout_txt(
+            self.book, out, selected_form_ids=["1001"],
+            selected_rows=[3, 4],
+            field_overrides={
+                3: {"field_id": "9901", "value": "画面修正値",
+                    "attribute_flag": "2", "coordinates": "1,2,3,4"},
+                4: {"value": "9"},
+            },
+            error_patterns="none", filename_template="EDITED",
+            generate_tif=False)
+        self.assertEqual(result.field_count, 2)
+        text = (out / "EDITED.txt").read_text(encoding="cp932")
+        self.assertEqual(
+            text,
+            '"1001","1","9901","画面修正値","2","1,2,3,4",'
+            '"1002","9","0","0,0,0,0"\n')
+
+    def test_tar_only_contains_txt_and_tif_without_loose_files(self):
+        out = self.tmp / "tar_only"
+        result = generate_layout_txt(
+            self.book, out, selected_form_ids=["1001"],
+            error_patterns="none", filename_template="FORM_{form_id}",
+            create_tar=True, tar_name="PACKAGE_{form_id}", tar_only=True)
+        self.assertEqual(result.txt_files, [])
+        self.assertEqual(result.tif_files, [])
+        self.assertEqual(result.tar_file.name, "PACKAGE_1001.tar")
+        self.assertEqual(result.archive_members, ["FORM_1001.txt", "FORM_1001.tif"])
+        self.assertFalse((out / "FORM_1001.txt").exists())
+        self.assertFalse((out / "FORM_1001.tif").exists())
+        with tarfile.open(str(result.tar_file), "r") as archive:
+            self.assertEqual(archive.getnames(), result.archive_members)
+            txt = archive.extractfile("FORM_1001.txt").read().decode("cp932")
+            tif = archive.extractfile("FORM_1001.tif").read()
+        self.assertTrue(txt.startswith('"1001","1"'))
+        self.assertIn(tif[:4], (b"II*\x00", b"MM\x00*"))
+
+    def test_unknown_selected_form_id_is_rejected(self):
+        with self.assertRaises(LayoutTxtError) as ctx:
+            generate_layout_txt(
+                self.book, self.tmp / "missing_form",
+                selected_form_ids=["9999"], generate_tif=False)
+        self.assertIn("9999", str(ctx.exception))
+
+    def test_cli_can_select_form_and_output_only_tar(self):
+        out = self.tmp / "cli_tar"
+        code = layout_main([
+            str(self.book), "--out-dir", str(out),
+            "--form-id", "1001", "--error-patterns", "none",
+            "--filename-template", "CLI_{form_id}", "--no-tif",
+            "--tar-only", "--tar-name", "CLI_PACKAGE",
+        ])
+        self.assertEqual(code, 0)
+        self.assertEqual([path.name for path in out.iterdir()], ["CLI_PACKAGE.tar"])
+        with tarfile.open(str(out / "CLI_PACKAGE.tar"), "r") as archive:
+            self.assertEqual(archive.getnames(), ["CLI_1001.txt"])
+
     def test_splits_one_raw_file_per_form_with_crlf_and_cp932(self):
         out = self.tmp / "out"
         result = generate_layout_txt(self.book, out, generate_tif=False)

@@ -823,6 +823,18 @@ run_layout_txt.bat
 
 界面选择 Excel、sheet 和输出目录即可。默认列与照片中的定义一致：
 
+GUI操作有两条路径：
+
+1. 点击「Excel定义を読込」，从下拉框选择一个 `FORM_ID`。画面会显示该FORM的
+   Excel行、LAYOUT_ID、ELEMENT_ID、ITEM_NAME、DATA_TYPE、IME、MAX和自动生成的OCR值。
+2. 双击表格中的 `出力`、`ELEMENT_ID`、`OCR生成値`、`属性`、`座標`可以修改；
+   点击「表示中FORM_IDを出力」只生成当前FORM和画面上启用的项目。
+3. 不需要预览修改时，点击「全FORM_IDを直接出力」，按Excel定义一次生成全部FORM。
+
+TXT文件名可以直接写固定名称，也可以使用 `{form_id}`、`{pattern}`、`{seq:02d}`、
+`{source}` 模板。选择单个FORM时可以写成 `TEST_1001`；批量生成时建议保留
+`{form_id}`，避免不同FORM重名。
+
 | 用途 | 默认列 | 示例值 |
 |---|---:|---|
 | FormID | B | `1001` |
@@ -869,6 +881,9 @@ I 列为 `文字列` 时，`通常値` 优先使用该行的 `ITEM_NAME` 作为 
 `4001_03_count_missing.txt + 4001_03_count_missing.tif`。TXT使用 `cp932 + CRLF`；
 TIF为A4相当、200 DPI，显示该Pattern实际使用的FormID、ELEMENT_ID、ITEM_NAME、OCR值和属性，
 项目过多时会生成多页TIF。
+勾选「TARを生成」会把本次的TXT/TIF一起放入标准 `.tar`；勾选「TARだけ残す」时，
+输出目录只留下TAR，不留下散装TXT/TIF。TAR文件名支持 `{source}` 和 `{form_id}`；
+选择全部FORM时 `{form_id}` 会变成 `all`。
 一个账票的全部数据只占一行，
 每个值都用双引号包裹并用逗号分隔，顺序为：
 
@@ -924,7 +939,23 @@ python -m autotest.layout_txt layout.xlsx ^
     --attribute-flag 0 --coordinates 0,0,0,0
 ```
 
-已有同名 TXT/TIF 时默认报错并保持原文件；明确传 `--overwrite` 才覆盖。
+只输出FORM_ID 1001、指定TXT名并且只保留TAR：
+
+```cmd
+set PYTHONPATH=src
+python -m autotest.layout_txt layout.xlsx ^
+    --sheet 帳票対象整理 ^
+    --out-dir output\layout_txt ^
+    --form-id 1001 ^
+    --error-patterns none ^
+    --filename-template "TEST_1001" ^
+    --tar-only --tar-name "FORM_1001_DATA"
+```
+
+多个FORM可以重复指定或用逗号连接：`--form-id 1001 --form-id 1003`、
+`--form-id 1001,1003`。省略 `--form-id` 就是直接输出全部。
+
+已有同名 TXT/TIF/TAR 时默认报错并保持原文件；明确传 `--overwrite` 才覆盖。
 不需要TIF时使用 `--no-tif`；只生成主要8种异常时使用 `--error-patterns core`；
 不生成异常Pattern时使用 `--error-patterns none`。运行 `python -m autotest.layout_txt --help`
 可查看单文件输出、TSV、UTF-8、自定义 I/J/K 列等选项。

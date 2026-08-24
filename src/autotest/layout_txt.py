@@ -19,9 +19,11 @@ OCR 値は Excel の I/J/K 列（データ型 / IME / 最大桁数）から決�
 """
 
 import argparse
+import io
 import os
 import re
 import sys
+import tarfile
 import tempfile
 from collections import OrderedDict
 from datetime import date, datetime
@@ -282,7 +284,8 @@ class GenerationResult(object):
     def __init__(self, files: List[Path], field_count: int,
                  form_count: int, sheet_name: str, header_row: int,
                  columns: Dict[str, int], tif_files: Optional[List[Path]] = None,
-                 pattern_count: int = 0) -> None:
+                 pattern_count: int = 0, tar_file: Optional[Path] = None,
+                 archive_members: Optional[List[str]] = None) -> None:
         # files は後方互換のため TXT 一覧のまま維持する。
         self.files = files
         self.txt_files = files
@@ -290,6 +293,8 @@ class GenerationResult(object):
         self.field_count = field_count
         self.form_count = form_count
         self.pattern_count = pattern_count
+        self.tar_file = tar_file
+        self.archive_members = archive_members or []
         self.sheet_name = sheet_name
         self.header_row = header_row
         self.columns = columns
@@ -621,8 +626,8 @@ def _make_pattern_case(source_form_id: str, base_fields: Sequence[LayoutField],
     target = target_presence
 
     if pattern == "normal":
-        for field in fields:
-            field.attribute_flag = "0"
+        # Excel/GUIで指定された属性をそのまま使う。通常読込の既定値は0。
+        pass
     elif pattern == "count_zero":
         fields = []
     elif pattern == "count_missing":
@@ -885,6 +890,69 @@ def _atomic_write(path: Path, payload: bytes) -> None:
         raise
 
 
+def _tar_payload(rendered: Sequence[Tuple[Path, bytes, str]]) -> bytes:
+    """生成済みTXT/TIFを再現可能な無圧縮TARにまとめる。"""
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        for path, payload, _kind in rendered:
+            info = tarfile.TarInfo(name=path.name)
+            info.size = len(payload)
+            info.mtime = 0
+            info.mode = 0o644
+            info.uid = 0
+            info.gid = 0
+            info.uname = ""
+            info.gname = ""
+            archive.addfile(info, io.BytesIO(payload))
+    return stream.getvalue()
+
+
+def _tar_stem(tar_name: str, source_stem: str,
+              form_ids: Sequence[str]) -> str:
+    raw = str(tar_name or "{source}_layout_data").strip()
+    if raw.lower().endswith(".tar"):
+        raw = raw[:-4]
+    form_value = form_ids[0] if len(form_ids) == 1 else "all"
+    try:
+        value = raw.format(source=source_stem, form_id=form_value)
+    except (KeyError, ValueError, IndexError) as exc:
+        raise LayoutTxtError("TARファイル名が不正です: %s" % exc)
+    return _safe_filename(value)
+
+
+def _filter_and_override_fields(
+        fields: Sequence[LayoutField],
+        selected_form_ids: Optional[Sequence[str]],
+        selected_rows: Optional[Sequence[int]],
+        field_overrides: Optional[Dict[int, Dict[str, str]]]) -> List[LayoutField]:
+    selected = None  # type: Optional[List[str]]
+    if selected_form_ids:
+        selected = [str(value).strip() for value in selected_form_ids if str(value).strip()]
+        available = set(field.form_id for field in fields)
+        missing = [value for value in selected if value not in available]
+        if missing:
+            raise LayoutTxtError("指定FormIDがExcelにありません: %s" % ", ".join(missing))
+
+    row_set = None if selected_rows is None else set(int(value) for value in selected_rows)
+    overrides = field_overrides or {}
+    result = []  # type: List[LayoutField]
+    for original in fields:
+        if selected is not None and original.form_id not in selected:
+            continue
+        if row_set is not None and original.row_number not in row_set:
+            continue
+        field = _copy_field(original)
+        values = overrides.get(field.row_number, overrides.get(str(field.row_number), {}))
+        if values:
+            for name in ("field_id", "value", "attribute_flag", "coordinates"):
+                if name in values:
+                    setattr(field, name, str(values[name]))
+        result.append(field)
+    if not result:
+        raise LayoutTxtError("指定条件に一致する出力項目がありません。")
+    return result
+
+
 def generate_layout_txt(excel_path: Path, output_dir: Path,
                         sheet_name: Optional[str] = None,
                         header_row: Optional[int] = None,
@@ -900,7 +968,12 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         attribute_flag: str = "0", coordinates: str = "0,0,0,0",
                         crlf: bool = True, error_patterns: str = "all",
                         filename_template: str = "{form_id}",
-                        generate_tif: bool = True) -> GenerationResult:
+                        generate_tif: bool = True,
+                        selected_form_ids: Optional[Sequence[str]] = None,
+                        selected_rows: Optional[Sequence[int]] = None,
+                        field_overrides: Optional[Dict[int, Dict[str, str]]] = None,
+                        create_tar: bool = False, tar_name: str = "",
+                        tar_only: bool = False) -> GenerationResult:
     fields, actual_sheet, actual_header, columns = read_layout_fields(
         excel_path=excel_path, sheet_name=sheet_name, header_row=header_row,
         form_column=form_column, layout_column=layout_column,
@@ -909,6 +982,10 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
         max_digits_column=max_digits_column, profile=profile, date_mode=date_mode,
         coverage_form_id=coverage_form_id,
         attribute_flag=attribute_flag, coordinates=coordinates)
+
+    fields = _filter_and_override_fields(
+        fields, selected_form_ids=selected_form_ids,
+        selected_rows=selected_rows, field_overrides=field_overrides)
 
     groups = OrderedDict()  # type: OrderedDict[str, List[LayoutField]]
     for field in fields:
@@ -982,7 +1059,18 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
             tif_files.append(tif_path)
             rendered.append((tif_path, _tif_payload(cases), "TIF"))
 
-    existing = [path for path, _payload, _kind in rendered if path.exists()]
+    archive_members = [path.name for path, _payload, _kind in rendered]
+    tar_file = None  # type: Optional[Path]
+    writes = list(rendered)
+    if tar_only:
+        create_tar = True
+    if create_tar:
+        tar_file = output_dir / (
+            _tar_stem(tar_name, source_stem, list(groups.keys())) + ".tar")
+        tar_item = (tar_file, _tar_payload(rendered), "TAR")
+        writes = [tar_item] if tar_only else rendered + [tar_item]
+
+    existing = [path for path, _payload, _kind in writes if path.exists()]
     if existing and not overwrite:
         raise LayoutTxtError(
             "既存TXT/TIFを上書きしません。--overwriteを付けるか出力先を変えてください: %s"
@@ -990,14 +1078,16 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
 
     # 全件を先に検証・エンコードしてから書く。途中エラーで半端な一式を残さない。
     output_dir.mkdir(parents=True, exist_ok=True)
-    for path, payload, _kind in rendered:
+    for path, payload, _kind in writes:
         _atomic_write(path, payload)
 
     return GenerationResult(
-        files=txt_files, tif_files=tif_files, field_count=len(fields),
+        files=[] if tar_only else txt_files,
+        tif_files=[] if tar_only else tif_files, field_count=len(fields),
         form_count=len(groups), sheet_name=actual_sheet,
         header_row=actual_header, columns=columns,
-        pattern_count=len(cases))
+        pattern_count=len(cases), tar_file=tar_file,
+        archive_members=archive_members)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1024,6 +1114,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="日付形式（既定: 通常Form=和暦 / 4001=4形式網羅）")
     parser.add_argument("--coverage-form-id", default="4001",
                         help="属性・日付の全網羅データを作る FormID（既定: 4001）")
+    parser.add_argument(
+        "--form-id", dest="form_ids", action="append", default=[],
+        help="出力対象FormID。複数回またはカンマ区切りで指定（省略時は全Form）")
     parser.add_argument("--error-patterns", choices=["none", "core", "all"], default="all",
                         help="4001の異常系: none=なし / core=主要8種 / all=全24種")
     parser.add_argument(
@@ -1034,7 +1127,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--encoding", default="cp932", help="文字コード（既定: cp932）")
     parser.add_argument("--single-file", action="store_true", help="FormID ごとに分けず 1 ファイルにする")
     parser.add_argument("--no-tif", action="store_true", help="TXTと同名の対応TIFを生成しない")
-    parser.add_argument("--overwrite", action="store_true", help="既存 TXT/TIF を上書きする")
+    parser.add_argument("--tar", action="store_true", help="生成TXT/TIFをTARにもまとめる")
+    parser.add_argument(
+        "--tar-name", default="{source}_layout_data",
+        help="TAR名（拡張子不要）。{source}/{form_id}が使用可能")
+    parser.add_argument("--tar-only", action="store_true", help="散文件を残さずTARだけ出力する")
+    parser.add_argument("--overwrite", action="store_true", help="既存 TXT/TIF/TAR を上書きする")
     parser.add_argument("--target-presence", default="1", help="対象有無情報（既定: 1）")
     parser.add_argument("--attribute-flag", default="0", help="項目毎の属性フラグ（既定: 0）")
     parser.add_argument("--coordinates", default="0,0,0,0", help="項目毎の座標情報")
@@ -1045,7 +1143,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _print_result(result: GenerationResult) -> None:
     mapping = ", ".join("%s=%s" % (name, get_column_letter(index))
                         for name, index in sorted(result.columns.items()))
-    print("[OK] Layout TXT を生成しました")
+    print("[OK] Layout TXT/TIF/TAR を生成しました")
     print("  シート   : %s" % result.sheet_name)
     print("  見出し行 : %d" % result.header_row)
     print("  使用列   : %s" % mapping)
@@ -1056,6 +1154,9 @@ def _print_result(result: GenerationResult) -> None:
         print("生成TXT: %s" % path)
     for path in result.tif_files:
         print("生成TIF: %s" % path)
+    if result.tar_file is not None:
+        print("生成TAR: %s（%d ファイル格納）" % (
+            result.tar_file, len(result.archive_members)))
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1064,6 +1165,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         from .layout_txt_gui import main as gui_main
         return gui_main(initial_excel=Path(args.excel) if args.excel else None)
     try:
+        selected_form_ids = []
+        for value in args.form_ids:
+            selected_form_ids.extend(
+                item.strip() for item in value.split(",") if item.strip())
         result = generate_layout_txt(
             excel_path=Path(args.excel), output_dir=Path(args.out_dir),
             sheet_name=args.sheet, header_row=args.header_row,
@@ -1075,9 +1180,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             coverage_form_id=args.coverage_form_id,
             error_patterns=args.error_patterns,
             filename_template=args.filename_template,
+            selected_form_ids=selected_form_ids or None,
             output_format=args.output_format,
             encoding=args.encoding, split_by_form=not args.single_file,
             generate_tif=not args.no_tif,
+            create_tar=args.tar or args.tar_only,
+            tar_name=args.tar_name, tar_only=args.tar_only,
             overwrite=args.overwrite, target_presence=args.target_presence,
             attribute_flag=args.attribute_flag, coordinates=args.coordinates,
             crlf=not args.lf)
@@ -1085,7 +1193,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("[設定エラー] %s" % exc, file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001 - CLI 境界で理由を表示する
-        print("[エラー] TXT 生成に失敗しました: %s" % exc, file=sys.stderr)
+        print("[エラー] Layoutデータ生成に失敗しました: %s" % exc, file=sys.stderr)
         return 1
     _print_result(result)
     return 0
