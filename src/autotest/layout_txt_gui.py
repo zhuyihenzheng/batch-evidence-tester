@@ -532,14 +532,14 @@ class LayoutTxtGui(object):
         fields = self.form_fields[form_id]
         for field in fields:
             values = (
-                "1", field.row_number, field.layout_id, field.field_id,
+                "1", field.row_label, field.layout_id, field.field_id,
                 field.item_name, field.data_type, field.ime_name,
                 "NULL" if field.max_digits is None else field.max_digits,
                 field.value, field.attribute_flag, field.coordinates,
                 field.input_attribute, field.input_rule,
                 field.notes, field.output_example,
             )
-            self.tree.insert("", "end", iid=str(field.row_number), values=values)
+            self.tree.insert("", "end", iid=field.instance_key, values=values)
         self.form_summary_var.set("%s: %d項目（ダブルクリックで編集）" % (form_id, len(fields)))
 
     def _apply_visible_columns(self, save=True) -> None:
@@ -620,15 +620,14 @@ class LayoutTxtGui(object):
 
     def _screen_edits(self):
         self._finish_cell_edit(save=True)
-        rows = []  # type: List[int]
-        overrides = {}  # type: Dict[int, Dict[str, str]]
+        rows = []  # type: List[str]
+        overrides = {}  # type: Dict[str, Dict[str, str]]
         for item in self.tree.get_children(""):
             values = list(self.tree.item(item, "values"))
             if str(values[0]).strip() not in ("1", "ON", "on", "yes", "true"):
                 continue
-            row_number = int(values[1])
-            rows.append(row_number)
-            overrides[row_number] = {
+            rows.append(item)
+            overrides[item] = {
                 "field_id": values[3],
                 "value": values[8],
                 "attribute_flag": values[9],

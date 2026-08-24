@@ -68,6 +68,7 @@ DATE_VALUES = (
 
 CHECKBOX_VALUES = ("1", "0")
 CHOICE_VALUES = ("1", "2", "1.2")
+CALENDAR_OCCURRENCES = 46
 
 # 4001 は全網羅データ用。1 と 2 が同じ項目に混在する場合はカンマ区切り。
 COVERAGE_ATTRIBUTE_FLAGS = ("0", "1", "2", "1,2")
@@ -305,7 +306,8 @@ class LayoutField(object):
                  value: str, row_number: int,
                  attribute_flag: str = "0", coordinates: str = "0,0,0,1",
                  input_attribute: str = "", input_rule: str = "",
-                 notes: str = "", output_example: str = "") -> None:
+                 notes: str = "", output_example: str = "",
+                 occurrence_index: int = 1, occurrence_count: int = 1) -> None:
         self.form_id = form_id
         self.layout_id = layout_id
         self.field_id = field_id
@@ -321,6 +323,19 @@ class LayoutField(object):
         self.input_rule = input_rule
         self.notes = notes
         self.output_example = output_example
+        self.occurrence_index = occurrence_index
+        self.occurrence_count = occurrence_count
+
+    @property
+    def instance_key(self) -> str:
+        return "%d:%d" % (self.row_number, self.occurrence_index)
+
+    @property
+    def row_label(self) -> str:
+        if self.occurrence_count <= 1:
+            return str(self.row_number)
+        return "%d (%d/%d)" % (
+            self.row_number, self.occurrence_index, self.occurrence_count)
 
 
 class GenerationResult(object):
@@ -565,33 +580,37 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             date_kind = "calendar" if (
                 "カレンダー" in dtype or "CALENDAR" in dtype) else "date"
             date_key = (form_id, date_kind)
-            date_index = date_counts.get(date_key, 0)
             selection_kind = "checkbox" if is_checkbox else "choice"
             selection_key = (form_id, selection_kind)
             selection_index = selection_counts.get(selection_key, 0)
-            coordinate_index = coordinate_counts.get(form_id, 0)
             actual_date_mode = date_mode
             if date_mode == "coverage":
                 actual_date_mode = "cycle" if form_id == coverage_id else "wareki"
-            value = generate_ocr_value(
-                data_type, ime_name, max_digits, profile=profile, item_name=item_name,
-                date_mode=actual_date_mode, date_index=date_index,
-                selection_index=selection_index)
-            if is_date:
-                date_counts[date_key] = date_index + 1
+            occurrence_count = CALENDAR_OCCURRENCES if date_kind == "calendar" else 1
+            for occurrence_index in range(1, occurrence_count + 1):
+                date_index = date_counts.get(date_key, 0)
+                coordinate_index = coordinate_counts.get(form_id, 0)
+                value = generate_ocr_value(
+                    data_type, ime_name, max_digits, profile=profile, item_name=item_name,
+                    date_mode=actual_date_mode, date_index=date_index,
+                    selection_index=selection_index)
+
+                fields.append(LayoutField(
+                    form_id=form_id, layout_id=layout_id,
+                    field_id=field_id, item_name=item_name,
+                    data_type=data_type, ime_name=ime_name, max_digits=max_digits,
+                    value=value, row_number=row_number,
+                    attribute_flag=attribute_flag,
+                    coordinates=_coordinate_value(coordinates, coordinate_index),
+                    input_attribute=input_attribute, input_rule=input_rule,
+                    notes=notes, output_example=output_example,
+                    occurrence_index=occurrence_index,
+                    occurrence_count=occurrence_count))
+                coordinate_counts[form_id] = coordinate_index + 1
+                if is_date:
+                    date_counts[date_key] = date_index + 1
             if is_checkbox or is_choice:
                 selection_counts[selection_key] = selection_index + 1
-
-            fields.append(LayoutField(
-                form_id=form_id, layout_id=layout_id,
-                field_id=field_id, item_name=item_name,
-                data_type=data_type, ime_name=ime_name, max_digits=max_digits,
-                value=value, row_number=row_number,
-                attribute_flag=attribute_flag,
-                coordinates=_coordinate_value(coordinates, coordinate_index),
-                input_attribute=input_attribute, input_rule=input_rule,
-                notes=notes, output_example=output_example))
-            coordinate_counts[form_id] = coordinate_index + 1
 
         if not fields:
             raise LayoutTxtError("見出し行より下に生成対象のデータがありません。")
@@ -659,7 +678,9 @@ def _copy_field(field: LayoutField) -> LayoutField:
         row_number=field.row_number, attribute_flag=field.attribute_flag,
         coordinates=field.coordinates,
         input_attribute=field.input_attribute, input_rule=field.input_rule,
-        notes=field.notes, output_example=field.output_example)
+        notes=field.notes, output_example=field.output_example,
+        occurrence_index=field.occurrence_index,
+        occurrence_count=field.occurrence_count)
 
 
 def _copy_fields(fields: Sequence[LayoutField]) -> List[LayoutField]:
@@ -1028,8 +1049,8 @@ def _tar_stem(tar_name: str, source_stem: str,
 def _filter_and_override_fields(
         fields: Sequence[LayoutField],
         selected_form_ids: Optional[Sequence[str]],
-        selected_rows: Optional[Sequence[int]],
-        field_overrides: Optional[Dict[int, Dict[str, str]]]) -> List[LayoutField]:
+        selected_rows: Optional[Sequence],
+        field_overrides: Optional[Dict]) -> List[LayoutField]:
     selected = None  # type: Optional[List[str]]
     if selected_form_ids:
         selected = [str(value).strip() for value in selected_form_ids if str(value).strip()]
@@ -1038,16 +1059,21 @@ def _filter_and_override_fields(
         if missing:
             raise LayoutTxtError("指定FormIDがExcelにありません: %s" % ", ".join(missing))
 
-    row_set = None if selected_rows is None else set(int(value) for value in selected_rows)
+    row_set = None if selected_rows is None else set(
+        str(value).strip() for value in selected_rows)
     overrides = field_overrides or {}
     result = []  # type: List[LayoutField]
     for original in fields:
         if selected is not None and original.form_id not in selected:
             continue
-        if row_set is not None and original.row_number not in row_set:
+        if (row_set is not None and
+                str(original.row_number) not in row_set and
+                original.instance_key not in row_set):
             continue
         field = _copy_field(original)
-        values = overrides.get(field.row_number, overrides.get(str(field.row_number), {}))
+        values = overrides.get(
+            field.instance_key,
+            overrides.get(field.row_number, overrides.get(str(field.row_number), {})))
         if values:
             for name in ("field_id", "value", "attribute_flag", "coordinates"):
                 if name in values:
@@ -1079,8 +1105,8 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         filename_template: str = "{form_id}",
                         generate_tif: bool = True,
                         selected_form_ids: Optional[Sequence[str]] = None,
-                        selected_rows: Optional[Sequence[int]] = None,
-                        field_overrides: Optional[Dict[int, Dict[str, str]]] = None,
+                        selected_rows: Optional[Sequence] = None,
+                        field_overrides: Optional[Dict] = None,
                         create_tar: bool = False, tar_name: str = "",
                         tar_only: bool = False) -> GenerationResult:
     fields, actual_sheet, actual_header, columns = read_layout_fields(

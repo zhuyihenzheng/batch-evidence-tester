@@ -90,24 +90,25 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertEqual(columns["ime"], 10)
         self.assertEqual(columns["max_digits"], 11)
         self.assertEqual([field.form_id for field in fields],
-                         ["1001"] * 7 + ["4001"] * 4)
+                         ["1001"] * 52 + ["4001"] * 4)
         self.assertEqual([field.layout_id for field in fields],
-                         ["00001"] * 7 + ["00002"] * 4)
+                         ["00001"] * 52 + ["00002"] * 4)
         self.assertEqual([field.field_id for field in fields],
-                         ["1001", "1002", "1003", "1004", "1005", "1006", "1007",
-                          "2001", "2002", "2003", "2004"])
+                         ["1001", "1002", "1003", "1004", "1005", "1006"] +
+                         ["1007"] * 46 + ["2001", "2002", "2003", "2004"])
         self.assertEqual([field.value for field in fields[:6]],
                          ["傷病名1", "1", "1", "5/8/6/1", "5/8/6/1",
                           "5/8/6/1"])
-        self.assertEqual(fields[6].value, "5/8/6/1")
-        self.assertEqual([field.value for field in fields[7:]],
+        self.assertEqual([field.value for field in fields[6:52]],
+                         ["5/8/6/1"] * 46)
+        self.assertEqual([field.value for field in fields[52:]],
                          ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
                           "5/8/6/1"])
         self.assertEqual([field.attribute_flag for field in fields],
-                         ["0"] * 11)
+                         ["0"] * 56)
         self.assertEqual(
             [field.coordinates for field in fields],
-            (["0,0,0,%d" % index for index in range(1, 8)] +
+            (["0,0,0,%d" % index for index in range(1, 53)] +
              ["0,0,0,%d" % index for index in range(1, 5)]))
 
     def test_column_can_be_selected_by_header_or_letter(self):
@@ -115,7 +116,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             self.book, form_column="B", layout_column="C", field_column="ELEMENT_ID",
             data_type_column="ELEMENT_DATA_TYPE_NAME", ime_column="J",
             max_digits_column="MAX_NUM_DIGITS")
-        self.assertEqual(len(fields), 11)
+        self.assertEqual(len(fields), 56)
         self.assertEqual(columns["field_id"], 12)
 
     def test_optional_columns_are_appended_when_present(self):
@@ -137,8 +138,8 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertNotIn("input_attribute", columns)
         self.assertEqual(fields[0].input_attribute, "")
 
-    def test_46_calendar_rows_generate_46_independent_items(self):
-        calendar_book = self.tmp / "46_calendars.xlsx"
+    def test_one_calendar_row_expands_to_46_independent_items(self):
+        calendar_book = self.tmp / "one_calendar.xlsx"
         wb = Workbook()
         ws = wb.active
         ws.append([
@@ -146,18 +147,20 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             "予備3", "予備4", "ITEM_NAME", "ELEMENT_DATA_TYPE_NAME",
             "ELEMENT_IME_NAME", "MAX_NUM_DIGITS", "ELEMENT_ID",
         ])
-        for index in range(46):
-            ws.append([
-                4001, 1, "カレンダー帳票", "", "", "", "",
-                "カレンダー%d" % (index + 1), "カレンダー", "数値のみ",
-                "NULL", 3001 + index,
-            ])
+        ws.append([
+            4001, 1, "カレンダー帳票", "", "", "", "",
+            "カレンダー", "カレンダー", "数値のみ", "NULL", 3001,
+        ])
         wb.save(str(calendar_book))
 
         fields, _sheet, _header, _columns = read_layout_fields(calendar_book)
 
         self.assertEqual(len(fields), 46)
-        self.assertEqual(len(set(field.field_id for field in fields)), 46)
+        self.assertEqual(set(field.field_id for field in fields), {"3001"})
+        self.assertEqual(set(field.item_name for field in fields), {"カレンダー"})
+        self.assertEqual([field.occurrence_index for field in fields], list(range(1, 47)))
+        self.assertEqual(fields[0].row_label, "2 (1/46)")
+        self.assertEqual(fields[-1].row_label, "2 (46/46)")
         self.assertEqual(
             [field.value for field in fields[:4]],
             ["5/8/6/1", "/2026/6/1", "5/2026/6/1",
@@ -293,6 +296,22 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
             '"1001","1","9901","画面修正値","2","1,2,3,4",'
             '"1002","9","0","0,0,0,2"\n')
 
+    def test_one_expanded_calendar_occurrence_can_be_edited(self):
+        out = self.tmp / "calendar_edit"
+        result = generate_layout_txt(
+            self.book, out, selected_form_ids=["1001"],
+            selected_rows=["9:2"],
+            field_overrides={"9:2": {"value": "5/8/6/10|5/8/6/11"}},
+            error_patterns="none", filename_template="CALENDAR_EDIT",
+            generate_tif=False)
+
+        self.assertEqual(result.field_count, 1)
+        values = next(csv.reader([
+            (out / "CALENDAR_EDIT.txt").read_text(encoding="cp932").strip()]))
+        self.assertEqual(
+            values,
+            ["1001", "1", "1007", "5/8/6/10|5/8/6/11", "0", "0,0,0,8"])
+
     def test_tar_only_contains_txt_and_tif_without_loose_files(self):
         out = self.tmp / "tar_only"
         result = generate_layout_txt(
@@ -336,7 +355,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         out = self.tmp / "out"
         result = generate_layout_txt(self.book, out, generate_tif=False)
         self.assertEqual(result.form_count, 2)
-        self.assertEqual(result.field_count, 11)
+        self.assertEqual(result.field_count, 56)
         self.assertEqual(result.pattern_count, 25)
         self.assertEqual(len(result.txt_files), 25)
         self.assertEqual(result.txt_files[0].name, "1001.txt")
@@ -348,14 +367,15 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         values = next(csv.reader([text.strip()]))
         self.assertEqual(values[:2], ["1001", "1"])
         self.assertEqual(values[2::4],
-                         ["1001", "1002", "1003", "1004", "1005", "1006", "1007"])
+                         ["1001", "1002", "1003", "1004", "1005", "1006"] +
+                         ["1007"] * 46)
         self.assertEqual(values[3:27:4],
                          ["傷病名1", "1", "1", "5/8/6/1", "5/8/6/1",
                           "5/8/6/1"])
-        self.assertEqual(values[27], "5/8/6/1")
+        self.assertEqual(values[3::4][6:], ["5/8/6/1"] * 46)
         self.assertEqual(
             values[5::4],
-            ["0,0,0,%d" % index for index in range(1, 8)])
+            ["0,0,0,%d" % index for index in range(1, 53)])
 
         coverage = (out / "4001_01_normal.txt").read_bytes().decode("cp932")
         coverage_values = next(csv.reader([coverage.strip()]))
@@ -466,7 +486,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
             self.book, out, output_format="tsv", encoding="utf-8", generate_tif=False)
         rows = result.files[0].read_text(encoding="utf-8").splitlines()
         self.assertEqual(rows[0], "FormID\tTargetPresence\tFieldID\tOCRText\tAttributeFlag\tCoordinates")
-        self.assertEqual(len(rows), 8)
+        self.assertEqual(len(rows), 53)
 
 
 if __name__ == "__main__":
