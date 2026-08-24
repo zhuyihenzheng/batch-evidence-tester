@@ -107,8 +107,8 @@ class TestReadLayoutFields(LayoutWorkbookCase):
                          ["0"] * 11)
         self.assertEqual(
             [field.coordinates for field in fields],
-            [",".join(str(index * 4 + offset) for offset in range(1, 5))
-             for index in range(11)])
+            (["0,0,0,%d" % index for index in range(1, 8)] +
+             ["0,0,0,%d" % index for index in range(1, 5)]))
 
     def test_column_can_be_selected_by_header_or_letter(self):
         fields, _sheet, _header, columns = read_layout_fields(
@@ -164,8 +164,8 @@ class TestReadLayoutFields(LayoutWorkbookCase):
              "5/8/6/1|5/8/6/2"])
         self.assertEqual(sum("|" in field.value for field in fields), 11)
         self.assertEqual(len(set(field.coordinates for field in fields)), 46)
-        self.assertEqual(fields[0].coordinates, "1,2,3,4")
-        self.assertEqual(fields[-1].coordinates, "181,182,183,184")
+        self.assertEqual(fields[0].coordinates, "0,0,0,1")
+        self.assertEqual(fields[-1].coordinates, "0,0,0,46")
 
         output = self.tmp / "46_calendar_output"
         generate_layout_txt(
@@ -291,7 +291,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(
             text,
             '"1001","1","9901","画面修正値","2","1,2,3,4",'
-            '"1002","9","0","5,6,7,8"\n')
+            '"1002","9","0","0,0,0,2"\n')
 
     def test_tar_only_contains_txt_and_tif_without_loose_files(self):
         out = self.tmp / "tar_only"
@@ -355,8 +355,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(values[27], "5/8/6/1")
         self.assertEqual(
             values[5::4],
-            [",".join(str(index * 4 + offset) for offset in range(1, 5))
-             for index in range(7)])
+            ["0,0,0,%d" % index for index in range(1, 8)])
 
         coverage = (out / "4001_01_normal.txt").read_bytes().decode("cp932")
         coverage_values = next(csv.reader([coverage.strip()]))
@@ -367,8 +366,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
                           "5/8/6/1"])
         self.assertEqual(
             coverage_values[5::4],
-            [",".join(str(index * 4 + offset) for offset in range(1, 5))
-             for index in range(7, 11)])
+            ["0,0,0,%d" % index for index in range(1, 5)])
 
     def test_count_and_element_id_patterns_change_actual_structure(self):
         out = self.tmp / "patterns"

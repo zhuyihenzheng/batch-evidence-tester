@@ -289,8 +289,7 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
 
 
 def _serial_coordinates(index: int) -> str:
-    start = (index * 4) + 1
-    return ",".join(str(start + offset) for offset in range(4))
+    return "0,0,0,%d" % (index + 1)
 
 
 def _coordinate_value(coordinates: str, index: int) -> str:
@@ -304,7 +303,7 @@ class LayoutField(object):
     def __init__(self, form_id: str, layout_id: str, field_id: str, item_name: str,
                  data_type: str, ime_name: str, max_digits: Optional[int],
                  value: str, row_number: int,
-                 attribute_flag: str = "0", coordinates: str = "1,2,3,4",
+                 attribute_flag: str = "0", coordinates: str = "0,0,0,1",
                  input_attribute: str = "", input_rule: str = "",
                  notes: str = "", output_example: str = "") -> None:
         self.form_id = form_id
@@ -509,6 +508,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
         last_layout_id = ""
         date_counts = {}  # type: Dict[Tuple[str, str], int]
         selection_counts = {}  # type: Dict[Tuple[str, str], int]
+        coordinate_counts = {}  # type: Dict[str, int]
         coverage_id = str(coverage_form_id or "").strip()
         if coverage_id and not coverage_id.isdigit():
             raise LayoutTxtError("全網羅用 FormID は数字で指定してください: %r" % coverage_id)
@@ -569,6 +569,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             selection_kind = "checkbox" if is_checkbox else "choice"
             selection_key = (form_id, selection_kind)
             selection_index = selection_counts.get(selection_key, 0)
+            coordinate_index = coordinate_counts.get(form_id, 0)
             actual_date_mode = date_mode
             if date_mode == "coverage":
                 actual_date_mode = "cycle" if form_id == coverage_id else "wareki"
@@ -587,9 +588,10 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                 data_type=data_type, ime_name=ime_name, max_digits=max_digits,
                 value=value, row_number=row_number,
                 attribute_flag=attribute_flag,
-                coordinates=_coordinate_value(coordinates, len(fields)),
+                coordinates=_coordinate_value(coordinates, coordinate_index),
                 input_attribute=input_attribute, input_rule=input_rule,
                 notes=notes, output_example=output_example))
+            coordinate_counts[form_id] = coordinate_index + 1
 
         if not fields:
             raise LayoutTxtError("見出し行より下に生成対象のデータがありません。")
@@ -665,20 +667,21 @@ def _copy_fields(fields: Sequence[LayoutField]) -> List[LayoutField]:
 
 
 def _deduplicate_coordinates(fields: Sequence[LayoutField]) -> None:
-    numbers = []
+    last_numbers = []
     for field in fields:
         try:
-            numbers.extend(int(value) for value in field.coordinates.split(","))
+            parts = [int(value) for value in field.coordinates.split(",")]
+            if len(parts) == 4:
+                last_numbers.append(parts[-1])
         except ValueError:
             continue
-    next_number = max(numbers) + 1 if numbers else 1
+    next_number = max(last_numbers) + 1 if last_numbers else 1
     seen = set()
     for field in fields:
         coordinate = field.coordinates
         if coordinate and coordinate in seen:
-            field.coordinates = ",".join(
-                str(next_number + offset) for offset in range(4))
-            next_number += 4
+            field.coordinates = "0,0,0,%d" % next_number
+            next_number += 1
         if field.coordinates:
             seen.add(field.coordinates)
 
@@ -1256,7 +1259,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attribute-flag", default="0", help="項目毎の属性フラグ（既定: 0）")
     parser.add_argument(
         "--coordinates", default="auto",
-        help="項目毎の座標情報（既定: autoで1,2,3,4から連番）")
+        help="項目毎の座標情報（既定: autoでFORM毎に0,0,0,1から末尾を連番）")
     parser.add_argument("--lf", action="store_true", help="改行を CRLF ではなく LF にする")
     return parser
 
