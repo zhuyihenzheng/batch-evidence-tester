@@ -16,8 +16,10 @@ from .config import ConfigError
 from .models import NG, OK, RunResult
 
 
-REVIEW_HEADERS = ["No", "確認項目", "分類", "自動判定", "内容",
-                  "確認結果", "確認者", "確認日"]
+REVIEW_HEADERS = ["No", "確認内容", "判定結果", "確認者", "確認日"]
+# 更新前に生成済みの Excel も finalize できるよう、旧レイアウトを読み取りだけ残す。
+LEGACY_REVIEW_HEADERS = ["No", "確認項目", "分類", "自動判定", "内容",
+                         "確認結果", "確認者", "確認日"]
 
 
 def _text(value) -> str:
@@ -55,11 +57,20 @@ def _case_sheet(workbook, case):
     return matches[0]
 
 
-def _header_row(ws) -> int:
+def _header_layout(ws):
+    """人工確認表の行と列位置を返す。新旧 Excel の両方を受け付ける。"""
     for row in range(1, ws.max_row + 1):
         values = [_text(ws.cell(row, col).value) for col in range(1, 9)]
-        if values == REVIEW_HEADERS:
-            return row
+        if values[:len(REVIEW_HEADERS)] == REVIEW_HEADERS:
+            return row, {
+                "content": 2, "result": 3, "reviewer": 4, "date": 5,
+                "legacy": False,
+            }
+        if values == LEGACY_REVIEW_HEADERS:
+            return row, {
+                "content": 2, "result": 6, "reviewer": 7, "date": 8,
+                "legacy": True,
+            }
     raise ConfigError(
         "%s シートに人工確認欄がありません。report/finalize の順序と Excel を確認してください。"
         % ws.title)
@@ -122,7 +133,8 @@ def apply_excel_confirmations(run: RunResult, excel_path: Path) -> List[Dict[str
             if not targets:
                 continue
             ws = _case_sheet(workbook, case)
-            first = _header_row(ws) + 1
+            header_row, layout = _header_layout(ws)
+            first = header_row + 1
             rows_by_no = {}
             for row in range(first, min(ws.max_row, first + len(case.checks) + 5) + 1):
                 value = ws.cell(row, 1).value
@@ -135,15 +147,16 @@ def apply_excel_confirmations(run: RunResult, excel_path: Path) -> List[Dict[str
                 row = rows_by_no.get(number)
                 if row is None:
                     raise ConfigError("%s / No.%d の確認行が Excel にありません" % (case.case_id, number))
-                excel_name = _text(ws.cell(row, 2).value)
-                if excel_name != check.name:
+                excel_content = _text(ws.cell(row, layout["content"]).value)
+                expected_content = check.name if layout["legacy"] else check.confirmation_text
+                if excel_content != expected_content:
                     raise ConfigError(
-                        "%s / No.%d の確認項目が実行結果と一致しません（Excel: %r / 結果: %r）"
-                        % (case.case_id, number, excel_name, check.name))
+                        "%s / No.%d の確認内容が実行結果と一致しません（Excel: %r / 結果: %r）"
+                        % (case.case_id, number, excel_content, expected_content))
 
-                result = _text(ws.cell(row, 6).value).upper()
-                reviewer = _text(ws.cell(row, 7).value)
-                raw_date = ws.cell(row, 8).value
+                result = _text(ws.cell(row, layout["result"]).value).upper()
+                reviewer = _text(ws.cell(row, layout["reviewer"]).value)
+                raw_date = ws.cell(row, layout["date"]).value
                 if result not in (OK, NG):
                     raise ConfigError(
                         "%s / No.%d の確認結果は OK または NG を入力してください（現在: %r）"

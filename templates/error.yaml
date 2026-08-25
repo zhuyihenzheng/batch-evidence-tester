@@ -46,27 +46,11 @@ collect:
       pattern: "*.csv"
       preview: true                   # エラーフォルダへ退避された中身を証跡に残す
 
-assert:
-  # 実際の batch の仕様に合わせる（異常終了のコードは batch ごとに違う）
-  exit_code: 1
+review:
+  - "DB スナップショットの実行前後を比較し、部分更新が残らず対象データが仕様どおりロールバックされていること"
+  - "実行後フォルダと回収物を確認し、異常ファイルがエラーフォルダへ退避され、処理済・出力には残っていないこと"
+  - "実行ログに原因を特定できるエラー内容と異常終了が記録されていること"
 
-  # 更新が失敗したのなら、DB は setup 直後から変化していないこと。
-  # ここが「ロールバックされているか（部分コミットが無いか）」の検証になる
-  # db:
-  #   - table: T_ORDER
-  #     expected: "expected/{case_id}/db_T_ORDER.csv"
-  #     key: [ORDER_ID]
-  #     ignore_columns: [UPDATED_AT]
-
-  files:
-    - name: "エラーフォルダへの退避"
-      exists: {dir: error_dir, pattern: "*.csv", count: 1}
-    - name: "処理済フォルダへ移動していないこと"
-      exists: {dir: processed_dir, pattern: "*", count: 0}
-    - name: "結果ファイルが出力されないこと"
-      exists: {dir: output_dir, pattern: "*.csv", count: 0}
-
-  log:
-    # 実際の batch が出すメッセージに合わせて書き換えること
-    must_contain: ["処理異常終了"]
-    must_not_contain: ["処理正常終了"]
+# assert は機械判定も併用したい場合だけ追加する。
+# assert:
+#   exit_code: 1

@@ -35,17 +35,11 @@ collect:
 execute:
   args: ["--mode", "daily"]
 
-assert:
-  # 実際の batch の仕様に合わせる
-  exit_code: 2
+review:
+  - "標準出力・標準エラーを確認し、ハングせず終了して環境不備の原因を識別できること"
+  - "実行後フォルダを確認し、投入ファイルが未処理のまま残り、処理済フォルダへ移動していないこと"
+  - "実行ログに環境不備の内容と異常終了が記録されていること"
 
-  files:
-    # 異常終了なので、投入ファイルは処理されず投入フォルダに残ったままであること
-    - name: "投入ファイルが未処理のまま残ること"
-      exists: {dir: input_dir, pattern: "*.csv", count: 1}
-    - name: "処理済フォルダへ移動していないこと"
-      exists: {dir: processed_dir, pattern: "*", count: 0}
-
-  log:
-    must_contain: ["処理異常終了"]
-    must_not_contain: ["処理正常終了"]
+# assert は機械判定も併用したい場合だけ追加する。
+# assert:
+#   exit_code: 2

@@ -106,6 +106,13 @@ class CheckResult:
     def is_reviewable(self) -> bool:
         return self.verdict == REVIEW
 
+    @property
+    def confirmation_text(self) -> str:
+        """Excel の「確認内容」に出す、人がそのまま読める詳細文。"""
+        if not self.detail:
+            return self.name
+        return "%s\n%s" % (self.name, self.detail)
+
 
 class ExecutionInfo:
     """.exe の実行結果。"""

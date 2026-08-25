@@ -1006,14 +1006,29 @@ class CaseRunner:
         log_slices: List[logs.LogSlice],
     ) -> List[CheckResult]:
         spec = case.assertions or {}
-        checks: List[CheckResult] = []
+        checks: List[CheckResult] = self._review_points(case)
 
-        checks.append(self._assert_exit_code(spec, result))
-        checks.extend(self._assert_db(spec, result))
-        checks.extend(self._assert_files(spec))
-        checks.append(self._assert_log(spec, log_slices))
+        # assert は任意。証跡採取 + review だけのケースに「期待値なし」の
+        # SKIP 行を混ぜず、YAML に書いた人工確認観点だけを Excel に並べる。
+        if "exit_code" in spec:
+            checks.append(self._assert_exit_code(spec, result))
+        if "db" in spec:
+            checks.extend(self._assert_db(spec, result))
+        if "files" in spec:
+            checks.extend(self._assert_files(spec))
+        if "log" in spec:
+            checks.append(self._assert_log(spec, log_slices))
 
         return [c for c in checks if c is not None]
+
+    def _review_points(self, case: TestCase) -> List[CheckResult]:
+        """YAML の review を、Excel で一項目ずつ確定する確認行へ変換する。"""
+        checks: List[CheckResult] = []
+        for content in case.review:
+            text = str(content).strip()
+            checks.append(CheckResult(
+                text, "review", REVIEW, ""))
+        return checks
 
     def _assert_exit_code(self, spec: dict, result: CaseResult) -> CheckResult:
         if "exit_code" not in spec:

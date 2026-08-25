@@ -2,18 +2,14 @@
 # {case_id} 正常系
 #
 #   autotest new で生成したひな形。このままでも実行できる状態にしてある。
-#   次の 3 つを埋めれば正式なケースになる:
+#   次の 4 つを埋めれば正式なケースになる:
 #     1. cases/{case_id}/input/ に投入ファイルを置き、下の input_files に書く
 #     2. snapshot.tables に、確認したいテーブルの SELECT を書く
-#     3. 一度実行し、結果を確認してから expected/{case_id}/ に期待値を置いて
-#        assert.db / assert.files のコメントを外す
+#     3. collect に、保全・画像化したい成果ファイルを書く
+#     4. review に、人が証跡を見て OK/NG を決める確認観点を書く
 #
-#   ★ 期待値の作り方
-#     初回は assert に exit_code とログだけ書いて実行する。
-#     output/<run_id>/artifacts/{case_id}/ に実際の出力ファイルが、
-#     Excel の「実行後」DB 表に実際のレコードが残るので、内容を目視確認してから
-#     expected/{case_id}/ にコピーして基準（ベースライン）にする。
-#     以降の回帰はこの基準との差分だけを見ればよい。
+#   assert は任意。期待値との自動比較が必要な項目だけ追加する。
+#   review だけでも batch 実行・証跡採取・Excel の人工確認欄まで成立する。
 # =============================================================================
 id: {case_id}
 name: "正常系：（ここにケース名を書く）"
@@ -57,39 +53,26 @@ collect:
       pattern: "*.csv"
       preview: true                   # 中身も証跡画像として残す
 
-# --- 判定 ---------------------------------------------------------------------
-assert:
-  exit_code: 0
+# --- 人工確認観点 -------------------------------------------------------------
+# Excel に 1 観点 1 行で出力され、確認者が OK/NG・確認者・確認日を記入する。
+review:
+  - "DB スナップショットの実行前後を比較し、対象レコードが業務仕様どおりのステータス・値になっていること"
+  - |
+      証跡画像と回収物を確認すること。
+      出力件数・ファイル名・内容が業務仕様どおりであること。
+  - "実行ログを確認し、処理が完了して想定外の ERROR / Exception が出力されていないこと"
 
-  # 期待値を置いたらコメントを外す
-  # db:
-  #   - table: T_ORDER
-  #     expected: "expected/{case_id}/db_T_ORDER.csv"
-  #     key: [ORDER_ID]
-  #     ignore_columns: [UPDATED_AT]  # 実行時刻に依存する列は除外する
-  #     manual: true                  # 一致しても人が最終確認する場合
-  #
-  # 期待値を作らず、実行前後の DB 証跡を人が確認する場合:
-  # db:
-  #   - table: T_ORDER                # snapshot.tables に同名の定義が必要
-  #     manual: true
-
-  files:
-    # 「ファイルが出た / 移動した」という事実の確認は期待値なしで書ける
-    - name: "処理済フォルダへの移動"
-      exists: {dir: processed_dir, pattern: "*.csv", count: 1}
-    - name: "エラーフォルダが空であること"
-      exists: {dir: error_dir, pattern: "*", count: 0}
-    # - name: "結果ファイルの内容"
-    #   actual: {dir: output_dir, pattern: "RESULT_*.csv"}
-    #   expected: "expected/{case_id}/RESULT.csv"
-    #   encoding: cp932
-    #   ignore_line_patterns: ['^#作成日時']   # 時刻など毎回変わる行は除外
-    #   manual: true                  # 自動比較一致後も人が最終確認（同じ collect + preview が必須）
-    #
-    # 期待ファイル無しで目視確認する場合は expected を省き manual: true にする。
-    # その場合、上の collect.files に同じ dir / pattern と preview: true が必須。
-
-  log:
-    must_contain: ["処理正常終了"]
-    must_not_contain: ["[ERROR]", "Exception", "異常終了"]
+# --- 自動判定（必要な場合だけ使用）---------------------------------------------
+# assert:
+#   exit_code: 0
+#   db:
+#     - table: T_ORDER
+#       expected: "expected/{case_id}/db_T_ORDER.csv"
+#       key: [ORDER_ID]
+#       ignore_columns: [UPDATED_AT]
+#   files:
+#     - name: "処理済フォルダへの移動"
+#       exists: {dir: processed_dir, pattern: "*.csv", count: 1}
+#   log:
+#     must_contain: ["処理正常終了"]
+#     must_not_contain: ["[ERROR]", "Exception", "異常終了"]

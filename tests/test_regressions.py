@@ -1418,6 +1418,61 @@ class TestManualReview(unittest.TestCase):
         self.assertNotEqual(REVIEW, OK)
 
 
+class TestYamlReviewPoints(TmpDirCase):
+    """assert の種類に縛られない人工確認観点を YAML から作れること。"""
+
+    def test_review_points_become_review_checks_without_skip_noise(self):
+        from autotest.models import REVIEW
+        from autotest.orchestrator import CaseRunner
+
+        cases_dir = self.tmp / "cases"
+        cases_dir.mkdir()
+        (cases_dir / "R.yaml").write_text(
+            "id: R\nname: R\n"
+            "review:\n"
+            "  - DB 実行前後を比較し、更新状態が仕様どおりであること\n"
+            "  - |\n"
+            "      実行ログを確認すること。\n"
+            "      想定外のエラーが無いこと。\n",
+            encoding="utf-8")
+        case = load_cases(cases_dir)[0]
+        runner = CaseRunner(
+            self.write_settings({"output_dir": str(self.tmp / "out")}), self.tmp / "run")
+
+        checks = runner._assert_all(case, None, CaseResult("R", "R"), [])
+
+        self.assertEqual(
+            [c.name for c in checks],
+            ["DB 実行前後を比較し、更新状態が仕様どおりであること",
+             "実行ログを確認すること。\n想定外のエラーが無いこと。"])
+        self.assertTrue(all(c.category == "review" for c in checks))
+        self.assertTrue(all(c.verdict == REVIEW for c in checks))
+        self.assertEqual(checks[0].detail, "")
+
+    def test_review_point_requires_non_empty_string(self):
+        cases_dir = self.tmp / "invalid_cases"
+        cases_dir.mkdir()
+        (cases_dir / "R.yaml").write_text(
+            "id: R\nname: R\nreview:\n  - ''\n  - {content: mapping は不可}\n",
+            encoding="utf-8")
+        with self.assertRaises(ConfigError) as ctx:
+            load_cases(cases_dir)
+        self.assertIn("review[0]", str(ctx.exception))
+        self.assertIn("review[1]", str(ctx.exception))
+
+    def test_review_point_rejects_duplicate_content(self):
+        cases_dir = self.tmp / "duplicate_cases"
+        cases_dir.mkdir()
+        (cases_dir / "R.yaml").write_text(
+            "id: R\nname: R\nreview:\n"
+            "  - 同じ確認内容\n"
+            "  - 同じ確認内容\n",
+            encoding="utf-8")
+        with self.assertRaises(ConfigError) as ctx:
+            load_cases(cases_dir)
+        self.assertIn("重複", str(ctx.exception))
+
+
 class TestManualReviewAssertionTypes(TmpDirCase):
     """DB/内容比較以外に manual を書いても黙って無視されないこと。"""
 
@@ -1471,19 +1526,21 @@ class TestManualReviewExcel(TmpDirCase):
         from autotest.models import REVIEW
         ws = self._build([OK, REVIEW])
         headers = {c.value for row in ws.iter_rows() for c in row
-                   if c.value in ("確認結果", "確認者", "確認日")}
-        self.assertEqual(headers, {"確認結果", "確認者", "確認日"})
+                   if c.value in ("判定結果", "確認者", "確認日")}
+        self.assertEqual(headers, {"判定結果", "確認者", "確認日"})
+        values = [c.value for row in ws.iter_rows() for c in row]
+        self.assertIn("未確認", values)
 
     def test_no_input_columns_without_review(self):
         ws = self._build([OK, OK])
-        headers = [c.value for row in ws.iter_rows() for c in row if c.value == "確認結果"]
+        headers = [c.value for row in ws.iter_rows() for c in row if c.value == "確認者"]
         self.assertEqual(headers, [], "確認待ちが無いのに記入欄を出さないこと")
 
     def test_guidance_note_present(self):
         from autotest.models import REVIEW
         ws = self._build([REVIEW])
         texts = [str(c.value) for row in ws.iter_rows() for c in row
-                 if isinstance(c.value, str) and "要確認" in c.value and "記入" in c.value]
+                 if isinstance(c.value, str) and "未確認" in c.value and "記入" in c.value]
         self.assertTrue(texts, "確認手順の案内が出ていない")
 
 

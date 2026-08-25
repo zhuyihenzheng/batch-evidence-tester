@@ -44,10 +44,10 @@ class TestFinalizeReview(unittest.TestCase):
         wb = load_workbook(str(path))
         ws = wb["TC001"]
         header = next(row for row in range(1, ws.max_row + 1)
-                      if ws.cell(row, 1).value == "No" and ws.cell(row, 6).value == "確認結果")
-        ws.cell(header + 1, 6, result)
-        ws.cell(header + 1, 7, reviewer)
-        ws.cell(header + 1, 8, confirmed)
+                      if ws.cell(row, 1).value == "No" and ws.cell(row, 3).value == "判定結果")
+        ws.cell(header + 1, 3, result)
+        ws.cell(header + 1, 4, reviewer)
+        ws.cell(header + 1, 5, confirmed)
         wb.save(str(path))
         return path
 
@@ -115,9 +115,20 @@ class TestFinalizeReview(unittest.TestCase):
         build_workbook(run, out, {})
         ws = load_workbook(str(out))["TC001"]
         values = [cell.value for row in ws.iter_rows() for cell in row]
-        self.assertIn("要確認", values, "元の自動判定を残すこと")
+        self.assertIn("OK", values)
         self.assertIn("山田", values)
         self.assertIn("人工確認済み", " ".join(str(v) for v in values if v))
+
+    def test_initial_excel_uses_unconfirmed_and_has_no_execution_section(self):
+        run = self._run()
+        path = self.tmp / "initial.xlsx"
+        build_workbook(run, path, {})
+        ws = load_workbook(str(path))["TC001"]
+        values = [cell.value for row in ws.iter_rows() for cell in row]
+        self.assertNotIn("実行情報", values)
+        self.assertIn("確認内容", values)
+        self.assertIn("未確認", values)
+        self.assertIn("DB確認\n目視確認", values)
 
     def test_cli_finalize_writes_excel_and_audit_json(self):
         from autotest.cli import _finalize

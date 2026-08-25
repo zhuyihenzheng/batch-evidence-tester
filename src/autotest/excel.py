@@ -228,44 +228,7 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
     # 出力する節だけを順に採番する（該当データが無い節は飛ばす）
     section_no = _Counter()
 
-    # --- 実行情報 ---------------------------------------------------------
-    row = _section(ws, row, section_no.next("実行情報"))
     exec_info = case.execution
-    info = [
-        ("目的 / 観点", case.description or "-"),
-        ("区分", " / ".join(case.tags) or "-"),
-        ("実行コマンド", exec_info.command or "-"),
-        ("開始日時", exec_info.started_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if exec_info.started_at else "-"),
-        ("終了日時", exec_info.finished_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if exec_info.finished_at else "-"),
-        ("所要時間", f"{exec_info.elapsed_sec:.2f} 秒"),
-        # 終了コードが無いのは手動実行のケース。"None" と出すと、証跡を読む人には
-        # 「取得できなかった」のか「異常な値だった」のか区別が付かない
-        ("終了コード",
-         "TIMEOUT" if exec_info.timed_out
-         else (str(exec_info.exit_code) if exec_info.exit_code is not None
-               else "－（手動実行のため取得なし）")),
-        ("実施者 / 環境", f"{run.tester} / {run.env_name}"),
-    ]
-    for label, value in info:
-        ws.cell(row, 1, label).font = F_HEADER
-        ws.cell(row, 1).fill = FILL_LABEL
-        ws.cell(row, 1).border = BORDER
-        c = ws.cell(row, 2, value)
-        c.font = F_MONO if label == "実行コマンド" else F_BODY
-        c.border = BORDER
-        c.alignment = Alignment(vertical="center", wrap_text=True)
-        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=7)
-        row += 1
-
-    ws.cell(row, 1, "総合判定").font = F_HEADER
-    ws.cell(row, 1).fill = FILL_LABEL
-    ws.cell(row, 1).border = BORDER
-    v = ws.cell(row, 2, case.verdict)
-    v.fill = VERDICT_FILL[case.verdict]
-    v.font = VERDICT_FONT[case.verdict]
-    v.alignment = Alignment(horizontal="center")
-    v.border = BORDER
-    row += 2
 
     if case.fatal_error:
         ws.cell(row, 1, "実行時エラー").font = F_HEADER
@@ -277,57 +240,57 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
 
     # --- 判定明細 ---------------------------------------------------------
     row = _section(ws, row, section_no.next("判定明細"))
-    # 要確認の項目がある場合だけ、人が書き込む欄を用意する
-    # finalize 後も自動判定 REVIEW と人の確認結果を両方残す。確認済みだからと
-    # 列を消すと、誰が何を根拠に確定したか追えなくなる。
+    # 確認観点を中心に、読む列を最小限にする。category / 自動判定は監査 JSON に
+    # 保持し、Excel では「何を見て、どう判定したか」を一行で読める形にする。
     has_review = any(c.is_reviewable for c in case.checks)
-    headers = ["No", "確認項目", "分類", "自動判定", "内容"]
+    headers = ["No", "確認内容", "判定結果"]
     if has_review:
-        headers += ["確認結果", "確認者", "確認日"]
+        headers += ["確認者", "確認日"]
     _write_header_row(ws, row, headers)
     row += 1
     for i, check in enumerate(case.checks, start=1):
-        for col, value in enumerate([i, check.name, check.category, check.verdict, check.detail], start=1):
+        result_text = ((check.confirmation_result or "未確認")
+                       if check.is_reviewable else check.effective_verdict)
+        for col, value in enumerate([i, check.confirmation_text, result_text], start=1):
             c = _safe_cell(ws, row, col, value)
             c.font = F_BODY
             c.border = BORDER
-            c.alignment = Alignment(vertical="center", wrap_text=(col == 5))
-        vc = ws.cell(row, 4)
-        vc.fill = VERDICT_FILL.get(check.verdict, FILL_SKIP)
-        vc.font = VERDICT_FONT.get(check.verdict, FONT_SKIP)
+            c.alignment = Alignment(vertical="center", wrap_text=(col == 2))
+        content_lines = check.confirmation_text.count("\n") + 1
+        ws.row_dimensions[row].height = min(120, max(30, 15 * content_lines))
+        vc = ws.cell(row, 3)
+        shown_verdict = check.confirmation_result or check.verdict
+        vc.fill = (FILL_INPUT if check.needs_review
+                   else VERDICT_FILL.get(shown_verdict, FILL_SKIP))
+        vc.font = VERDICT_FONT.get(shown_verdict, FONT_REVIEW)
         vc.alignment = Alignment(horizontal="center")
 
         if has_review:
-            values = [check.confirmation_result, check.confirmation_by, check.confirmation_at]
-            # 要確認の行だけ記入欄を用意する。自動判定済みの行は空欄のまま。
-            for col, value in zip(range(6, 9), values):
+            values = [check.confirmation_by, check.confirmation_at]
+            # 人工確認対象だけ入力欄を黄色にする。自動判定行は読み取り専用。
+            for col, value in zip(range(4, 6), values):
                 cell = _safe_cell(ws, row, col, value if check.is_reviewable else "")
                 cell.border = BORDER
                 if check.needs_review:
                     cell.fill = FILL_INPUT
-            if check.confirmation_result in (OK, NG):
-                result_cell = ws.cell(row, 6)
-                result_cell.fill = VERDICT_FILL[check.confirmation_result]
-                result_cell.font = VERDICT_FONT[check.confirmation_result]
-                result_cell.alignment = Alignment(horizontal="center")
         row += 1
     if not case.checks:
         ws.cell(row, 1, "（判定項目なし: 証跡採取のみ）").font = F_BODY
         row += 1
     if any(c.needs_review for c in case.checks):
         note = ws.cell(row, 1,
-                       "※「要確認」の項目は自動判定では確定しません。"
+                       "※判定結果が「未確認」の項目は、人が証跡を見て確定します。"
                        "下の証跡（DB スナップショット・実行ログ・証跡画像）を確認のうえ、"
-                       "黄色の欄に確認結果（OK/NG）・確認者・確認日を記入してください。")
+                       "黄色の欄に判定結果（OK/NG）・確認者・確認日を記入してください。")
         note.font = Font(name="Meiryo UI", size=9, color="9C5700")
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
         row += 1
     elif has_review:
         note = ws.cell(row, 1,
-                       "※人工確認済み。自動判定は上書きせず、確認結果・確認者・確認日を"
-                       "監査情報として併記しています。")
+                       "※人工確認済み。判定結果・確認者・確認日を監査情報として"
+                       "記録しています。")
         note.font = Font(name="Meiryo UI", size=9, color="006100")
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
         row += 1
     row += 1
 
@@ -398,7 +361,7 @@ def _write_case_sheet(ws: Worksheet, case: CaseResult, run: RunResult, cfg: dict
                 row += 1
             row += 1
 
-    _set_widths(ws, [22, 24, 20, 12, 46, 20, 20, 20])
+    _set_widths(ws, [8, 60, 14, 20, 16, 20, 20, 20])
 
 
 # =============================================================================

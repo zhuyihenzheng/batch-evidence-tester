@@ -236,6 +236,7 @@ class TestCase:
         snapshot: Optional[Dict[str, Any]] = None,
         execute: Optional[Dict[str, Any]] = None,
         collect: Optional[Dict[str, Any]] = None,
+        review: Optional[List[str]] = None,
         assertions: Optional[Dict[str, Any]] = None,
         teardown: Optional[Dict[str, Any]] = None,
         mode: str = "auto",
@@ -251,6 +252,8 @@ class TestCase:
         self.snapshot = snapshot if snapshot is not None else {}
         self.execute = execute if execute is not None else {}
         self.collect = collect if collect is not None else {}
+        # 証跡を見て人が最終確認する観点。自動比較の assert とは分離する。
+        self.review = review if review is not None else []
         self.assertions = assertions if assertions is not None else {}
         self.teardown = teardown if teardown is not None else {}
 
@@ -269,7 +272,7 @@ class TestCase:
 # 黙って無視すると「書いたのに効かない」状態が静かに続く。
 CASE_TOP_KEYS = {
     "id", "name", "description", "tags", "enabled", "mode",
-    "setup", "snapshot", "execute", "collect", "assert", "teardown",
+    "setup", "snapshot", "execute", "collect", "review", "assert", "teardown",
 }
 # 実行方式。
 #   auto   … autotest run が .exe を起動して自動判定する（既定）
@@ -408,6 +411,27 @@ def _validate_assertions(assertions: Dict[str, Any], path: Path) -> List[str]:
     return problems
 
 
+def _validate_review(review: Any, path: Path) -> List[str]:
+    """人工確認内容の文字列リストを検証する。"""
+    if review is None:
+        return []
+    if not isinstance(review, list):
+        return ["review はリストで指定してください"]
+
+    problems: List[str] = []
+    contents = set()
+    for i, item in enumerate(review):
+        where = "review[%d]" % i
+        if not isinstance(item, str) or not item.strip():
+            problems.append("%s は空でない確認内容の文字列で指定してください" % where)
+            continue
+        normalized = item.strip()
+        if normalized in contents:
+            problems.append("review の確認内容が重複しています: %s" % normalized)
+        contents.add(normalized)
+    return problems
+
+
 def validate_case_id(case_id: Any) -> List[str]:
     """ケース ID として使える文字列かを検証する。問題の一覧を返す（空なら合格）。
 
@@ -492,6 +516,8 @@ def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> Lis
         problems += _check_unknown_keys(collect, COLLECT_KEYS, "collect", path)
     else:
         problems.append("collect はマッピングで指定してください")
+
+    problems += _validate_review(data.get("review"), path)
 
     assertions = data.get("assert")
     if assertions is None:
@@ -635,6 +661,7 @@ def _build_case(data: Dict[str, Any], path: Path, case_id: str, cases_dir: Path)
         snapshot=data.get("snapshot") or {},
         execute=data.get("execute") or {},
         collect=data.get("collect") or {},
+        review=data.get("review") or [],
         # "assert" は Python の予約語なので属性名を変える
         assertions=data.get("assert") or {},
         teardown=data.get("teardown") or {},
