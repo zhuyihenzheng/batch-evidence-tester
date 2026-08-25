@@ -1,4 +1,4 @@
-# AUTO_TEST_BATCH 依存ライブラリ
+﻿# AUTO_TEST_BATCH 依存ライブラリ
 #
 # 対象環境: Anaconda 5.2 (Python 3.6.5) 以降。
 #   Anaconda 5.2 には openpyxl / Pillow / PyYAML が同梱されているため、

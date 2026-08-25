@@ -167,7 +167,17 @@ def main():
     print("=" * 74)
     if ok:
         print(" 結論: この環境で実行できます。")
-        print("   次は  python -m autotest validate  で設定を確認してください。")
+        print("   必須パッケージは導入済みです。conda / pip の追加実行は不要です。")
+        print("")
+        if os.name == "nt":
+            print("   次は、プロジェクト直下の Command Prompt で以下を実行してください:")
+            print("     set PYTHONPATH=%CD%\\src")
+        else:
+            print("   次は、プロジェクト直下で以下を実行してください:")
+            print("     export PYTHONPATH=\"$PWD/src\"")
+        print("     python -m autotest validate")
+        print("")
+        print("   操作画面を開く場合は run_gui.bat を実行してください。")
     else:
         print(" 結論: この環境では実行できません。上の [NG] を解消してください。")
         print("")
