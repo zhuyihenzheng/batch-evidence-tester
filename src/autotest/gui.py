@@ -85,8 +85,8 @@ def _popen(args: List[str], project_root: Path) -> subprocess.Popen:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        universal_newlines=True,
-        bufsize=1,
+        # バイナリパイプは行バッファリング非対応。子側は PYTHONUNBUFFERED=1。
+        bufsize=0,
         **kwargs
     )
 
@@ -414,7 +414,13 @@ class AutotestGui(object):
     def _reader(self, proc) -> None:
         """子プロセスの出力を読む。ウィジェットには触らない（別スレッドのため）。"""
         try:
-            for line in iter(proc.stdout.readline, ""):
+            # 子プロセスには PYTHONIOENCODING=utf-8 を指定しているため、ここでも
+            # UTF-8 として明示的に読む。universal_newlines=True に任せると日本語
+            # Windows では locale の cp932 が選ばれ、UTF-8 の日本語を読んだ時点で
+            # UnicodeDecodeError になって進捗読取スレッドが停止してしまう。
+            for raw_line in iter(proc.stdout.readline, b""):
+                line = (raw_line.decode("utf-8", "replace")
+                        if not isinstance(raw_line, str) else raw_line)
                 self.queue.put(("line", line))
         finally:
             proc.stdout.close()
