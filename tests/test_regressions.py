@@ -2014,6 +2014,55 @@ class TestCorruptFileGeneration(TmpDirCase):
             {"src": "input/a.zip", "dest_dir": "input_dir", "corrupt": "empty"}])
         self.assertEqual((dest_dir / "a.zip").read_bytes(), b"")
 
+    def test_put_input_files_copies_directory_tree(self):
+        """フォルダを指定すると、フォルダ名と配下の構造を保って投入できること。"""
+        case_dir = self.tmp / "case"
+        source = case_dir / "input" / "DATA_SET"
+        (source / "sub" / "empty").mkdir(parents=True)
+        (source / "root.txt").write_text("root", encoding="utf-8")
+        (source / "sub" / "child.txt").write_text("child", encoding="utf-8")
+
+        dest_dir = self.tmp / "in"
+        settings = self.write_settings({"input_dir": str(dest_dir)})
+        placed = fsops.put_input_files(settings, case_dir, [
+            {"src": "input/DATA_SET", "dest_dir": "input_dir"}])
+
+        copied = dest_dir / "DATA_SET"
+        self.assertEqual(placed, [copied])
+        self.assertEqual((copied / "root.txt").read_text(encoding="utf-8"), "root")
+        self.assertEqual((copied / "sub" / "child.txt").read_text(encoding="utf-8"), "child")
+        self.assertTrue((copied / "sub" / "empty").is_dir())
+
+    def test_put_input_directory_supports_rename_and_merge(self):
+        """rename がフォルダにも効き、既存フォルダには上書きマージすること。"""
+        case_dir = self.tmp / "case"
+        source = case_dir / "input" / "source"
+        source.mkdir(parents=True)
+        (source / "same.txt").write_text("new", encoding="utf-8")
+        (source / "added.txt").write_text("added", encoding="utf-8")
+
+        dest_dir = self.tmp / "in"
+        target = dest_dir / "RENAMED"
+        target.mkdir(parents=True)
+        (target / "same.txt").write_text("old", encoding="utf-8")
+        (target / "kept.txt").write_text("kept", encoding="utf-8")
+        settings = self.write_settings({"input_dir": str(dest_dir)})
+        fsops.put_input_files(settings, case_dir, [
+            {"src": "input/source", "dest_dir": "input_dir", "rename": "RENAMED"}])
+
+        self.assertEqual((target / "same.txt").read_text(encoding="utf-8"), "new")
+        self.assertEqual((target / "added.txt").read_text(encoding="utf-8"), "added")
+        self.assertEqual((target / "kept.txt").read_text(encoding="utf-8"), "kept")
+
+    def test_put_input_directory_rejects_corrupt(self):
+        case_dir = self.tmp / "case"
+        (case_dir / "input" / "folder").mkdir(parents=True)
+        settings = self.write_settings({"input_dir": str(self.tmp / "in")})
+        with self.assertRaises(ConfigError) as ctx:
+            fsops.put_input_files(settings, case_dir, [
+                {"src": "input/folder", "dest_dir": "input_dir", "corrupt": "empty"}])
+        self.assertIn("フォルダ", str(ctx.exception))
+
 
 class TestKeepEnvOption(TmpDirCase):
     """--keep-env は調査のため後始末を行わないこと。"""

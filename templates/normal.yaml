@@ -28,11 +28,11 @@ setup:
   # sql:
   #   - file: sql/{case_id}_setup.sql
 
-  # テストデータの投入。src は cases/{case_id}/ からの相対パス
+  # テストデータの投入。src は cases/{case_id}/ からの相対パス（ファイル・フォルダ対応）
   input_files:
     - src: "input/（投入ファイル名）.csv"
       dest_dir: input_dir
-      # rename: "ORDER_{date}.csv"    # 投入時に改名したいとき（{date} 使用可）
+      # rename: "ORDER_{date}.csv"    # ファイル・フォルダを投入時に改名（{date} 使用可）
 
 # --- DB スナップショット（実行前後の 2 時点を取得）-------------------------------
 # snapshot:

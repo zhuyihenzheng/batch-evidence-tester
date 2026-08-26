@@ -284,7 +284,7 @@ setup:                                    # ① 前处理
   sql:
     - file: sql/TC001_setup.sql           # 支持 GO 分隔；也可写 inline
   input_files:
-    - src: "input/ORDER_20260803.csv"     # 相对 cases\<id>\
+    - src: "input/ORDER_20260803.csv"     # 相对 cases\<id>\；也可指定文件夹
       dest_dir: input_dir
 
 snapshot:                                 # ② ⑦ DB 快照（执行前后各取一次）
@@ -468,6 +468,18 @@ setup:
     - src: "input/MASTER.csv"          # 一次投多个文件也行
       dest_dir: input_dir
       rename: "MASTER_LATEST.csv"      # 需要改名时用
+```
+
+`src` 也可以指定文件夹。文件夹本身及其全部子目录、文件会保持结构复制到
+`dest_dir`；`rename` 可用于修改复制后的文件夹名。目标文件夹已存在时会合并，
+同名文件覆盖，目标中其他既有文件保留。`corrupt` 仅适用于文件，不能用于文件夹。
+
+```yaml
+setup:
+  input_files:
+    - src: "input/DATA_SET"
+      dest_dir: input_dir
+      rename: "DATA_{date}"             # 可省略；省略时目标名为 DATA_SET
 ```
 
 想测同一个 batch 的不同输入（正常/异常/边界/空文件/大容量），就是**复制一份用例 YAML +

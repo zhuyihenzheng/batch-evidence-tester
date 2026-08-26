@@ -98,7 +98,7 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
                     "フォルダごと削除するとこれらも消えます。" % (alias, target, nested)
                 )
 
-    # remove_dirs で消すフォルダへファイルを投入すると、投入時に再作成されて
+    # remove_dirs で消すフォルダへファイル・フォルダを投入すると、投入時に再作成されて
     # 「フォルダが無い」状態を作れない。設定の矛盾として先に弾く
     removing = set((case.setup or {}).get("remove_dirs", []))
     for spec in (case.setup or {}).get("input_files", []):
@@ -125,7 +125,9 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
         if not src.is_absolute():
             src = case.dir / src
         if not src.exists():
-            problems.append("投入ファイルがありません: %s" % src)
+            problems.append("投入元がありません: %s" % src)
+        elif src.is_dir() and spec.get("corrupt"):
+            problems.append("フォルダの投入には corrupt を指定できません: %s" % src)
         dest_alias = spec.get("dest_dir", "input_dir")
         if dest_alias not in aliases:
             problems.append("input_files.dest_dir の論理名が paths に未定義です: %s" % dest_alias)
