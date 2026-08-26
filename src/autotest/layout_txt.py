@@ -1062,6 +1062,17 @@ def _case_stem(template: str, case: GeneratedCase, source_stem: str,
     return _safe_filename(stem)
 
 
+def resolve_form_filename_stem(filename_template: str, form_id: str,
+                               source_path: Path) -> str:
+    value = str(form_id or "").strip()
+    case = GeneratedCase(
+        source_form_id=value, form_id=value, fields=[],
+        target_presence="1", pattern="normal", sequence=1)
+    return _case_stem(
+        filename_template, case,
+        _safe_filename(Path(source_path).stem), False)
+
+
 def _tif_font(size: int):
     from PIL import ImageFont
 

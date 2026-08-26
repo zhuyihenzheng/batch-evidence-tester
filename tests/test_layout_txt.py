@@ -23,8 +23,10 @@ from autotest.layout_txt import (  # noqa: E402
     read_layout_fields,
     render_form_tif_payload,
     render_form_txt_text,
+    resolve_form_filename_stem,
     save_layout_default_values,
 )
+from autotest.layout_tar import PackageItem, base_name_from_front  # noqa: E402
 
 
 class LayoutWorkbookCase(unittest.TestCase):
@@ -385,6 +387,22 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(result.field_count, 4)
         self.assertEqual([path.name for path in result.txt_files], ["CUSTOM_FORM.txt"])
         self.assertTrue((out / "CUSTOM_FORM.txt").is_file())
+
+    def test_package_filename_uses_the_same_configured_template(self):
+        self.assertEqual(
+            resolve_form_filename_stem(
+                "DATA_{source}_{form_id}_{pattern}_{seq:02d}F.txt",
+                "1001", self.book),
+            "DATA_layout_1001_normal_01F")
+
+        base = base_name_from_front(Path(
+            resolve_form_filename_stem("DATA_{form_id}F", "1001", self.book)
+            + ".txt"))
+        item = PackageItem(
+            base_name=base, form_id="1001", front_image_bytes=b"F",
+            back_image_bytes=b"R", front_recognition_text="FRONT")
+        self.assertEqual(item.front_recognition_name, "DATA_1001F.txt")
+        self.assertEqual(item.back_recognition_name, "DATA_1001R.txt")
 
     def test_selected_rows_and_screen_edits_are_written(self):
         out = self.tmp / "edited"

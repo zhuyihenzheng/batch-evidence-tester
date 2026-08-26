@@ -108,6 +108,59 @@ class TestLayoutImageTar(unittest.TestCase):
             ["BF.tif", "BR.tif", "2001", "9", "REF_B.dat", "error"],
         ])
 
+    def test_fixed_image_list_csv_has_ten_quoted_columns_without_header(self):
+        item = PackageItem(
+            base_name="2020123100001_001_", form_id="CB147",
+            front_image_bytes=b"F", back_image_bytes=b"R",
+            front_extension=".TIF", scan_batch_id="2020123100001",
+            image_sequence="001", arrival_date="20210611")
+
+        result = build_image_tar(
+            [item], self.tmp, "image_list",
+            include_recognition_txt=False,
+            include_manifest_csv=True,
+            manifest_name="CLM_PUNCH_IMAGE_INFO_01.csv",
+            manifest_style="image_list",
+            csv_encoding="cp932")
+
+        self.assertEqual(result.archive_members, [
+            "2020123100001_001_F.TIF",
+            "2020123100001_001_R.TIF",
+            "CLM_PUNCH_IMAGE_INFO_01.csv",
+        ])
+        with tarfile.open(str(result.tar_file), "r") as archive:
+            raw = archive.extractfile(
+                "CLM_PUNCH_IMAGE_INFO_01.csv").read().decode("cp932")
+        self.assertEqual(
+            raw,
+            '"2020123100001","001","2020123100001_001_F.TIF",'
+            '"20210611","CB147","","","","",""\r\n'
+            '"2020123100001","001","2020123100001_001_R.TIF",'
+            '"20210611","CB147","","","","",""\r\n')
+
+    def test_fixed_image_list_csv_uses_auto_sequence_and_rejects_newlines(self):
+        first = PackageItem(base_name="A_", front_image_bytes=b"A")
+        second = PackageItem(base_name="B_", front_image_bytes=b"B")
+        result = build_image_tar(
+            [first, second], self.tmp, "auto_sequence",
+            include_recognition_txt=False, include_manifest_csv=True,
+            manifest_style="image_list", csv_encoding="utf-8")
+        with tarfile.open(str(result.tar_file), "r") as archive:
+            raw = archive.extractfile("file_list.csv").read().decode("utf-8")
+        rows = list(csv.reader(io.StringIO(raw)))
+        self.assertEqual(rows[0][1], "001")
+        self.assertEqual(rows[1][1], "002")
+        self.assertEqual(len(rows[0]), 10)
+
+        invalid = PackageItem(
+            base_name="C_", front_image_bytes=b"C",
+            application_number="line1\nline2")
+        with self.assertRaises(LayoutTarError):
+            build_image_tar(
+                [invalid], self.tmp, "invalid_line",
+                include_recognition_txt=False, include_manifest_csv=True,
+                manifest_style="image_list")
+
     def test_front_only_keeps_form_txt_and_does_not_create_r_files(self):
         item = PackageItem(
             base_name="ONLY", form_id="1001",

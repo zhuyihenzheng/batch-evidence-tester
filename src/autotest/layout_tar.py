@@ -34,10 +34,10 @@ def _safe_name(value: str, fallback: str) -> str:
 
 
 def _normalise_extension(value: str) -> str:
-    raw = str(value or ".tif").strip().lower()
+    raw = str(value or ".tif").strip()
     if not raw.startswith("."):
         raw = "." + raw
-    if raw not in IMAGE_EXTENSIONS:
+    if raw.lower() not in IMAGE_EXTENSIONS:
         raise LayoutTarError(
             "画像拡張子は %s のいずれかにしてください: %s"
             % (" / ".join(IMAGE_EXTENSIONS), value))
@@ -97,7 +97,15 @@ class PackageItem(object):
                  back_extension: str = "",
                  related_file: str = "",
                  extra_fields: Optional[Dict[str, str]] = None,
-                 source_label: str = "") -> None:
+                 source_label: str = "",
+                 scan_batch_id: str = "",
+                 image_sequence: str = "",
+                 arrival_date: str = "",
+                 application_number: str = "",
+                 reception_number: str = "",
+                 format_id: str = "",
+                 delivery_date: str = "",
+                 delivery_shot: str = "") -> None:
         self.base_name = str(base_name or "").strip()
         self.form_id = str(form_id or "").strip()
         self.front_recognition_text = (
@@ -116,6 +124,14 @@ class PackageItem(object):
             for key, value in (extra_fields or {}).items() if str(key).strip()
         }
         self.source_label = str(source_label or "").strip()
+        self.scan_batch_id = str(scan_batch_id or "").strip()
+        self.image_sequence = str(image_sequence or "").strip()
+        self.arrival_date = str(arrival_date or "").strip()
+        self.application_number = str(application_number or "").strip()
+        self.reception_number = str(reception_number or "").strip()
+        self.format_id = str(format_id or "").strip()
+        self.delivery_date = str(delivery_date or "").strip()
+        self.delivery_shot = str(delivery_shot or "").strip()
 
     @property
     def safe_base_name(self) -> str:
@@ -191,9 +207,31 @@ class PackageItem(object):
             "back_source_file": (
                 self.back_image_path.name if self.back_image_path is not None
                 else (self.source_label if self.has_back_image else "")),
+            "scan_batch_id": self.scan_batch_id,
+            "image_sequence": self.image_sequence,
+            "arrival_date": self.arrival_date,
+            "application_number": self.application_number,
+            "reception_number": self.reception_number,
+            "format_id": self.format_id,
+            "delivery_date": self.delivery_date,
+            "delivery_shot": self.delivery_shot,
         }
         values.update(self.extra_fields)
         return values
+
+    def image_list_values(self, image_name: str, sequence: str) -> List[str]:
+        return [
+            self.scan_batch_id,
+            self.image_sequence or sequence,
+            image_name,
+            self.arrival_date,
+            self.form_id,
+            self.application_number,
+            self.reception_number,
+            self.format_id,
+            self.delivery_date,
+            self.delivery_shot,
+        ]
 
 
 class PackageResult(object):
@@ -299,6 +337,24 @@ def _manifest_payload(items: Sequence[PackageItem], columns: Sequence,
         raise LayoutTarError("CSVを%sでエンコードできません: %s" % (encoding, exc))
 
 
+def _image_list_payload(items: Sequence[PackageItem], encoding: str) -> bytes:
+    stream = io.StringIO()
+    writer = csv.writer(stream, lineterminator="\r\n", quoting=csv.QUOTE_ALL)
+    for index, item in enumerate(items, 1):
+        sequence = "%03d" % index
+        rows = [item.image_list_values(item.front_image_name, sequence)]
+        if item.has_back_image:
+            rows.append(item.image_list_values(item.back_image_name, sequence))
+        for row in rows:
+            if any("\r" in value or "\n" in value for value in row):
+                raise LayoutTarError("固定10列CSVの値には改行を使用できません")
+            writer.writerow(row)
+    try:
+        return stream.getvalue().encode(encoding)
+    except (LookupError, UnicodeEncodeError) as exc:
+        raise LayoutTarError("CSVを%sでエンコードできません: %s" % (encoding, exc))
+
+
 def _add_tar_member(archive, name: str, payload: bytes) -> None:
     info = tarfile.TarInfo(name=name)
     info.size = len(payload)
@@ -358,7 +414,8 @@ def build_image_tar(items: Sequence[PackageItem], output_dir: Path,
                     manifest_columns: Optional[Sequence] = None,
                     text_encoding: str = "cp932",
                     csv_encoding: str = "cp932",
-                    overwrite: bool = False) -> PackageResult:
+                    overwrite: bool = False,
+                    manifest_style: str = "custom") -> PackageResult:
     """正面、任意の背面、任意の認識TXT/一覧CSVを1つのTARへまとめる。"""
     selected = list(items)
     if not selected:
@@ -403,16 +460,24 @@ def build_image_tar(items: Sequence[PackageItem], output_dir: Path,
         if folded in seen:
             raise LayoutTarError(
                 "CSV名が画像/TXT名と重複します: %s" % actual_manifest_name)
-        columns = manifest_columns or (
-            ("front_image_file", "front_image_file"),
-            ("back_image_file", "back_image_file"),
-            ("form_id", "form_id"),
-            ("back_recognition_result", "back_recognition_result"),
-            ("related_file", "related_file"),
-        )
+        style = str(manifest_style or "custom").strip().lower()
+        if style == "image_list":
+            manifest_payload = _image_list_payload(selected, csv_encoding)
+        elif style == "custom":
+            columns = manifest_columns or (
+                ("front_image_file", "front_image_file"),
+                ("back_image_file", "back_image_file"),
+                ("form_id", "form_id"),
+                ("back_recognition_result", "back_recognition_result"),
+                ("related_file", "related_file"),
+            )
+            manifest_payload = _manifest_payload(
+                selected, columns, csv_encoding, include_recognition_txt)
+        else:
+            raise LayoutTarError("CSV形式は image_list / custom から選択してください: %s" % style)
         rendered.append((
             actual_manifest_name,
-            _manifest_payload(selected, columns, csv_encoding, include_recognition_txt)))
+            manifest_payload))
         seen.add(folded)
 
     raw_tar_name = str(tar_name or "image_package").strip()
