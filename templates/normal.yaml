@@ -32,19 +32,29 @@ setup:
   input_files:
     - src: "input/（投入ファイル名）.csv"
       dest_dir: input_dir
-      # rename: "ORDER_{date}.csv"    # ファイル・フォルダを投入時に改名（{date} 使用可）
+      # rename: "DATA_{date}.csv"     # ファイル・フォルダを投入時に改名（{date} 使用可）
+
+  # 投入ファイルと設定差し替えが完了した後、主 batch より前に実行する前置 batch。
+  # settings.yaml の batches.<名前> を指定する。同じ batch を複数回並べてもよい。
+  # YAML 上の項目順に関係なく、input_files / replace_files の後に必ず実行される。
+  # batches:
+  #   - batch: prepare
+  #     args: ["--date", "{date}"]
+  #     expected_exit_code: 0          # 省略時は 0
+  #   - batch: prepare                 # 同じ batch の 2 回目
+  #     args: ["--date", "{date-1}"]
 
 # --- DB スナップショット（実行前後の 2 時点を取得）-------------------------------
 # snapshot:
 #   tables:
-#     - name: T_ORDER
-#       sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS FROM T_ORDER ORDER BY ORDER_ID"
-#       # mask: [CUSTOMER_TEL]        # 個人情報の列は ***MASKED*** にして出す
+#     - name: T_SAMPLE
+#       sql: "SELECT RECORD_ID, VALUE_A, VALUE_B, STATUS FROM T_SAMPLE ORDER BY RECORD_ID"
+#       # mask: [PRIVATE_VALUE]       # 非公開列は ***MASKED*** にして出す
 
 # --- 実行 ---------------------------------------------------------------------
 execute:
   args: ["--mode", "daily"]
-  # batch: invoice                    # 既定以外の .exe を使うとき（settings.batches の名前）
+  # batch: batch_b                    # 既定以外の .exe を使うとき（settings.batches の名前）
 
 # --- 回収 ---------------------------------------------------------------------
 collect:
@@ -56,19 +66,19 @@ collect:
 # --- 人工確認観点 -------------------------------------------------------------
 # Excel に 1 観点 1 行で出力され、確認者が OK/NG・確認者・確認日を記入する。
 review:
-  - "DB スナップショットの実行前後を比較し、対象レコードが業務仕様どおりのステータス・値になっていること"
+  - "DB スナップショットの実行前後を比較し、対象レコードが期待したステータス・値になっていること"
   - |
       証跡画像と回収物を確認すること。
-      出力件数・ファイル名・内容が業務仕様どおりであること。
+      出力件数・ファイル名・内容が期待結果どおりであること。
   - "実行ログを確認し、処理が完了して想定外の ERROR / Exception が出力されていないこと"
 
 # --- 自動判定（必要な場合だけ使用）---------------------------------------------
 # assert:
 #   exit_code: 0
 #   db:
-#     - table: T_ORDER
-#       expected: "expected/{case_id}/db_T_ORDER.csv"
-#       key: [ORDER_ID]
+#     - table: T_SAMPLE
+#       expected: "expected/{case_id}/db_T_SAMPLE.csv"
+#       key: [RECORD_ID]
 #       ignore_columns: [UPDATED_AT]
 #   files:
 #     - name: "処理済フォルダへの移動"

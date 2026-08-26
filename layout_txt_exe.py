@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-APP_VERSION = "0.3.6"
+APP_VERSION = "0.4.0"
 
 
 def _prepare_source_path():

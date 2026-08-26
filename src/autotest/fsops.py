@@ -38,7 +38,7 @@ def _force_remove(func, path, exc):
     func(path)
 
 
-# 中身を消してはいけない場所。設定ミスで業務データや OS を壊さないための最終防衛線。
+# 中身を消してはいけない場所。設定ミスで既存データや OS を壊さないための最終防衛線。
 def assert_safe_to_clear(directory: Path, project_root: Path) -> None:
     """このフォルダの中身を削除してよいか検証する。危険なら ConfigError。
 
@@ -193,7 +193,7 @@ def clear_dir(
         return 0
 
     # 他の論理名がこのフォルダの配下にある場合、そのフォルダは自動的に保護する。
-    # 設定漏れで業務データ（Backup 等）を消す事故を防ぐための保険。
+    # 設定漏れで既存データ（Backup 等）を消す事故を防ぐ。
     protected = {settings.expand(str(p)) for p in (exclude or [])}
     for other_alias, other_path in aliases.items():
         if other_alias == alias:

@@ -689,7 +689,7 @@ class TestDatePlaceholders(unittest.TestCase):
 # 入れ子フォルダの保護（Receive の下に Backup がある構成）
 # =============================================================================
 class TestNestedFolderProtection(TmpDirCase):
-    """クリア対象の配下に業務データのフォルダがある構成を壊さないこと。
+    """クリア対象の配下に既存データのフォルダがある構成を壊さないこと。
 
     実案件の構成: Receive/ にエラーファイルが置かれ、同じ Receive/ の下に
     Backup/20260802/ のような履歴フォルダがある。Receive をクリアすると
@@ -1228,7 +1228,7 @@ class TestCaseFolderStructure(TmpDirCase):
 # =============================================================================
 # 1 ファイル 1 ケース書式のベースライン
 #   これがこのツール唯一のケース定義書式。読み取りの解釈が変わっていないことを
-#   固定しておく（安価な保険）。
+#   固定しておく（低コストの安全策）。
 # =============================================================================
 class TestSingleCaseFileFormat(TmpDirCase):
     def _write(self, text, name="TC_SINGLE.yaml"):
@@ -1786,6 +1786,118 @@ class TestDirectoryCreationScope(TmpDirCase):
 
 
 # =============================================================================
+# setup.batches（投入後・主 batch 前に実行する前置 batch）
+# =============================================================================
+class TestSetupBatches(TmpDirCase):
+    def _settings(self):
+        exe = self.tmp / "batch.exe"
+        exe.write_text("x", encoding="utf-8")
+        return self.write_settings(
+            {"input_dir": str(self.tmp / "in"), "log_dir": str(self.tmp / "log")},
+            extra={
+                "batch": {"exe_path": str(exe)},
+                "batches": {"prepare": {"exe_path": str(exe)}},
+            })
+
+    def test_runs_after_input_and_replacement_in_list_order(self):
+        """YAML の mapping 順ではなく、投入完了後という lifecycle を保証する。"""
+        from autotest import orchestrator as orch
+        from autotest.config import TestCase
+        from autotest.models import ExecutionInfo
+
+        events = []
+
+        class FakeClient:
+            def execute_script(self, sql):
+                events.append("sql")
+
+        def fake_put(*args, **kwargs):
+            events.append("input_files")
+
+        def fake_replace(*args, **kwargs):
+            events.append("replace_files")
+            return []
+
+        def fake_run(settings, args, dry_run=False, batch_name=None, on_progress=None):
+            events.append("batch:%s:%s" % (batch_name, args[0]))
+            info = ExecutionInfo()
+            info.exit_code = 0
+            return info
+
+        case = TestCase(
+            case_id="T", name="T", source=self.tmp / "T.yaml",
+            setup={
+                "sql": ["SELECT 1"],
+                "input_files": [{"src": "input.csv", "dest_dir": "input_dir"}],
+                "replace_files": [{"src": "case.config", "dest_dir": "input_dir"}],
+                # 同じ batch を複数回実行でき、記載順を保持する。
+                "batches": [
+                    {"batch": "prepare", "args": ["first"]},
+                    {"batch": "prepare", "args": ["second"]},
+                ],
+            })
+
+        saved_put = fsops.put_input_files
+        saved_replace = fsops.replace_files
+        saved_run = orch.run_batch
+        try:
+            fsops.put_input_files = fake_put
+            fsops.replace_files = fake_replace
+            orch.run_batch = fake_run
+            orch.CaseRunner(self._settings(), self.tmp / "out")._setup(case, FakeClient())
+        finally:
+            fsops.put_input_files = saved_put
+            fsops.replace_files = saved_replace
+            orch.run_batch = saved_run
+
+        self.assertEqual(events, [
+            "sql", "input_files", "replace_files",
+            "batch:prepare:first", "batch:prepare:second",
+        ])
+
+    def test_unexpected_setup_batch_exit_code_stops_setup(self):
+        from autotest import orchestrator as orch
+        from autotest.config import TestCase
+        from autotest.models import ExecutionInfo
+
+        calls = []
+
+        def fake_run(settings, args, dry_run=False, batch_name=None, on_progress=None):
+            calls.append(batch_name)
+            info = ExecutionInfo()
+            info.exit_code = 9
+            info.stderr = "prepare failed"
+            return info
+
+        case = TestCase(
+            case_id="T", name="T", source=self.tmp / "T.yaml",
+            setup={"batches": ["prepare", "prepare"]})
+
+        saved_run = orch.run_batch
+        try:
+            orch.run_batch = fake_run
+            with self.assertRaises(ConfigError) as ctx:
+                orch.CaseRunner(self._settings(), self.tmp / "out")._setup(case, object())
+        finally:
+            orch.run_batch = saved_run
+
+        self.assertEqual(calls, ["prepare"], "失敗後に次の前置 batch を実行している")
+        self.assertIn("prepare failed", str(ctx.exception))
+
+    def test_preflight_checks_every_setup_batch_before_changes(self):
+        from autotest.config import TestCase
+        from autotest.orchestrator import preflight_case
+
+        settings = self._settings()
+        case = TestCase(
+            case_id="T", name="T", source=self.tmp / "T.yaml",
+            setup={"batches": [{"batch": "missing"}]})
+        problems = "\n".join(preflight_case(settings, case))
+        self.assertIn("setup.batches[0]", problems)
+        self.assertIn("missing", problems)
+
+
+# =============================================================================
 # ケース定義のスキーマ検証
 # =============================================================================
 class TestCaseSchemaValidation(TmpDirCase):
@@ -1807,6 +1919,25 @@ class TestCaseSchemaValidation(TmpDirCase):
     def test_args_as_string_is_rejected(self):
         """文字列を渡すと 1 文字ずつ .exe に渡ってしまう。"""
         self._expect_error('id: B\nname: B\nexecute:\n  args: "--mode daily"\n', "リストで指定")
+
+    def test_setup_batches_after_input_files_is_valid(self):
+        got = self._load(
+            "id: B2\nname: B2\nsetup:\n"
+            "  input_files:\n    - {src: input.csv, dest_dir: input_dir}\n"
+            "  batches:\n"
+            "    - {batch: prepare, args: ['--case', B2]}\n"
+            "    - prepare\n")
+        self.assertEqual(len(got[0].setup["batches"]), 2)
+
+    def test_setup_batches_args_as_string_is_rejected(self):
+        self._expect_error(
+            'id: B3\nname: B3\nsetup:\n  batches:\n    - batch: prepare\n      args: "--case B3"\n',
+            "setup.batches[0].args")
+
+    def test_setup_batches_unknown_key_is_rejected(self):
+        self._expect_error(
+            "id: B4\nname: B4\nsetup:\n  batches:\n    - batch: prepare\n      arg: []\n",
+            "未知の項目")
 
     def test_quoted_false_is_treated_as_false(self):
         """enabled: "false" を True と誤解しないこと。"""

@@ -2,6 +2,7 @@
 """Excel -> Layout TXT 生成ツールの回帰テスト。"""
 
 import csv
+import io
 import shutil
 import sys
 import tarfile
@@ -20,6 +21,8 @@ from autotest.layout_txt import (  # noqa: E402
     generate_ocr_value,
     main as layout_main,
     read_layout_fields,
+    render_form_tif_payload,
+    render_form_txt_text,
     save_layout_default_values,
 )
 
@@ -347,6 +350,31 @@ class TestValueGeneration(unittest.TestCase):
 
 
 class TestGenerateLayoutTxt(LayoutWorkbookCase):
+    def test_package_tif_renderer_creates_front_and_optional_back_payloads(self):
+        from PIL import Image
+
+        fields, _sheet, _header, _columns = read_layout_fields(self.book)
+        front = render_form_tif_payload(
+            fields, "1001", selected_rows=[3],
+            field_overrides={3: {"value": "正面テスト"}}, side="front")
+        back = render_form_tif_payload(
+            fields, "1001", selected_rows=[3], side="back")
+        front_text = render_form_txt_text(
+            fields, "1001", selected_rows=[3],
+            field_overrides={3: {"value": "正面テスト"}})
+
+        self.assertNotEqual(front, back)
+        for payload in (front, back):
+            with Image.open(io.BytesIO(payload)) as image:
+                self.assertEqual(image.format, "TIFF")
+                self.assertEqual(image.size, (1654, 2339))
+        self.assertEqual(
+            next(csv.reader([front_text.strip()])),
+            ["1001", "1", "1001", "正面テスト", "0", "0,0,0,1"])
+
+        with self.assertRaises(LayoutTxtError):
+            render_form_tif_payload(fields, "1001", side="unknown")
+
     def test_selected_form_id_and_custom_filename(self):
         out = self.tmp / "selected"
         result = generate_layout_txt(

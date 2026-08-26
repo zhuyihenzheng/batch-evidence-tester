@@ -90,7 +90,8 @@ preflight → setup（清空/SQL/投入）→ 実行前快照+文件夹撮影 �
   绝不在进程内调 `CaseRunner`。原因：长跑/pyodbc 崩溃不能拖死界面；tkinter 非线程安全；
   编排入口保持一条（150+ 测试守的是 CLI 这条路）。进度靠守护线程读 stdout → `queue.Queue`
   → `root.after()` 排水，Tk 组件只在主线程碰。
-- **用例发现是递归的**：`cases/受注/取込/TC001.yaml` 自动带上 tag `[受注, 取込]`；
+- **用例发现是递归的**：`cases/group_a/subgroup_1/TC001.yaml` 自动带上
+  tag `[group_a, subgroup_1]`；
   `cases/TC001/` 这种「与定义文件同名的目录」被视为该用例的资材目录，其中的 YAML 不会被当成用例。
 - **一个 YAML = 一个用例**，没有第二种格式。曾经做过「一个文件多用例（`defaults:` + `cases:`）」，
   已删除——它和 `autotest copy` / GUI 的複製按钮互斥，而且深合并的「列表整个替换」会让

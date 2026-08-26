@@ -21,9 +21,9 @@ class ConfigError(Exception):
 
 # 日付プレースホルダ。batch が日付ごとのフォルダ（Backup/20260803 等）を
 # 使う構成に対応するためのもの。
-#   {date}            -> 20260803        （業務日付。既定は本日）
+#   {date}            -> 20260803        （基準日。既定は本日）
 #   {date:%Y/%m/%d}   -> 2026/08/03      （strftime 書式を指定）
-#   {date-1}          -> 20260802        （業務日付の 1 日前）
+#   {date-1}          -> 20260802        （基準日の 1 日前）
 #   {date+1:%Y%m}     -> 202609          （日数オフセット + 書式）
 _DATE_PLACEHOLDER = re.compile(r"\{date(?P<offset>[+-]\d+)?(?::(?P<fmt>[^}]+))?\}")
 
@@ -279,7 +279,10 @@ CASE_TOP_KEYS = {
 #   manual … 人が手で batch を動かす。run からは除外され、
 #            autotest manual --phase before / after で証跡だけ採る
 CASE_MODES = ("auto", "manual")
-SETUP_KEYS = {"clean_dirs", "remove_dirs", "sql", "input_files", "replace_files", "db_lock"}
+SETUP_KEYS = {
+    "clean_dirs", "remove_dirs", "sql", "input_files", "replace_files", "batches", "db_lock",
+}
+SETUP_BATCH_KEYS = {"batch", "args", "expected_exit_code"}
 COLLECT_KEYS = {"files", "folder_evidence"}
 EXECUTE_KEYS = {"batch", "args", "date", "expected_exit_code"}
 ASSERT_KEYS = {"exit_code", "db", "files", "log"}
@@ -500,6 +503,35 @@ def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> Lis
                 for field in ("src", "rename", "name"):
                     problems += _check_relative(spec.get(field), "setup.%s[%d].%s" % (key, i, field))
 
+    # 投入ファイルと設定差し替えが完了した後、主 batch より前に実行する batch。
+    # 同じ名前を複数回並べる用途もあるため、mapping の list として保持する。
+    setup_batches = setup.get("batches")
+    if setup_batches is not None and not isinstance(setup_batches, list):
+        problems.append("setup.batches はリストで指定してください")
+    elif isinstance(setup_batches, list):
+        for i, spec in enumerate(setup_batches):
+            where = "setup.batches[%d]" % i
+            if isinstance(spec, str):
+                # 引数無しなら `- batch_name` の短縮形も許可する。
+                if not spec.strip():
+                    problems.append("%s の batch 名が空です" % where)
+                continue
+            if not isinstance(spec, dict):
+                problems.append(
+                    "%s は batch 名の文字列か {batch: ..., args: [...]} で指定してください: %r"
+                    % (where, spec))
+                continue
+            problems += _check_unknown_keys(spec, SETUP_BATCH_KEYS, where, path)
+            batch_name = spec.get("batch")
+            if batch_name is not None and (not isinstance(batch_name, str) or not batch_name.strip()):
+                problems.append("%s.batch は空でない文字列で指定してください" % where)
+            batch_args = spec.get("args")
+            if batch_args is not None and not isinstance(batch_args, list):
+                problems.append("%s.args はリストで指定してください" % where)
+            expected = spec.get("expected_exit_code")
+            if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
+                problems.append("%s.expected_exit_code は整数で指定してください" % where)
+
     execute = data.get("execute") or {}
     if not isinstance(execute, dict):
         problems.append("execute はマッピングで指定してください")
@@ -544,8 +576,8 @@ def _check_relative(value: Any, where: str) -> List[str]:
 def _folder_tags(path: Path, cases_dir: Path) -> List[str]:
     """ケース定義の置き場所から暗黙のタグを作る。
 
-    cases/受注/TC001.yaml       -> ["受注"]
-    cases/受注/取込/TC001.yaml   -> ["受注", "取込"]
+    cases/group_a/TC001.yaml              -> ["group_a"]
+    cases/group_a/subgroup_1/TC001.yaml   -> ["group_a", "subgroup_1"]
     cases/TC001.yaml            -> []
     """
     try:
@@ -559,8 +591,8 @@ def find_case_files(cases_dir: Path) -> List[Path]:
     """ケース定義 YAML を再帰的に集める。
 
     機能ごとにサブフォルダで整理できるようにする:
-        cases/受注/TC001.yaml
-        cases/請求/TC010.yaml
+        cases/group_a/TC001.yaml
+        cases/group_b/TC010.yaml
 
     ケース資材（cases/<機能>/TC001/input/... 等）の中にある YAML は
     ケース定義ではないので除外する。判定基準は「同名の YAML が兄弟に
@@ -586,8 +618,8 @@ def find_case_files(cases_dir: Path) -> List[Path]:
 def load_cases(cases_dir: Union[str, Path], only: Optional[List[str]] = None, tags: Optional[List[str]] = None) -> List[TestCase]:
     """cases/ 配下の *.yaml を読み込む。only / tags で絞り込み可能。
 
-    サブフォルダ名は暗黙のタグになる（cases/受注/TC001.yaml なら「受注」）。
-    機能ごとにフォルダを切っておけば --tag 受注 でまとめて実行できる。
+    サブフォルダ名は暗黙のタグになる（cases/group_a/TC001.yaml なら「group_a」）。
+    グループごとにフォルダを切っておけば --tag group_a でまとめて実行できる。
     """
     cases_dir = Path(cases_dir)
     if not cases_dir.is_dir():

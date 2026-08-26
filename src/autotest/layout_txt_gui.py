@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Excel -> Layout TXT/TIF/TAR 生成ツールの単独GUI。"""
 
+import csv
 import sys
 from collections import OrderedDict
 from pathlib import Path
@@ -20,7 +21,21 @@ from .layout_txt import (
     _print_result,
     generate_layout_txt,
     read_layout_fields,
+    render_form_tif_payload,
+    render_form_txt_text,
     save_layout_default_values,
+)
+from .layout_tar import (
+    IMAGE_EXTENSIONS,
+    LayoutTarError,
+    PackageItem,
+    base_name_from_front,
+    build_image_tar,
+    format_extra_fields,
+    matching_back_image,
+    matching_recognition_file,
+    parse_extra_fields,
+    parse_manifest_columns,
 )
 from .layout_txt_settings import (
     LayoutGuiSettingsError,
@@ -85,6 +100,34 @@ EDITABLE_COLUMNS = {
     "include", "field_id", "value", "attribute_flag", "coordinates",
 }
 
+PACKAGE_COLUMNS = (
+    "include", "form_id", "base_name", "front_image", "front_recognition",
+    "back_image", "back_recognition", "back_recognition_result", "related_file",
+    "extra_fields", "source",
+)
+
+PACKAGE_HEADINGS = {
+    "include": "TAR", "form_id": "FORM_ID", "base_name": "基礎名（編集可）",
+    "front_image": "正面画像（末尾F）", "front_recognition": "正面TXT（FORM生成）",
+    "back_image": "背面画像（末尾R）", "back_recognition": "背面TXT（1項目）",
+    "back_recognition_result": "背面認識値（編集可）",
+    "related_file": "関連ファイル名", "extra_fields": "CSV追加項目 key=value;...",
+    "source": "画像元",
+}
+
+PACKAGE_WIDTHS = {
+    "include": 45, "form_id": 80, "base_name": 150,
+    "front_image": 160, "front_recognition": 165,
+    "back_image": 160, "back_recognition": 145,
+    "back_recognition_result": 125, "related_file": 160,
+    "extra_fields": 230, "source": 260,
+}
+
+PACKAGE_EDITABLE_COLUMNS = {
+    "include", "form_id", "base_name", "back_recognition_result",
+    "related_file", "extra_fields",
+}
+
 SETTING_VARIABLE_NAMES = (
     "excel_var", "output_var", "sheet_var", "header_var",
     "form_col_var", "layout_col_var", "field_col_var", "item_col_var",
@@ -95,6 +138,9 @@ SETTING_VARIABLE_NAMES = (
     "coverage_form_var", "error_pattern_var", "filename_template_var",
     "generate_tif_var", "create_tar_var", "tar_only_var", "tar_name_var",
     "format_var", "encoding_var", "split_var", "overwrite_var",
+    "package_tar_name_var", "package_result_var", "package_include_back_var",
+    "manifest_name_var", "manifest_columns_var", "manifest_encoding_var",
+    "manifest_include_txt_var",
 )
 
 
@@ -109,8 +155,8 @@ class LayoutTxtGui(object):
     def __init__(self, root, initial_excel: Optional[Path] = None) -> None:
         self.root = root
         root.title("Layout TXT / TIF / TAR 生成ツール")
-        root.geometry("1280x900")
-        root.minsize(1020, 720)
+        root.geometry("1380x980")
+        root.minsize(1080, 800)
 
         self.excel_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value="")
@@ -142,6 +188,16 @@ class LayoutTxtGui(object):
         self.encoding_var = tk.StringVar(value="cp932")
         self.split_var = tk.BooleanVar(value=True)
         self.overwrite_var = tk.BooleanVar(value=False)
+        self.package_tar_name_var = tk.StringVar(value="image_package")
+        self.package_result_var = tk.StringVar(value="1")
+        self.package_include_back_var = tk.BooleanVar(value=False)
+        self.manifest_name_var = tk.StringVar(value="file_list.csv")
+        self.manifest_columns_var = tk.StringVar(
+            value="正面画像=front_image_file,背面画像=back_image_file,"
+                  "FORM_ID=form_id,背面認識結果=back_recognition_result,"
+                  "関連ファイル=related_file")
+        self.manifest_encoding_var = tk.StringVar(value="cp932")
+        self.manifest_include_txt_var = tk.BooleanVar(value=False)
         self.form_var = tk.StringVar(value="")
         self.form_summary_var = tk.StringVar(value="Excel定義を読み込んでください。")
         self.status_var = tk.StringVar(value="Excelを選択してください。")
@@ -154,6 +210,10 @@ class LayoutTxtGui(object):
         self.form_fields = OrderedDict()  # type: OrderedDict[str, List[LayoutField]]
         self.cell_editor = None
         self.editor_context = None
+        self.package_items = OrderedDict()
+        self.package_sequence = 0
+        self.package_editor = None
+        self.package_editor_context = None
 
         self._load_persisted_settings()
         if initial_excel:
@@ -367,7 +427,7 @@ class LayoutTxtGui(object):
 
         selector = ttk.LabelFrame(outer, text="FORM_IDを選択して内容を編集", padding=8)
         selector.grid(row=3, column=0, sticky="we", pady=(8, 0))
-        selector.columnconfigure(5, weight=1)
+        selector.columnconfigure(6, weight=1)
         ttk.Label(selector, text="FORM_ID:").grid(row=0, column=0, sticky="w")
         self.form_box = ttk.Combobox(
             selector, textvariable=self.form_var, state="readonly", width=18)
@@ -390,13 +450,109 @@ class LayoutTxtGui(object):
             selector, text="編集OCR値をExcelへ既定値保存",
             command=self._save_defaults_to_excel)
         self.defaults_button.grid(row=0, column=4, padx=(0, 10))
+        self.add_form_button = ttk.Button(
+            selector, text="表示中FORMを出力リストへ追加",
+            command=self._add_current_form_to_package)
+        self.add_form_button.grid(row=0, column=5, padx=(0, 10))
         ttk.Label(selector, textvariable=self.form_summary_var, foreground="#444").grid(
-            row=0, column=5, sticky="w")
+            row=0, column=6, sticky="w")
         ttk.Label(
             selector,
             text="出力/OCR値/属性/ELEMENT_ID/座標はダブルクリックで編集できます。"
                  " 保存ボタンは表示中FORMのOCR値を入力Excelへ書き戻します。",
-            foreground="#666").grid(row=1, column=0, columnspan=6, sticky="w", pady=(5, 0))
+            foreground="#666").grid(row=1, column=0, columnspan=7, sticky="w", pady=(5, 0))
+
+        package = ttk.LabelFrame(
+            outer, text="TAR出力リスト（複数FORM・外部画像を追加して最後にまとめて梱包）",
+            padding=8)
+        package.grid(row=4, column=0, sticky="we", pady=(8, 0))
+        package.columnconfigure(0, weight=1)
+
+        package_toolbar = ttk.Frame(package)
+        package_toolbar.grid(row=0, column=0, sticky="we")
+        ttk.Label(package_toolbar, text="背面認識値（1項目）:").pack(side="left")
+        ttk.Entry(
+            package_toolbar, textvariable=self.package_result_var, width=8).pack(
+                side="left", padx=(5, 12))
+        ttk.Checkbutton(
+            package_toolbar, text="背面画像あり（Fと同じ基礎名のRを追加）",
+            variable=self.package_include_back_var).pack(side="left", padx=(0, 12))
+        ttk.Button(
+            package_toolbar, text="外部の正面画像を追加...",
+            command=self._add_external_front_images).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            package_toolbar, text="選択行の背面画像を設定...",
+            command=self._set_back_image_for_selected).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            package_toolbar, text="選択行を削除",
+            command=self._remove_package_items).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            package_toolbar, text="全消去",
+            command=self._clear_package_items).pack(side="left")
+
+        package_table = ttk.Frame(package)
+        package_table.grid(row=1, column=0, sticky="we", pady=(6, 0))
+        package_table.columnconfigure(0, weight=1)
+        self.package_tree = ttk.Treeview(
+            package_table, columns=PACKAGE_COLUMNS, show="headings",
+            selectmode="extended", height=5)
+        for name in PACKAGE_COLUMNS:
+            self.package_tree.heading(name, text=PACKAGE_HEADINGS[name])
+            self.package_tree.column(
+                name, width=PACKAGE_WIDTHS[name], minwidth=42,
+                stretch=name in ("extra_fields", "source"))
+        package_ybar = ttk.Scrollbar(
+            package_table, orient="vertical", command=self.package_tree.yview)
+        package_xbar = ttk.Scrollbar(
+            package_table, orient="horizontal", command=self.package_tree.xview)
+        self.package_tree.configure(
+            yscrollcommand=package_ybar.set, xscrollcommand=package_xbar.set)
+        self.package_tree.grid(row=0, column=0, sticky="we")
+        package_ybar.grid(row=0, column=1, sticky="ns")
+        package_xbar.grid(row=1, column=0, sticky="we")
+        self.package_tree.bind("<Double-1>", self._begin_package_cell_edit)
+
+        package_options = ttk.Frame(package)
+        package_options.grid(row=2, column=0, sticky="we", pady=(7, 0))
+        package_options.columnconfigure(1, weight=1)
+        package_options.columnconfigure(5, weight=1)
+        ttk.Label(package_options, text="梱包TAR名:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(
+            package_options, textvariable=self.package_tar_name_var).grid(
+                row=0, column=1, sticky="we", padx=(5, 12))
+        ttk.Label(package_options, text="一覧CSV名:").grid(row=0, column=2, sticky="w")
+        ttk.Entry(
+            package_options, textvariable=self.manifest_name_var, width=18).grid(
+                row=0, column=3, sticky="w", padx=(5, 12))
+        ttk.Label(package_options, text="CSV文字コード:").grid(row=0, column=4, sticky="w")
+        ttk.Combobox(
+            package_options, textvariable=self.manifest_encoding_var,
+            values=("cp932", "utf-8-sig", "utf-8"), state="readonly", width=11).grid(
+                row=0, column=5, sticky="w", padx=(5, 12))
+        ttk.Checkbutton(
+            package_options, text="CSV梱包にも認識TXTを含める",
+            variable=self.manifest_include_txt_var).grid(row=0, column=6, sticky="w")
+
+        ttk.Label(package_options, text="CSV列:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(
+            package_options, textvariable=self.manifest_columns_var).grid(
+                row=1, column=1, columnspan=5, sticky="we", padx=(5, 12), pady=(6, 0))
+        ttk.Button(
+            package_options, text="選択画像＋認識TXTをTAR化",
+            command=lambda: self._run_package(include_manifest=False)).grid(
+                row=1, column=6, sticky="e", padx=(0, 8), pady=(6, 0))
+        ttk.Button(
+            package_options, text="選択画像＋一覧CSVをTAR化",
+            command=lambda: self._run_package(include_manifest=True)).grid(
+                row=1, column=7, sticky="e", pady=(6, 0))
+        ttk.Label(
+            package_options,
+            text="CSV列は 見出し=値キー。標準キー: front_image_file / back_image_file / "
+                 "form_id / front_recognition_file / back_recognition_file / "
+                 "back_recognition_result / related_file。"
+                 "行別の任意値は追加項目へ key=value;... と入力。",
+            foreground="#666").grid(
+                row=2, column=0, columnspan=8, sticky="w", pady=(4, 0))
 
         table_frame = ttk.Frame(outer)
         table_frame.grid(row=5, column=0, sticky="nsew", pady=(8, 0))
@@ -667,6 +823,416 @@ class LayoutTxtGui(object):
         if not rows:
             raise LayoutTxtError("出力対象項目が0件です。出力列を1にしてください。")
         return rows, overrides
+
+    # ------------------------------------------------------------------
+    # 複数FORM / 外部画像を蓄積するTAR出力リスト
+    def _unique_package_base(self, preferred: str) -> str:
+        raw = str(preferred or "image").strip() or "image"
+        used = set(item.front_image_name.lower() for item in self.package_items.values())
+        candidate = raw
+        sequence = 2
+        while (candidate + "F.tif").lower() in used or any(
+                item.safe_base_name.lower() == candidate.lower()
+                for item in self.package_items.values()):
+            candidate = "%s_%02d" % (raw, sequence)
+            sequence += 1
+        return candidate
+
+    @staticmethod
+    def _package_source(item: PackageItem) -> str:
+        if item.front_image_path is not None:
+            value = str(item.front_image_path)
+            if item.back_image_path is not None:
+                value += " / 背面: " + str(item.back_image_path)
+            return value
+        return item.source_label or "画面から生成"
+
+    def _package_values(self, item: PackageItem, include="1"):
+        return (
+            include,
+            item.form_id,
+            item.safe_base_name,
+            item.front_image_name,
+            (item.front_recognition_name
+             if item.has_front_recognition else "（未設定）"),
+            item.back_image_name if item.has_back_image else "（なし）",
+            item.back_recognition_name if item.has_back_image else "（なし）",
+            item.back_recognition_result if item.has_back_image else "",
+            item.related_file or item.front_image_name,
+            format_extra_fields(item.extra_fields),
+            self._package_source(item),
+        )
+
+    def _insert_package_item(self, item: PackageItem) -> str:
+        self.package_sequence += 1
+        iid = "package_%05d" % self.package_sequence
+        self.package_items[iid] = item
+        self.package_tree.insert(
+            "", "end", iid=iid, values=self._package_values(item))
+        self.package_tree.selection_set(iid)
+        self.package_tree.see(iid)
+        return iid
+
+    def _add_current_form_to_package(self) -> None:
+        if not self.form_fields:
+            self._read_definitions()
+            if not self.form_fields:
+                return
+        form_id = self.form_var.get().strip()
+        try:
+            rows, overrides = self._screen_edits()
+            self.status_var.set("FORM_ID %s の正面画像を生成中..." % form_id)
+            self.root.update_idletasks()
+            front = render_form_tif_payload(
+                self.loaded_fields, form_id, selected_rows=rows,
+                field_overrides=overrides, side="front")
+            front_text = render_form_txt_text(
+                self.loaded_fields, form_id, selected_rows=rows,
+                field_overrides=overrides,
+                output_format=_value_for_label(FORMAT_LABELS, self.format_var.get()))
+            back = None
+            if self.package_include_back_var.get():
+                back = render_form_tif_payload(
+                    self.loaded_fields, form_id, selected_rows=rows,
+                    field_overrides=overrides, side="back")
+            base = self._unique_package_base(form_id)
+            item = PackageItem(
+                base_name=base,
+                form_id=form_id,
+                front_recognition_text=front_text,
+                back_recognition_result=self.package_result_var.get(),
+                front_image_bytes=front,
+                back_image_bytes=back,
+                front_extension=".tif",
+                source_label="Excel/画面 FORM_ID %s" % form_id)
+            self._insert_package_item(item)
+        except (LayoutTxtError, LayoutTarError) as exc:
+            self.status_var.set("出力リストへ追加できませんでした: %s" % exc)
+            messagebox.showerror("追加エラー", str(exc), parent=self.root)
+            return
+        self.status_var.set(
+            "出力リストへ追加: FORM_ID %s / %s / 正面TXTは既存ロジック / %s"
+            % (form_id, item.front_image_name,
+               ("背面 %s / 背面認識値 %s" % (
+                   item.back_image_name, item.back_recognition_result)
+                if item.has_back_image else "背面なし")))
+
+    def _read_text_file(self, path: Optional[Path]) -> Optional[str]:
+        if path is None:
+            return None
+        encodings = [self.encoding_var.get(), "cp932", "utf-8-sig", "utf-8"]
+        tried = set()
+        for encoding in encodings:
+            if not encoding or encoding in tried:
+                continue
+            tried.add(encoding)
+            try:
+                return path.read_text(encoding=encoding).rstrip("\r\n")
+            except (UnicodeDecodeError, LookupError):
+                continue
+            except OSError as exc:
+                raise LayoutTarError("認識結果TXTを読めません: %s: %s" % (path, exc))
+        raise LayoutTarError("認識結果TXTの文字コードを判定できません: %s" % path)
+
+    def _read_back_recognition_result(self, path: Optional[Path]) -> str:
+        text = self._read_text_file(path)
+        if text is None:
+            return self.package_result_var.get()
+        rows = list(csv.reader(text.splitlines()))
+        if len(rows) != 1 or len(rows[0]) != 1:
+            raise LayoutTarError("背面TXTは1行1フィールドにしてください: %s" % path)
+        return rows[0][0]
+
+    def _choose_back_for_front(self, front: Path) -> Optional[Path]:
+        found = matching_back_image(front)
+        if found is not None:
+            return found
+        chosen = filedialog.askopenfilename(
+            parent=self.root,
+            title="%s に対応する背面画像（末尾R）を選択" % front.name,
+            initialdir=str(front.parent),
+            filetypes=(("画像", "*.tif *.tiff *.png *.jpg *.jpeg *.bmp *.gif"),
+                       ("すべて", "*.*")))
+        return Path(chosen) if chosen else None
+
+    def _add_external_front_images(self) -> None:
+        paths = filedialog.askopenfilenames(
+            parent=self.root, title="正面画像を選択（複数可）",
+            filetypes=(("画像", "*.tif *.tiff *.png *.jpg *.jpeg *.bmp *.gif"),
+                       ("すべて", "*.*")))
+        if not paths:
+            return
+        added = 0
+        skipped = []
+        missing_front_txt = []
+        form_front_text = None
+        form_text_ready = False
+        try:
+            for raw in paths:
+                front = Path(raw)
+                if front.suffix.lower() not in IMAGE_EXTENSIONS:
+                    skipped.append("%s（画像形式外）" % front.name)
+                    continue
+                if front.stem.upper().endswith("R"):
+                    skipped.append("%s（背面Rが正面として選択されています）" % front.name)
+                    continue
+                back = None
+                if self.package_include_back_var.get():
+                    back = self._choose_back_for_front(front)
+                    if back is None:
+                        skipped.append("%s（背面未選択）" % front.name)
+                        continue
+                    if back.suffix.lower() not in IMAGE_EXTENSIONS:
+                        skipped.append("%s（背面画像形式外）" % front.name)
+                        continue
+                base = self._unique_package_base(base_name_from_front(front))
+                front_text = self._read_text_file(matching_recognition_file(front))
+                if front_text is None and self.form_fields:
+                    if not form_text_ready:
+                        rows, overrides = self._screen_edits()
+                        form_front_text = render_form_txt_text(
+                            self.loaded_fields, self.form_var.get().strip(),
+                            selected_rows=rows, field_overrides=overrides,
+                            output_format=_value_for_label(
+                                FORMAT_LABELS, self.format_var.get()))
+                        form_text_ready = True
+                    front_text = form_front_text
+                if front_text is None:
+                    missing_front_txt.append(front.name)
+                back_result = self.package_result_var.get()
+                if back is not None:
+                    back_result = self._read_back_recognition_result(
+                        matching_recognition_file(back))
+                item = PackageItem(
+                    base_name=base,
+                    form_id=self.form_var.get().strip(),
+                    front_recognition_text=front_text,
+                    back_recognition_result=back_result,
+                    front_image_path=front,
+                    front_extension=front.suffix,
+                    back_image_path=back,
+                    back_extension=back.suffix if back is not None else front.suffix,
+                    source_label=str(front))
+                self._insert_package_item(item)
+                added += 1
+        except (LayoutTxtError, LayoutTarError) as exc:
+            messagebox.showerror("画像追加エラー", str(exc), parent=self.root)
+            self.status_var.set("外部画像を追加できませんでした: %s" % exc)
+            return
+
+        message = "外部画像を%d件、出力リストへ追加しました。" % added
+        if missing_front_txt:
+            message += " 正面TXT未設定: " + ", ".join(missing_front_txt)
+        if skipped:
+            message += " スキップ: " + ", ".join(skipped)
+        if skipped or missing_front_txt:
+            messagebox.showwarning("追加結果の確認", message, parent=self.root)
+        self.status_var.set(message)
+
+    def _set_back_image_for_selected(self) -> None:
+        selected = list(self.package_tree.selection())
+        if len(selected) != 1:
+            messagebox.showwarning(
+                "背面画像", "背面画像を設定する行を1件選択してください。",
+                parent=self.root)
+            return
+        iid = selected[0]
+        item = self.package_items[iid]
+        if item.has_back_image:
+            remove = messagebox.askyesnocancel(
+                "背面画像",
+                "現在の背面画像を外しますか？\n\n"
+                "「はい」: 背面なしにする\n「いいえ」: 別の背面画像へ変更",
+                parent=self.root)
+            if remove is None:
+                return
+            if remove:
+                item.back_image_path = None
+                item.back_image_bytes = None
+                self.package_tree.item(
+                    iid, values=self._package_values(
+                        item, self.package_tree.set(iid, "include")))
+                return
+
+        chosen = filedialog.askopenfilename(
+            parent=self.root, title="背面画像を選択",
+            filetypes=(("画像", "*.tif *.tiff *.png *.jpg *.jpeg *.bmp *.gif"),
+                       ("すべて", "*.*")))
+        if not chosen:
+            return
+        path = Path(chosen)
+        if path.suffix.lower() not in IMAGE_EXTENSIONS:
+            messagebox.showerror("背面画像", "対応していない画像形式です。", parent=self.root)
+            return
+        try:
+            result_path = matching_recognition_file(path)
+            if result_path is not None:
+                back_result = self._read_back_recognition_result(result_path)
+            else:
+                back_result = item.back_recognition_result
+        except LayoutTarError as exc:
+            messagebox.showerror("背面TXT", str(exc), parent=self.root)
+            return
+        item.back_image_path = path
+        item.back_image_bytes = None
+        item.back_extension = path.suffix.lower()
+        item.back_recognition_result = back_result
+        self.package_tree.item(
+            iid, values=self._package_values(item, self.package_tree.set(iid, "include")))
+
+    def _remove_package_items(self) -> None:
+        self._finish_package_cell_edit(save=True)
+        for iid in list(self.package_tree.selection()):
+            self.package_items.pop(iid, None)
+            if self.package_tree.exists(iid):
+                self.package_tree.delete(iid)
+        self.status_var.set("出力リスト: %d件" % len(self.package_items))
+
+    def _clear_package_items(self) -> None:
+        if not self.package_items:
+            return
+        if not messagebox.askyesno(
+                "出力リストを消去", "出力リストを全件消去しますか？",
+                parent=self.root):
+            return
+        self._finish_package_cell_edit(save=False)
+        for iid in self.package_tree.get_children(""):
+            self.package_tree.delete(iid)
+        self.package_items.clear()
+        self.status_var.set("出力リストを消去しました。元画像ファイルは変更していません。")
+
+    def _begin_package_cell_edit(self, event) -> None:
+        region = self.package_tree.identify_region(event.x, event.y)
+        item_id = self.package_tree.identify_row(event.y)
+        column_token = self.package_tree.identify_column(event.x)
+        if region != "cell" or not item_id or not column_token:
+            return
+        index = int(column_token[1:]) - 1
+        if index < 0 or index >= len(PACKAGE_COLUMNS):
+            return
+        column_name = PACKAGE_COLUMNS[index]
+        if column_name not in PACKAGE_EDITABLE_COLUMNS:
+            return
+        values = list(self.package_tree.item(item_id, "values"))
+        if column_name == "include":
+            values[index] = "0" if str(values[index]) == "1" else "1"
+            self.package_tree.item(item_id, values=values)
+            return
+        self._finish_package_cell_edit(save=True)
+        bbox = self.package_tree.bbox(item_id, column_token)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        editor = ttk.Entry(self.package_tree)
+        editor.insert(0, values[index])
+        editor.select_range(0, "end")
+        editor.place(x=x, y=y, width=width, height=height)
+        editor.focus_set()
+        self.package_editor = editor
+        self.package_editor_context = (item_id, column_name)
+        editor.bind("<Return>", lambda _event: self._finish_package_cell_edit(save=True))
+        editor.bind("<Escape>", lambda _event: self._finish_package_cell_edit(save=False))
+        editor.bind("<FocusOut>", lambda _event: self._finish_package_cell_edit(save=True))
+
+    def _finish_package_cell_edit(self, save: bool) -> None:
+        if self.package_editor is None:
+            return
+        editor = self.package_editor
+        context = self.package_editor_context
+        self.package_editor = None
+        self.package_editor_context = None
+        try:
+            if save and context is not None:
+                iid, column_name = context
+                if self.package_tree.exists(iid) and iid in self.package_items:
+                    item = self.package_items[iid]
+                    raw = editor.get()
+                    if column_name == "form_id":
+                        item.form_id = raw.strip()
+                    elif column_name == "base_name":
+                        if not raw.strip():
+                            raise LayoutTarError("基礎名は空にできません")
+                        item.base_name = raw.strip()
+                    elif column_name == "back_recognition_result":
+                        item.back_recognition_result = raw
+                    elif column_name == "related_file":
+                        item.related_file = raw.strip()
+                    elif column_name == "extra_fields":
+                        item.extra_fields = parse_extra_fields(raw)
+                    include = self.package_tree.set(iid, "include") or "1"
+                    self.package_tree.item(
+                        iid, values=self._package_values(item, include))
+        except LayoutTarError as exc:
+            self.status_var.set("出力リストの編集値が不正です: %s" % exc)
+            messagebox.showerror("編集エラー", str(exc), parent=self.root)
+        finally:
+            editor.destroy()
+
+    def _selected_package_items(self):
+        self._finish_package_cell_edit(save=True)
+        items = []
+        for iid in self.package_tree.get_children(""):
+            include = str(self.package_tree.set(iid, "include")).strip().lower()
+            if include in ("1", "on", "yes", "true"):
+                items.append(self.package_items[iid])
+        if not items:
+            raise LayoutTarError("TAR列が1の画像を1件以上追加してください")
+        return items
+
+    def _custom_package_tar_name(self, items) -> str:
+        raw = self.package_tar_name_var.get().strip() or "image_package"
+        excel_raw = self.excel_var.get().strip()
+        source = Path(excel_raw).stem if excel_raw else "images"
+        form_ids = []
+        for item in items:
+            if item.form_id and item.form_id not in form_ids:
+                form_ids.append(item.form_id)
+        form_value = form_ids[0] if len(form_ids) == 1 else "all"
+        try:
+            return raw.format(source=source, form_id=form_value)
+        except (KeyError, ValueError, IndexError) as exc:
+            raise LayoutTarError("梱包TAR名テンプレートが不正です: %s" % exc)
+
+    def _run_package(self, include_manifest: bool) -> None:
+        output_raw = self.output_var.get().strip()
+        if not output_raw:
+            messagebox.showwarning(
+                "出力先なし", "出力フォルダを選択してください。", parent=self.root)
+            return
+        try:
+            items = self._selected_package_items()
+            columns = None
+            if include_manifest:
+                columns = parse_manifest_columns(self.manifest_columns_var.get())
+            include_txt = (
+                True if not include_manifest else self.manifest_include_txt_var.get())
+            result = build_image_tar(
+                items=items,
+                output_dir=Path(output_raw),
+                tar_name=self._custom_package_tar_name(items),
+                include_recognition_txt=include_txt,
+                include_manifest_csv=include_manifest,
+                manifest_name=self.manifest_name_var.get().strip(),
+                manifest_columns=columns,
+                text_encoding=self.encoding_var.get(),
+                csv_encoding=self.manifest_encoding_var.get(),
+                overwrite=self.overwrite_var.get())
+        except (LayoutTarError, OSError) as exc:
+            self.status_var.set("TARを生成できませんでした: %s" % exc)
+            messagebox.showerror("TAR生成エラー", str(exc), parent=self.root)
+            return
+
+        self._save_persisted_settings(show_message=False)
+        self.status_var.set(
+            "梱包完了: 帳票%d件 / TAR内%dファイル / %s"
+            % (result.item_count, len(result.archive_members), result.tar_file))
+        messagebox.showinfo(
+            "TAR生成完了",
+            "画像TARを生成しました。\n\n帳票: %d件\n格納ファイル: %d件\n"
+            "CSV: %s\n\n%s"
+            % (result.item_count, len(result.archive_members),
+               result.manifest_name or "なし", result.tar_file),
+            parent=self.root)
 
     def _save_defaults_to_excel(self) -> None:
         if not self.form_fields:

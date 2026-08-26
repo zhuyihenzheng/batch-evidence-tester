@@ -34,8 +34,8 @@ setup:
 
 # snapshot:
 #   tables:
-#     - name: T_ORDER
-#       sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS FROM T_ORDER ORDER BY ORDER_ID"
+#     - name: T_SAMPLE
+#       sql: "SELECT RECORD_ID, VALUE_A, VALUE_B, STATUS FROM T_SAMPLE ORDER BY RECORD_ID"
 
 execute:
   args: ["--mode", "daily"]

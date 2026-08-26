@@ -874,7 +874,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     result_store.save_run_meta(run, run_dir)
 
     # file_name_format では {run_id} のほか {filter} も使える
-    # （例: "TestEvidence_{run_id}_{filter}.xlsx" -> TestEvidence_..._tag-受注.xlsx）
+    # （例: "TestEvidence_{run_id}_{filter}.xlsx" -> TestEvidence_..._tag-group_a.xlsx）
     file_name = str(settings.excel.get("file_name_format", "TestEvidence_{run_id}.xlsx")).format(
         run_id=run_id, filter=_filter_slug(args))
     excel_path = build_workbook(run, out_dir / file_name, settings.excel)

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Excel のレイアウト定義から取込テスト用 TXT を生成する。
 
-画像の仕様にある並びを既定フォーマットとし、1 帳票を CSV 形式の 1 行にする。
+画像の仕様にある並びを既定フォーマットとし、1 データ単位を CSV 形式の 1 行にする。
 
   1. FormID 情報
   2. 対象有無情報
@@ -11,7 +11,7 @@
   6. 座標情報           ┘
 
 OCR 値は Excel の I/J/K 列（データ型 / IME / 最大桁数）から決定する。
-列位置や出力形式はコマンド引数で差し替えられるため、帳票ごとにコードを
+列位置や出力形式はコマンド引数で差し替えられるため、データ種別ごとにコードを
 複製しなくてよい。
 
   PYTHONPATH=src python -m autotest.layout_txt definition.xlsx --out-dir output/layout_txt
@@ -68,7 +68,7 @@ DATE_VALUES = (
     "5/8/6/1",           # 和暦記載
     "/2026/6/1",        # 西暦記載
     "5/2026/6/1",       # 元号 + 4 桁西暦
-    "5/8/6/1|5/8/6/2",  # 帳票上の 1 行に複数記載
+    "5/8/6/1|5/8/6/2",  # 1 項目内に複数記載
 )
 
 CHECKBOX_VALUES = ("1", "0")
@@ -370,13 +370,14 @@ class GeneratedCase(object):
 
     def __init__(self, source_form_id: str, form_id: str,
                  fields: List[LayoutField], target_presence: str,
-                 pattern: str, sequence: int) -> None:
+                 pattern: str, sequence: int, side: str = "") -> None:
         self.source_form_id = source_form_id
         self.form_id = form_id
         self.fields = fields
         self.target_presence = target_presence
         self.pattern = pattern
         self.sequence = sequence
+        self.side = side
 
 
 def _header_map(ws, header_row: int) -> Dict[str, List[int]]:
@@ -808,7 +809,7 @@ def _render_form(form_id: str, fields: Sequence[LayoutField], output_format: str
         values = [form_id, target_presence]
         for field in fields:
             values.extend((field.field_id, field.value, field.attribute_flag, field.coordinates))
-        # 1 行が 1 帳票。値にカンマが含まれる座標もあるため、全項目を引用する。
+        # 1 データ単位を 1 行にし、カンマを含む値に備えて全項目を引用する。
         lines.append(",".join(_quoted(value) for value in values))
     elif output_format == "labeled":
         values = ("FormID=" + form_id, "TargetPresence=" + target_presence)
@@ -1116,8 +1117,9 @@ def _tif_payload(cases: Sequence[GeneratedCase]) -> bytes:
             draw = ImageDraw.Draw(image)
             draw.rectangle((margin, margin, width - margin, height - margin),
                            outline=(40, 40, 40))
-            title = "FORM %s / Pattern %02d %s" % (
-                case.form_id or "<EMPTY>", case.sequence, case.pattern)
+            side_label = " / %s" % case.side.upper() if case.side else ""
+            title = "FORM %s / Pattern %02d %s%s" % (
+                case.form_id or "<EMPTY>", case.sequence, case.pattern, side_label)
             _draw_tif_text(draw, (margin + 24, margin + 20), title, normal_font)
             description = PATTERN_DESCRIPTIONS.get(case.pattern, case.pattern)
             _draw_tif_text(draw, (margin + 24, margin + 70), description, small_font)
@@ -1159,6 +1161,41 @@ def _tif_payload(cases: Sequence[GeneratedCase]) -> bytes:
         options.pop("compression", None)
         first.save(stream, **options)
     return stream.getvalue()
+
+
+def render_form_txt_text(fields: Sequence[LayoutField], form_id: str,
+                         selected_rows: Optional[Sequence] = None,
+                         field_overrides: Optional[Dict] = None,
+                         output_format: str = "raw",
+                         line_ending: str = "\r\n") -> str:
+    """GUIの編集状態を既存のFORM出力ロジックでTXT文字列へ変換する。"""
+    selected = _filter_and_override_fields(
+        fields, selected_form_ids=[form_id],
+        selected_rows=selected_rows, field_overrides=field_overrides)
+    return _render_form(
+        form_id, selected, output_format=output_format,
+        target_presence="1", line_ending=line_ending)
+
+
+def render_form_tif_payload(fields: Sequence[LayoutField], form_id: str,
+                            selected_rows: Optional[Sequence] = None,
+                            field_overrides: Optional[Dict] = None,
+                            side: str = "front") -> bytes:
+    """GUIの編集状態から、TAR出力リスト用の正面/背面TIFをメモリ生成する。"""
+    normalised_side = str(side or "front").strip().lower()
+    if normalised_side not in ("front", "back"):
+        raise LayoutTxtError("画像面は front / back で指定してください: %s" % side)
+    selected = _filter_and_override_fields(
+        fields, selected_form_ids=[form_id],
+        selected_rows=selected_rows, field_overrides=field_overrides)
+    # 自動生成する背面は「背面ファイルが存在する」ケースを作るための白紙画像。
+    # 実際の裏面画像が必要な場合はGUIから外部画像を追加できる。
+    image_fields = selected if normalised_side == "front" else []
+    case = GeneratedCase(
+        source_form_id=form_id, form_id=form_id, fields=image_fields,
+        target_presence="1", pattern="normal", sequence=1,
+        side=normalised_side)
+    return _tif_payload([case])
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
@@ -1341,7 +1378,7 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
             chunks.append(_render_form(
                 case.form_id, case.fields, output_format,
                 case.target_presence, line_ending).rstrip("\r\n"))
-        # 1 ファイルにまとめる場合も「1 行 = 1 帳票」を維持する。
+        # 1 ファイルにまとめる場合も「1 行 = 1 データ単位」を維持する。
         content = line_ending.join(chunks) + line_ending
         try:
             payload = content.encode(encoding)

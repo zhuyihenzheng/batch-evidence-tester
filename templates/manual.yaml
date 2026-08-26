@@ -48,8 +48,8 @@ setup:
 # 「人が見て判断したい列」を漏れなく入れておくこと
 # snapshot:
 #   tables:
-#     - name: T_ORDER
-#       sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS, UPLOAD_TIME FROM T_ORDER ORDER BY ORDER_ID"
+#     - name: T_SAMPLE
+#       sql: "SELECT RECORD_ID, VALUE_A, VALUE_B, STATUS, UPDATED_AT FROM T_SAMPLE ORDER BY RECORD_ID"
 
 # --- 実行後の採取（--phase after）-----------------------------------------------
 collect:
@@ -59,7 +59,7 @@ collect:
       preview: true
 
 review:
-  - "DB スナップショット・実行ログ・証跡画像を確認し、所定の手動操作後に業務仕様どおり処理が完了していること"
-  - "証跡画像と回収物を確認し、出力ファイルの件数・名称・内容が業務仕様どおりであること"
+  - "DB スナップショット・実行ログ・証跡画像を確認し、所定の手動操作後に期待した処理が完了していること"
+  - "証跡画像と回収物を確認し、出力ファイルの件数・名称・内容が期待結果どおりであること"
 
 # assert は自動比較も参考情報として併用したい場合だけ追加する。

@@ -25,6 +25,15 @@ from .runner import _resolve_exe, run_batch
 _BATCH_START_PLACEHOLDER = re.compile(r"\{batch_start(?::(?P<fmt>[^}]+))?\}")
 
 
+def _setup_batch_values(spec):
+    """setup.batches の短縮形 / 詳細形を共通の値へ正規化する。"""
+    if isinstance(spec, str):
+        return spec, [], 0
+    batch_name = spec.get("batch")
+    expected = spec.get("expected_exit_code")
+    return batch_name, list(spec.get("args") or []), int(expected if expected is not None else 0)
+
+
 def preflight_case(settings: Settings, case: TestCase) -> List[str]:
     """破壊的操作（フォルダクリア・SQL 実行）の前に行う静的検査。
 
@@ -57,6 +66,34 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
                 wd = (settings.project_root / wd).resolve()
             if not wd.is_dir():
                 problems.append("working_dir が存在しません: %s" % wd)
+
+    # setup.batches も、フォルダ削除や SQL 実行より前に全件確認する。
+    # 2 件目の exe 不備を 1 件目の前置 batch 実行後に発見すると、環境だけが
+    # 中途半端に変更された状態になるため、主 batch と同じ preflight を通す。
+    for i, spec in enumerate((case.setup or {}).get("batches") or []):
+        setup_batch_name, _args, _expected = _setup_batch_values(spec)
+        label = "setup.batches[%d]（%s）" % (i, setup_batch_name or "既定")
+        try:
+            setup_batch = settings.batch_profile(setup_batch_name)
+        except ConfigError as exc:
+            problems.append("%s: %s" % (label, exc))
+            continue
+
+        exe_raw = setup_batch.get("exe_path")
+        if not exe_raw:
+            problems.append("%s: exe_path が未設定です" % label)
+        else:
+            exe = _resolve_exe(str(exe_raw), settings.project_root)
+            if not exe.exists():
+                problems.append("%s: 実行ファイルが見つかりません: %s" % (label, exe))
+
+        working_dir = setup_batch.get("working_dir")
+        if working_dir:
+            wd = Path(str(working_dir))
+            if not wd.is_absolute():
+                wd = (settings.project_root / wd).resolve()
+            if not wd.is_dir():
+                problems.append("%s: working_dir が存在しません: %s" % (label, wd))
 
     aliases = settings.path_aliases
 
@@ -698,6 +735,41 @@ class CaseRunner:
             dry_run=self.dry_run,
         )
 
+        # YAML の mapping 順には依存させない。前置 batch は必ず、投入ファイルと
+        # ケース用設定の配置がすべて終わった後、主 batch の実行前に動かす。
+        self._run_setup_batches(setup.get("batches") or [])
+
+    def _run_setup_batches(self, specs) -> None:
+        """前置 batch を YAML のリスト順に同期実行する。"""
+        total = len(specs)
+        for i, spec in enumerate(specs, start=1):
+            batch_name, args, expected_exit_code = _setup_batch_values(spec)
+            label = batch_name or "既定"
+            self._step("前置batch実行 %d/%d（%s）" % (i, total, label))
+            info = run_batch(
+                self.settings,
+                args,
+                dry_run=self.dry_run,
+                batch_name=batch_name,
+                on_progress=self._progress,
+            )
+            if not self.dry_run and info.exit_code != expected_exit_code:
+                if info.timed_out:
+                    reason = "タイムアウトしました"
+                else:
+                    reason = "終了コード %s（期待値: %s）" % (
+                        info.exit_code, expected_exit_code)
+                output = (info.stderr or info.stdout or "").strip()
+                if len(output) > 2000:
+                    output = output[-2000:]
+                detail = "\n出力:\n%s" % output if output else ""
+                raise ConfigError(
+                    "前置 batch %d/%d（%s）が失敗しました: %s%s"
+                    % (i, total, label, reason, detail))
+            self._step(
+                "前置batch完了 %d/%d（%s、終了コード %s、%.1f 秒）"
+                % (i, total, label, info.exit_code, info.elapsed_sec))
+
     def _aliases_used_by(self, case: TestCase) -> List[str]:
         """このケースが参照する論理名だけを集める。
 
@@ -727,6 +799,10 @@ class CaseRunner:
         # ログ出力先は batch 定義側で決まる
         log_alias = self.settings.batch_profile(case.execute.get("batch")).get("log_dir")
         used.add(log_alias or "log_dir")
+        for spec in setup.get("batches") or []:
+            setup_batch_name, _args, _expected = _setup_batch_values(spec)
+            setup_log_alias = self.settings.batch_profile(setup_batch_name).get("log_dir")
+            used.add(setup_log_alias or "log_dir")
 
         aliases = self.settings.path_aliases
         return [a for a in used if a in aliases]
@@ -878,7 +954,7 @@ class CaseRunner:
                                    比較する場合はこれをそのまま使う。
         {batch_start:%Y%m%d}     … 書式指定。日付が char/varchar 列に
                                    'yyyyMMdd' 等で入っている場合に合わせる。
-        {date} 系                 … 業務日付（paths や引数と同じ規則）
+        {date} 系                 … 基準日（paths や引数と同じ規則）
         """
         sql = self.settings.expand(sql)
         if "{batch_start" not in sql:

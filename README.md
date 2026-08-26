@@ -235,7 +235,7 @@ python -m autotest run --config config\settings.demo.yaml --offline
 
 ```yaml
 batch:
-  exe_path: "C:/app/batch/OrderBatch.exe"   # ← 被测 exe（正斜杠即可）
+  exe_path: "C:/app/batch/TargetBatch.exe"  # ← 被测 exe（正斜杠即可）
   working_dir: "C:/app/batch"
   timeout_sec: 600
   console_encoding: "cp932"                 # ← 日文 Windows 控制台编码
@@ -276,7 +276,7 @@ database:
 
 ```yaml
 id: TC001_normal
-name: "正常系：受注ファイル取込（明細2件）"
+name: "正常系：入力ファイル2件"
 tags: [正常系, 単体]
 
 setup:                                    # ① 前处理
@@ -284,15 +284,19 @@ setup:                                    # ① 前处理
   sql:
     - file: sql/TC001_setup.sql           # 支持 GO 分隔；也可写 inline
   input_files:
-    - src: "input/ORDER_20260803.csv"     # 相对 cases\<id>\；也可指定文件夹
+    - src: "input/DATA_20260803.csv"      # 相对 cases\<id>\；也可指定文件夹
       dest_dir: input_dir
+  batches:                                # 可选：文件投入完成后执行的前置 batch
+    - batch: prepare                      # settings.batches.prepare
+      args: ["--date", "20260803"]
+      expected_exit_code: 0               # 省略时为 0
 
 snapshot:                                 # ② ⑦ DB 快照（执行前后各取一次）
   tables:
-    - name: T_ORDER
-      sql: "SELECT ORDER_ID, ORDER_NO, AMOUNT, STATUS, UPDATED_AT FROM T_ORDER ORDER BY ORDER_ID"
-      format: {decimal_places: {AMOUNT: 0}}
-      mask: [CUSTOMER_TEL]                # 个人信息列 → ***MASKED***
+    - name: T_SAMPLE
+      sql: "SELECT RECORD_ID, VALUE_A, VALUE_B, STATUS, UPDATED_AT FROM T_SAMPLE ORDER BY RECORD_ID"
+      format: {decimal_places: {VALUE_B: 0}}
+      mask: [PRIVATE_VALUE]               # 非公开列 → ***MASKED***
 
 execute:                                  # ④ 执行
   args: ["--mode", "daily", "--date", "20260803"]
@@ -306,9 +310,9 @@ collect:                                  # ⑥ 回收
 assert:                                   # ⑨ 判定
   exit_code: 0
   db:
-    - table: T_ORDER
-      expected: "expected/TC001_normal/db_T_ORDER.csv"
-      key: [ORDER_ID]                     # 按主键对齐记录后逐单元格比
+    - table: T_SAMPLE
+      expected: "expected/TC001_normal/db_T_SAMPLE.csv"
+      key: [RECORD_ID]                    # 按键对齐记录后逐单元格比
       ignore_columns: [UPDATED_AT]        # 依赖执行时刻的列排除
   files:
     - name: "結果ファイル"
@@ -317,11 +321,11 @@ assert:                                   # ⑨ 判定
       encoding: cp932
       ignore_line_patterns: ['^#作成日時']  # 行内含时刻等易变内容可正则排除
     - name: "処理済フォルダへの移動"
-      exists: {dir: processed_dir, pattern: "ORDER_*.csv", count: 1}
+      exists: {dir: processed_dir, pattern: "DATA_*.csv", count: 1}
     - name: "エラーフォルダが空であること"
       exists: {dir: error_dir, pattern: "*", count: 0}
   log:
-    must_contain: ["処理開始", "取込件数=2", "処理正常終了"]
+    must_contain: ["処理開始", "入力件数=2", "処理正常終了"]
     must_not_contain: ["[ERROR]", "Exception", "異常終了"]
 ```
 
@@ -337,8 +341,8 @@ assert:                                   # ⑨ 判定
 ```yaml
 snapshot:
   tables:
-    - name: T_ORDER
-      sql: "SELECT ORDER_ID, STATUS, AMOUNT FROM T_ORDER ORDER BY ORDER_ID"
+    - name: T_SAMPLE
+      sql: "SELECT RECORD_ID, STATUS, VALUE_A FROM T_SAMPLE ORDER BY RECORD_ID"
 
 collect:
   files:
@@ -347,10 +351,10 @@ collect:
       preview: true
 
 review:
-  - "比较执行前后的 DB 快照，确认 STATUS、AMOUNT 与业务规格一致"
+  - "比较执行前后的 DB 快照，确认 STATUS、VALUE_A 与期待结果一致"
   - |
       确认证据图片和回收文件。
-      输出件数、文件名及内容必须与业务规格一致。
+      输出件数、文件名及内容必须与期待结果一致。
   - "确认执行日志中处理已经完成，并且不存在非预期 ERROR / Exception"
 ```
 
@@ -382,11 +386,11 @@ DB 没有期待值、完全看执行前后证迹：
 ```yaml
 snapshot:
   tables:
-    - name: T_ORDER
-      sql: "SELECT ORDER_ID, STATUS, AMOUNT FROM T_ORDER ORDER BY ORDER_ID"
+    - name: T_SAMPLE
+      sql: "SELECT RECORD_ID, STATUS, VALUE_A FROM T_SAMPLE ORDER BY RECORD_ID"
 assert:
   db:
-    - table: T_ORDER
+    - table: T_SAMPLE
       manual: true
 ```
 
@@ -395,9 +399,9 @@ DB 先自动比较，比较一致后仍由人最终确认：
 ```yaml
 assert:
   db:
-    - table: T_ORDER
-      expected: "expected/TC001/db_T_ORDER.csv"
-      key: [ORDER_ID]
+    - table: T_SAMPLE
+      expected: "expected/TC001/db_T_SAMPLE.csv"
+      key: [RECORD_ID]
       manual: true
 ```
 
@@ -452,10 +456,10 @@ run / manual 采集 → report 合并（如有多个 run）→ 在最终 Excel �
 cases\
 ├─ TC001_normal.yaml              用例定义
 ├─ TC001_normal\input\            ← 这个用例投入的文件
-│    └─ ORDER_20260803.csv
+│    └─ DATA_20260803.csv
 ├─ TC002_error.yaml
 └─ TC002_error\input\             ← 另一个用例的文件（内容不同）
-     └─ ORDER_20260804.csv
+     └─ DATA_20260804.csv
 ```
 
 用例里 `src` 写相对 `cases\<用例ID>\` 的路径：
@@ -463,7 +467,7 @@ cases\
 ```yaml
 setup:
   input_files:
-    - src: "input/ORDER_20260803.csv"
+    - src: "input/DATA_20260803.csv"
       dest_dir: input_dir              # 投到哪个文件夹（论理名）
     - src: "input/MASTER.csv"          # 一次投多个文件也行
       dest_dir: input_dir
@@ -492,18 +496,18 @@ setup:
 ```yaml
 # config/settings.yaml
 batch:                                    # ← 既定 batch（不写 execute.batch 时用这个）
-  exe_path: "C:/app/batch/OrderBatch.exe"
+  exe_path: "C:/app/batch/TargetBatch.exe"
   working_dir: "C:/app/batch"
   console_encoding: "cp932"
   timeout_sec: 600
 
 batches:                                  # ← 名前付き定义，只写和既定的差异
-  invoice:
-    exe_path: "C:/app/invoice/InvoiceBatch.exe"
-    working_dir: "C:/app/invoice"
-    log_dir: inv_log_dir                  # 这个 batch 的日志在别处
-  nightly:
-    exe_path: "C:/app/batch/NightlyBatch.exe"
+  batch_b:
+    exe_path: "C:/app/batch_b/BatchB.exe"
+    working_dir: "C:/app/batch_b"
+    log_dir: batch_b_log_dir              # 这个 batch 的日志在别处
+  batch_c:
+    exe_path: "C:/app/batch/BatchC.exe"
     timeout_sec: 3600                     # 只覆盖超时，其余继承 batch:
 
 paths:
@@ -511,27 +515,27 @@ paths:
   processed_dir:  "C:/app/batch/processed"
   output_dir:     "C:/app/batch/out"
   log_dir:        "C:/app/batch/log"
-  inv_input_dir:  "C:/app/invoice/in"     # invoice batch 的文件夹（另一套）
-  inv_output_dir: "C:/app/invoice/out"
-  inv_log_dir:    "C:/app/invoice/log"
+  batch_b_input_dir:  "C:/app/batch_b/in" # batch_b 的文件夹（另一套）
+  batch_b_output_dir: "C:/app/batch_b/out"
+  batch_b_log_dir:    "C:/app/batch_b/log"
 ```
 
 ```yaml
-# cases/TC004_invoice.yaml
+# cases/TC004_batch_b.yaml
 setup:
-  clean_dirs: [inv_input_dir, inv_output_dir]
+  clean_dirs: [batch_b_input_dir, batch_b_output_dir]
   input_files:
-    - src: "input/INVOICE_20260803.csv"
-      dest_dir: inv_input_dir
+    - src: "input/DATA_B_20260803.csv"
+      dest_dir: batch_b_input_dir
 
 execute:
-  batch: invoice                          # ← 选哪个 batch
-  args: ["--mode", "monthly"]
+  batch: batch_b                          # ← 选哪个 batch
+  args: ["--mode", "mode_b"]
 
 collect:
-  folder_evidence: [inv_input_dir, inv_output_dir]   # ← 截图对象也换成这套文件夹
+  folder_evidence: [batch_b_input_dir, batch_b_output_dir]
   files:
-    - dir: inv_output_dir
+    - dir: batch_b_output_dir
       pattern: "RESULT_*.csv"
       preview: true
 ```
@@ -551,6 +555,44 @@ Excel 里各占一个 sheet）。
 > 什么时候该拆成两份 `settings.yaml` 而不是用 `batches:`？
 > **环境不同就拆**（结合测试环境 vs 本番相当环境，DB 连接不同），用 `--config` 切换；
 > **同环境下的不同 batch 就用 `batches:`**，一次执行出一份 Excel。
+
+### 一个用例先跑前置 batch，再跑主 batch
+
+需要先通过 batch 生成 DB 数据时，把它写在 `setup.batches`。执行顺序由工具固定，
+不依赖 YAML 字段本身的排列顺序：
+
+```text
+清理文件夹 / setup SQL
+  → 投入 input_files
+  → 替换 replace_files
+  → 按列表顺序执行 setup.batches
+  → 执行前文件夹证迹和 DB 快照
+  → execute 中的主 batch
+```
+
+```yaml
+setup:
+  input_files:
+    - src: "input/CASE001.csv"
+      dest_dir: input_dir
+
+  batches:
+    - batch: prepare
+      args: ["--case", "CASE001"]
+    - batch: prepare                    # 同一个 batch 可以重复执行
+      args: ["--case", "CASE002"]
+    - batch: aggregate
+      args: ["--date", "{date}"]
+      expected_exit_code: 0             # 省略时也是 0
+
+execute:
+  batch: main                           # 最后执行的被测主 batch
+  args: ["--date", "{date}"]
+```
+
+`setup.batches` 中的名称来自 `settings.yaml` 的 `batches:`。也支持无参数短写
+`- prepare`。任一前置 batch 超时或退出码与 `expected_exit_code` 不一致时，后续前置
+batch 和主 batch 都不会继续执行；自动执行模式下 `teardown` 仍会照常运行。
 
 ---
 
@@ -633,17 +675,17 @@ run_gui.bat
 ### 追加用例：用模板，不要手写 YAML
 
 ```cmd
-python -m autotest new --id TC010_受注取込_0件            :: 从模板建
-python -m autotest new --id TC011_金額不正 --template error
-python -m autotest copy --from TC001_normal --id TC012_明細100件  :: 复制既有用例
+python -m autotest new --id TC010_input_0                :: 从模板建
+python -m autotest new --id TC011_invalid_value --template error
+python -m autotest copy --from TC001_normal --id TC012_large  :: 复制既有用例
 ```
 
 `new` 会一次建好三样东西，并打印接下来该做什么：
 
 ```
-cases\TC010_受注取込_0件.yaml     ← 用例定义（带注释的填空模板）
-cases\TC010_受注取込_0件\input\   ← 把投入文件放这里
-expected\TC010_受注取込_0件\      ← 期待值放这里
+cases\TC010_input_0.yaml          ← 用例定义（带注释的填空模板）
+cases\TC010_input_0\input\        ← 把投入文件放这里
+expected\TC010_input_0\           ← 期待值放这里
 ```
 
 四种模板（`--template`）：
@@ -684,61 +726,62 @@ run_test.bat --case TC001 --tag 異常系    :: 同时用 = 两者都满足（AN
 tags: [異常系, 環境不備]
 ```
 
-### 按机能分文件夹（文件夹名自动成为 tag）
+### 按分组建立文件夹（文件夹名自动成为 tag）
 
 ```
 cases/
-├─ 受注/                          ← 这个文件夹下的用例自动带 tag「受注」
-│   ├─ TC_ORDER01.yaml
-│   ├─ TC_ORDER01/input/...
-│   └─ TC_ORDER02.yaml
-├─ 請求/                          ← 自动带 tag「請求」
-│   ├─ TC_INV01.yaml
-│   └─ TC_INV01/input/...
-└─ 共通/
+├─ group_a/                       ← 自动带 tag「group_a」
+│   ├─ TC_A01.yaml
+│   ├─ TC_A01/input/...
+│   └─ TC_A02.yaml
+├─ group_b/                       ← 自动带 tag「group_b」
+│   ├─ TC_B01.yaml
+│   └─ TC_B01/input/...
+└─ common/
     └─ TC_COMMON01.yaml
 ```
 
 ```cmd
-run_test.bat --tag 受注           :: 只跑受注机能
-run_test.bat --tag 受注 --tag 請求 :: 两个机能
+run_test.bat --tag group_a                 :: 只跑一个分组
+run_test.bat --tag group_a --tag group_b   :: 跑两个分组
 ```
 
-嵌套也可以，每层都是一个 tag：`cases/受注/取込/TC001.yaml` → `[受注, 取込]`。
+嵌套也可以，每层都是一个 tag：`cases/group_a/subgroup_1/TC001.yaml`
+→ `[group_a, subgroup_1]`。
 YAML 里 `tags:` 声明的标签会追加在后面，两者都能用来筛选。
 
-### 不同机能调不同的 .exe
+### 不同分组调用不同的 .exe
 
 `settings.local.yaml` 里给每个 .exe 定义一个名字：
 
 ```yaml
 batch:                                    # 既定
-  exe_path: "C:/app/order/OrderBatch.exe"
+  exe_path: "C:/app/batch_a/BatchA.exe"
   console_encoding: "cp932"
   timeout_sec: 600
 
 batches:                                  # 只写和既定的差异
-  invoice:
-    exe_path: "C:/app/invoice/InvoiceBatch.exe"
-    working_dir: "C:/app/invoice"
-    log_dir: inv_log_dir
-  nightly:
-    exe_path: "C:/app/batch/NightlyBatch.exe"
+  batch_b:
+    exe_path: "C:/app/batch_b/BatchB.exe"
+    working_dir: "C:/app/batch_b"
+    log_dir: batch_b_log_dir
+  batch_c:
+    exe_path: "C:/app/batch_c/BatchC.exe"
     timeout_sec: 3600
 ```
 
 用例里选：
 
 ```yaml
-# cases/請求/TC_INV01.yaml
+# cases/group_b/TC_B01.yaml
 execute:
-  batch: invoice                          # ← 用哪个 .exe
-  args: ["--mode", "monthly"]
+  batch: batch_b                          # ← 用哪个 .exe
+  args: ["--mode", "mode_b"]
 collect:
-  folder_evidence: [inv_input_dir, inv_output_dir]   # 该机能的文件夹
+  folder_evidence: [batch_b_input_dir, batch_b_output_dir]
 ```
 
-一次执行可以跨机能，各用例用各自的 .exe，最后汇总到同一份 Excel。
+一次执行可以跨分组，各用例用各自的 .exe，最后汇总到同一份 Excel。
 
 打错 ID 或标签会**报配置错误并退出码 2**，不会静默跑 0 件。
 
@@ -967,189 +1010,181 @@ AUTO_TEST_BATCH\
 
 ---
 
-## 10. Excel → Layout TXT 生成工具
+## 10. Excel → Layout TXT / TIF / TAR 生成工具
 
-用于从帐票 Layout 定义 Excel 自动制作 TXT 取入数据。Windows 上双击：
+该工具读取结构定义 Excel，生成测试用 TXT、正面图片、可选背面图片、清单 CSV 和 TAR。
+Windows 上双击：
 
 ```text
 run_layout_txt.bat
 ```
 
-界面选择 Excel、sheet 和输出目录即可。默认列与照片中的定义一致：
+### GUI 操作方法
 
-GUI操作流程：
+1. 在「入力Excel」选择结构定义文件，在「出力先」选择保存目录。
+2. 点击「Excel定義を読込」。
+3. 从下拉框选择 `FORM_ID`。下方会显示该组的项目、生成值、属性和坐标。
+4. 需要修改时，双击表格中的 `出力`、`ELEMENT_ID`、`OCR生成値`、`属性` 或
+   `座標`。
+5. 只想直接生成当前组时，点击「表示中FORM_IDを出力」；全部直接生成时，点击
+   「全FORM_IDを直接出力」。
+6. 需要把不同 `FORM_ID` 或外部图片组合到一个 TAR 时，使用「TAR出力リスト」。
 
-1. 点击「Excel定义を読込」，从下拉框选择一个 `FORM_ID`。画面会显示该FORM的
-   Excel行、LAYOUT_ID、ELEMENT_ID、ITEM_NAME、DATA_TYPE、IME、MAX和自动生成的OCR值。
-2. 双击表格中的 `出力`、`ELEMENT_ID`、`OCR生成値`、`属性`、`座標`可以修改；
-   点击「表示中FORM_IDを出力」只生成当前FORM和画面上启用的项目。
-3. 点击「編集OCR値をExcelへ既定値保存」，会把当前FORM画面里的OCR值写回输入Excel的
-   `OCR_DEFAULT_VALUE` 列。下次读取同一Excel时优先使用保存值，不再重新自动生成该行的值。
-4. 不需要预览修改时，点击「全FORM_IDを直接出力」，按Excel定义一次生成全部FORM。
-
-「生成・ファイル設定」以及Excel路径、列指定、表格显示列会自动保存。也可以点击
-「設定を保存」立即写入配置文件；下次启动源码版或EXE版时自动恢复。Windows默认保存位置：
+当前设置可以通过「設定を保存」立即保存。程序关闭时也会自动保存，Windows 默认位置：
 
 ```text
 %APPDATA%\AUTO_TEST_BATCH\layout_txt_gui.json
 ```
 
-如需固定到其他位置，可设置环境变量 `AUTOTEST_LAYOUT_GUI_CONFIG`。配置使用UTF-8 JSON，
-并以临时文件替换方式写入，避免程序中断留下半个配置文件。
+### TAR 输出列表的操作方法
 
-TXT文件名可以直接写固定名称，也可以使用 `{form_id}`、`{pattern}`、`{seq:02d}`、
-`{source}` 模板。选择单个FORM时可以写成 `TEST_1001`；批量生成时建议保留
-`{form_id}`，避免不同FORM重名。
+1. 在「背面認識値（1項目）」输入背面默认值，初始值是 `1`。这个值只用于背面。
+2. 需要背面时先勾选「背面画像あり」，不需要时保持未勾选。
+3. 添加方式二选一：
+   - 选择一个 `FORM_ID`，点击「表示中FORMを出力リストへ追加」。
+   - 点击「外部の正面画像を追加」，一次选择一张或多张正面图片。
+4. 外部正面图片有背面时，工具先自动寻找“相同基名 + `R` + 相同扩展名”的文件；
+   找不到时显示文件选择窗口。
+5. 输出列表中的以下内容可以双击修改：
+   - 是否打包（`TAR=1/0`）
+   - `FORM_ID`
+   - 文件基名
+   - 背面识别值（只有一个字段）
+   - 关联文件名
+   - CSV 扩展字段（`key=value; key2=value2`）
+6. 已添加的背面可以通过「選択行の背面画像を設定」替换或移除。
+7. 输入最终 TAR 名。需要 CSV 时，再输入 CSV 文件名、文字编码和列定义。
+8. 点击其中一个完成打包：
+   - 「選択画像＋認識TXTをTAR化」
+   - 「選択画像＋一覧CSVをTAR化」
 
-| 用途 | 默认列 | 示例值 |
+正面和背面只通过文件名最后一位区分：
+
+```text
+DATA001F.tif    正面图片
+DATA001F.txt    正面TXT（保持原有FORM_ID生成逻辑）
+DATA001R.tif    背面图片（可选）
+DATA001R.txt    背面TXT（可选，只有一个可编辑字段）
+```
+
+同名 TAR 默认不覆盖；只有勾选「既存ファイルを上書き」后才会替换。外部原图只读，
+不会被修改或删除。
+
+### 最终成果物
+
+#### 方式一：图片 + 识别 TXT
+
+例如指定 TAR 名为 `image_package`：
+
+```text
+image_package.tar
+├─ DATA001F.tif
+├─ DATA001F.txt       # 原有FORM_ID完整内容
+├─ DATA001R.tif       # 选择背面时存在
+├─ DATA001R.txt       # 选择背面时存在，只有一个字段
+├─ DATA002F.png
+└─ DATA002F.txt
+```
+
+正面TXT继续使用原来的FORM_ID生成格式，例如：
+
+```text
+"1001","1","1001","VALUE_A","0","0,0,0,1","1002","VALUE_B","0","0,0,0,2"
+```
+
+只有背面TXT是一个字段，使用所选文字编码，默认内容示例：
+
+```text
+1
+```
+
+可在输出列表中改成其他内容，但仍保持一个字段。
+
+#### 方式二：图片 + 清单 CSV
+
+例如指定 TAR 名为 `image_list_package`、CSV 名为 `file_list.csv`：
+
+```text
+image_list_package.tar
+├─ DATA001F.tif
+├─ DATA001R.tif       # 可选
+├─ DATA002F.png
+└─ file_list.csv
+```
+
+CSV 列使用“显示名=内部键”的形式设置，例如：
+
+```text
+正面文件=front_image_file,背面文件=back_image_file,ID=form_id,背面结果=back_recognition_result,关联文件=related_file,分类=type
+```
+
+对应内容示例：
+
+```csv
+正面文件,背面文件,ID,背面结果,关联文件,分类
+DATA001F.tif,DATA001R.tif,1001,1,REF001.dat,normal
+DATA002F.png,,1002,0,REF002.dat,error
+```
+
+每一行的额外值在输出列表中填写，例如 `type=normal`。勾选
+「CSV梱包にも認識TXTを含める」时，这种 TAR 也会包含正面 TXT；存在背面时，
+同时包含背面 TXT。
+
+可用的标准内部键：
+
+| 内部键 | 内容 |
+|---|---|
+| `front_image_file` | 正面图片文件名 |
+| `back_image_file` | 背面图片文件名；没有时为空 |
+| `front_recognition_file` | 正面 TXT 文件名 |
+| `back_recognition_file` | 背面 TXT 文件名；没有背面时为空 |
+| `form_id` | `FORM_ID` |
+| `back_recognition_result` | 背面单字段识别值；没有背面时为空 |
+| `related_file` | 自定义关联文件名 |
+| `base_name` | 不含 F/R 和扩展名的基名 |
+| 自定义键 | 每行 `key=value` 中填写的值 |
+
+### 直接生成 TXT / TIF / TAR
+
+不使用输出列表时，工具也可以按 `FORM_ID` 直接生成：
+
+- `通常値`：不超过最大长度。
+- `最大桁数ちょうど`：等于最大长度。
+- `最大桁数 + 1`：超过最大长度一位。
+- `同名TIFを生成`：同时生成同基名 TIF。
+- `TARを生成`：把本次 TXT/TIF 放入标准 TAR。
+- `TARだけ残す`：输出目录只保留 TAR。
+
+默认列：
+
+| 用途 | 默认列 | 中性示例 |
 |---|---:|---|
 | FormID | B | `1001` |
-| LayoutID（布局识别） | C | `00001` |
-| ITEM_NAME | H | `傷病名1` / `生年月日` |
-| 数据类型 | I | `文字列` / `日付` / `カレンダー` / `チェックボックス` |
-| IME / 输入限制 | J | `ひらがな` / `数値のみ` / `小数点数値` / `半角カタカナ` / `半角英数` / `全タイプ` |
-| 最大位数 | K | `100` / `NULL` |
-| FieldID | L | `1001` / `1002`（`ELEMENT_ID`） |
+| LayoutID | C | `00001` |
+| ITEM_NAME | H | `項目A` / `項目B` |
+| 数据类型 | I | `文字列` / `日付` / `選択肢` |
+| IME / 输入限制 | J | `ひらがな` / `数値のみ` / `半角英数` |
+| 最大长度 | K | `100` / `NULL` |
+| FieldID | L | `1001` / `1002` |
 
-还可以指定5个非必需列：`入力属性`、`入力規則`、`補足`、`出力例`、`OCR既定値`。默认值为 `auto`，
-存在同名表头时自动读取并追加显示在表格末尾；不存在时不会报错。也可以填写Excel列字母、
-准确表头名，或填写 `none` 禁用。前4列只用于画面确认，不会改变TXT取入格式；
-`OCR既定値` 存在内容时会覆盖程序自动生成的OCR值。
+文件名模板支持 `{form_id}`、`{output_form_id}`、`{pattern}`、`{seq:02d}` 和
+`{source}`。已有同名 TXT/TIF/TAR 时默认报错；明确启用 overwrite 后才覆盖。
 
-保存按钮在没有既定值列时自动追加 `OCR_DEFAULT_VALUE` 列；已有 `OCR_DEFAULT_VALUE`、
-`DEFAULT_VALUE`、`OCR既定値`、`既定値`、`デフォルト値` 或 `默认值` 表头时会直接复用。
-普通Excel行保存一个值。`カレンダー` 展开的46个值保存在同一单元格中，以单元格内换行分隔；
-重新读取时逐项恢复。手动清空的OCR值以 `<EMPTY_OCR>` 保存，用来区别“没有设置既定值”。
-取消勾选「ExcelのOCR既定値を使用」后，既定值列会保留在Excel中，但读取和生成时忽略它，
-改回使用程序自动生成值；重新勾选即可恢复。命令行可用 `--default-value-column none` 禁用。
-
-点击「表示列...」可以分别显示或隐藏表格中的任何一列，选择会保存到上述配置文件。
-每行的「出力」列仍用于决定当前FORM输出哪些项目，双击可单独切换；批量的
-「全項目ON/OFF」按钮已删除。
-
-FormID、LayoutID 和 FieldID 会根据表头自动寻找：FormID 使用 B 列 `FORM_ID`，
-LayoutID 使用 C 列 `LAYOUT_ID`，FieldID 优先使用 L 列 `ELEMENT_ID`。
-**不会拿 `ITEM_NAME` 代替任何 ID**；
-界面里也可以填 Excel 列字母或准确表头名覆盖自动判断。数字 ID 若使用 `00000` 这种 Excel
-显示格式，会保留为 `00001`，不会变成 `1`。
-
-可生成三种数据：
-
-- `通常値`：生成不超过 K 列限制的代表性合法值。
-- `最大桁数ちょうど`：生成长度等于 K 的边界值。
-- `最大桁数 + 1`：生成超过 K 一位的异常测试值。
-
-具体值生成规则：
-
-- 普通 FormID：生成全账票正常数据，所有属性Flag固定为 `0`（正常识别），日期使用
-  `5/8/6/1`（和暦）。
-- `FORM_ID=4001`：默认生成24个独立的正常/异常Pattern，每个Pattern分别输出
-  `TXT + 同名TIF`。属性含义为 `0`（正常识别）、`1`（个数不对）、
-  `2`（识别不可）、`1,2`（1和2混在）。`1,2`使用半角逗号；由于整个值有双引号，
-  因此仍是一个属性字段。
-- `日付` / `日付 (From)` / `日付 (To)` 始终只生成一个日期，4001中按顺序循环3种形式：
-  `5/8/6/1`（和暦）、`/2026/6/1`（西暦）、`5/2026/6/1`（元号+4位西暦）。
-  即使GUI选择「複数」，这3种数据类型也不会出现 `|`。
-- `カレンダー`：Excel中只需定义一行，读取后GUI自动显示46行相同项目，TXT也输出46个
-  项目数据块。46行保留同一个 `ELEMENT_ID`，以FORM内坐标末尾1～46区分；GUI的Excel行
-  显示为 `9 (1/46)`～`9 (46/46)`，每一行都可以独立开关或修改OCR值。每个项目允许使用
-  单日期，或使用 `5/8/6/1|5/8/6/2` 这种 `|` 分隔的多个日期；4001中循环3种单日期
-  加一种复数日期，共4种形式。
-- `選択肢`：按项目依次循环生成 `1`、`2`、`1.2`。
-- `チェックボックス`：只能生成 `0` 或 `1`，按项目交替生成。
-- `文字列`：不添加分隔符，优先使用该行 `ITEM_NAME`，并按 K 列最大长度处理。
-- `氏名`：根据 `ELEMENT_IME_NAME` 生成；`数値のみ` 为纯数字，
-  `小数点数値` 使用 `1.0` 形式，其他IME也遵守各自输入限制。
-- `座標情報`：每个FORM分别从 `0,0,0,1` 开始，只对最后一位连续编号；下一个FORM
-  重新从1开始。即使错误Pattern增加或复制项目，也会继续分配末尾编号，保证FORM内不重复。
-
-I 列为 `文字列` 时，`通常値` 优先使用该行的 `ITEM_NAME` 作为 OCR 测试值，并按 K 列
-最大长度截断；`最大桁数` 和 `最大桁数 + 1` 模式则以 `ITEM_NAME` 为种子补足目标长度。
-日期、checkbox、选择项等非文字类型仍生成对应格式的数据。
-
-普通 FormID 默认输出一组同名文件，例如 `1001.txt + 1001.tif`。全网罗 FormID 4001
-默认输出24组，例如 `4001_01_normal.txt + 4001_01_normal.tif`、
-`4001_03_count_missing.txt + 4001_03_count_missing.tif`。TXT使用 `cp932 + CRLF`；
-TIF为A4相当、200 DPI，显示该Pattern实际使用的FormID、ELEMENT_ID、ITEM_NAME、OCR值和属性，
-项目过多时会生成多页TIF。
-勾选「TARを生成」会把本次的TXT/TIF一起放入标准 `.tar`；勾选「TARだけ残す」时，
-输出目录只留下TAR，不留下散装TXT/TIF。TAR文件名支持 `{source}` 和 `{form_id}`；
-选择全部FORM时 `{form_id}` 会变成 `all`。
-一个账票的全部数据只占一行，
-每个值都用双引号包裹并用逗号分隔，顺序为：
-
-```text
-"FormID","対象有無","FieldID","OCR文字識別結果","属性フラグ","座標情報",...
-```
-
-例如，普通账票 `1001.txt`：
-
-```text
-"1001","1","1001","傷病名1","0","0,0,0,1","1002","1","0","0,0,0,2"
-```
-
-全网罗账票的正常Pattern `4001_01_normal.txt`：
-
-```text
-"4001","1","2001","5/8/6/1","0","0,0,0,1","2002","/2026/6/1","0","0,0,0,2","2003","5/2026/6/1","0","0,0,0,3","2004","5/8/6/1|5/8/6/2","0","0,0,0,4"
-```
-
-4001的24个Pattern如下：
-
-| 分类 | Pattern | 实际生成内容 |
-|---|---|---|
-| 正常 | `normal` | 所有定义Field、属性0 |
-| 个数不对 | `count_zero` / `count_missing` / `count_extra` / `count_duplicate_all` | 0件、少1件、多1件、全体重复；属性1 |
-| ELEMENT_ID | `element_id_unknown` / `element_id_duplicate` / `element_id_empty` / `element_order_reverse` | 定义外、重复、空、顺序反转 |
-| 属性 | `unrecognizable` / `attribute_mixed_1_2` / `attribute_1_without_count_error` / `attribute_invalid` | 属性2、`1,2`混在、件数正常但属性1、未定义属性9 |
-| OCR值 | `ocr_empty` / `ocr_over_max` / `ocr_invalid_date` / `ocr_invalid_selection` / `ocr_invalid_ime` | 空值、最大位数超限、错误日期、非数字选择值/错误分隔、IME限制外字符 |
-| 坐标 | `coordinates_empty` / `coordinates_invalid` | 空坐标、非数字/负值坐标 |
-| 账票头 | `target_absent` / `target_empty` / `form_id_mismatch` / `form_id_empty` | 对象外、对象有无为空、FormID不一致、FormID为空 |
-
-其中“个数不对”不只是把属性改成1：TXT中的Field数据块数量也会真的减少、增加或重复。
-`ELEMENT_ID`不匹配则使用独立Pattern，便于明确判断系统报错原因。
-
-文件名可通过模板指定。支持 `{form_id}`、`{output_form_id}`、`{pattern}`、`{seq:02d}`、
-`{source}`。例如 `CASE_{form_id}_{seq:02d}_{pattern}`。模板没有写 `{pattern}` 或 `{seq}`
-但需要输出多个Pattern时，工具会自动追加序号和Pattern名，防止覆盖。TXT和TIF始终使用相同basename。
-
-默认采用最适合直接取入的“一账票一行”格式；可先选 `ラベル付き（確認用）` 核对内容。
-如果实际接口的属性 flag、坐标有固定格式，
-命令行可以覆盖这些默认值：
+命令行中性示例：
 
 ```cmd
 set PYTHONPATH=src
 python -m autotest.layout_txt layout.xlsx ^
-    --sheet 帳票対象整理 ^
+    --sheet LayoutDefinition ^
     --out-dir output\layout_txt ^
     --form-column B --layout-column C --field-column L ^
-    --date-mode coverage --coverage-form-id 4001 ^
-    --error-patterns all ^
-    --filename-template "CASE_{form_id}_{seq:02d}_{pattern}" ^
-    --profile normal --encoding cp932 ^
-    --attribute-flag 0 --coordinates auto
-```
-
-只输出FORM_ID 1001、指定TXT名并且只保留TAR：
-
-```cmd
-set PYTHONPATH=src
-python -m autotest.layout_txt layout.xlsx ^
-    --sheet 帳票対象整理 ^
-    --out-dir output\layout_txt ^
     --form-id 1001 ^
     --error-patterns none ^
-    --filename-template "TEST_1001" ^
-    --tar-only --tar-name "FORM_1001_DATA"
+    --filename-template "TEST_{form_id}" ^
+    --tar-only --tar-name "DATA_PACKAGE"
 ```
 
-多个FORM可以重复指定或用逗号连接：`--form-id 1001 --form-id 1003`、
-`--form-id 1001,1003`。省略 `--form-id` 就是直接输出全部。
-
-已有同名 TXT/TIF/TAR 时默认报错并保持原文件；明确传 `--overwrite` 才覆盖。
-不需要TIF时使用 `--no-tif`；只生成主要8种异常时使用 `--error-patterns core`；
-不生成异常Pattern时使用 `--error-patterns none`。运行 `python -m autotest.layout_txt --help`
-可查看单文件输出、TSV、UTF-8、自定义 I/J/K 列等选项。
+运行 `python -m autotest.layout_txt --help` 可查看单文件输出、TSV、UTF-8、自定义列等选项。
 
 ### 构建Windows EXE
 
