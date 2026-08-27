@@ -265,7 +265,9 @@ class AutotestGui(object):
         self.tag_box["values"] = ["（すべて）"] + tags
         if self.tag_var.get() not in self.tag_box["values"]:
             self.tag_var.set("（すべて）")
-        self.checked = {c.case_id for c in self.cases}
+        # 初回表示と「再読込」の後は未選択から始める。再読込は最新の定義を
+        # 読み直す操作であり、全ケースを暗黙に実行対象へ加えない。
+        self.checked = set()
         self._render_rows()
 
     @staticmethod

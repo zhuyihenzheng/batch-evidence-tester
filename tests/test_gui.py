@@ -6,6 +6,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -21,6 +22,7 @@ except ImportError:
     sys.modules["tkinter"] = tkinter_stub
 
 from autotest import gui  # noqa: E402
+from autotest.layout_tar import next_numbered_base_name  # noqa: E402
 
 
 class GuiSubprocessEncodingCase(unittest.TestCase):
@@ -35,6 +37,56 @@ class GuiSubprocessEncodingCase(unittest.TestCase):
 
         self.assertEqual(holder.queue.get(), ("line", text + "\n"))
         self.assertEqual(holder.queue.get(), ("exit", 0))
+
+
+class GuiCaseSelectionCase(unittest.TestCase):
+    def test_refresh_cases_leaves_every_case_unchecked(self):
+        """初回表示・再読込ではケースを自動選択しないこと。"""
+        cases = [
+            types.SimpleNamespace(case_id="TC001", tags=["normal"]),
+            types.SimpleNamespace(case_id="TC002", tags=["error"]),
+        ]
+        settings = types.SimpleNamespace(database={})
+        holder = types.SimpleNamespace(
+            config_path=ROOT / "config" / "settings.yaml",
+            project_root=ROOT,
+            cases_dir=ROOT / "cases",
+            settings=None,
+            config_label=mock.Mock(),
+            tag_box={"values": []},
+            tag_var=mock.Mock(),
+            checked={"TC001", "TC002"},
+            db_state="unknown",
+            db_actual="",
+        )
+        holder.tag_var.get.return_value = "（すべて）"
+        holder._db_signature = gui.AutotestGui._db_signature
+        holder._render_db_bar = mock.Mock()
+        holder._render_rows = mock.Mock()
+
+        with mock.patch.object(gui, "load_settings", return_value=settings), \
+                mock.patch.object(gui, "load_cases", return_value=cases):
+            gui.AutotestGui.refresh_cases(holder)
+
+        self.assertEqual(holder.checked, set())
+        holder._render_rows.assert_called_once_with()
+
+
+class LayoutPackageFilenameCase(unittest.TestCase):
+    def test_current_form_base_name_uses_three_digit_sequence(self):
+        """同じ基礎名のFORMを追加すると _001_、_002_、_003_ と採番する。"""
+        used = []
+        names = []
+        for _sequence in range(3):
+            base = next_numbered_base_name("BASE_NAME_", used)
+            names.append(base + "F.TIF")
+            used.append(base)
+
+        self.assertEqual(names, [
+            "BASE_NAME_001_F.TIF",
+            "BASE_NAME_002_F.TIF",
+            "BASE_NAME_003_F.TIF",
+        ])
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ from .layout_tar import (
     format_extra_fields,
     matching_back_image,
     matching_recognition_file,
+    next_numbered_base_name,
     parse_extra_fields,
     parse_manifest_columns,
 )
@@ -956,8 +957,15 @@ class LayoutTxtGui(object):
 
     # ------------------------------------------------------------------
     # 複数FORM / 外部画像を蓄積するTAR出力リスト
-    def _unique_package_base(self, preferred: str) -> str:
+    def _unique_package_base(self, preferred: str, numbered: bool = False) -> str:
         raw = str(preferred or "image").strip() or "image"
+        used_bases = set(
+            item.safe_base_name.lower() for item in self.package_items.values())
+        if numbered:
+            # 同じFORM_IDを何度追加しても、基礎名_001_F、_002_F…の形で
+            # 一意になるようにする。末尾の _ はここで1つに揃える。
+            return next_numbered_base_name(raw, used_bases)
+
         used = set(item.front_image_name.lower() for item in self.package_items.values())
         candidate = raw
         sequence = 2
@@ -1089,7 +1097,8 @@ class LayoutTxtGui(object):
                 self.filename_template_var.get().strip(), form_id,
                 Path(self.excel_var.get().strip()))
             base = self._unique_package_base(
-                base_name_from_front(Path(configured_stem + ".txt")))
+                base_name_from_front(Path(configured_stem + ".txt")),
+                numbered=True)
             item = PackageItem(
                 base_name=base,
                 form_id=form_id,

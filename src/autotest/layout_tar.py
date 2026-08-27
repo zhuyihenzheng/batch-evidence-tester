@@ -51,6 +51,19 @@ def base_name_from_front(path: Path) -> str:
     return stem[:-1] if stem.upper().endswith("F") and len(stem) > 1 else stem
 
 
+def next_numbered_base_name(preferred: str, used_base_names: Sequence[str]) -> str:
+    """`基礎名_001_` 形式の未使用名を返す。"""
+    root = _safe_name(preferred, "image").rstrip("_") or "image"
+    # PackageItem.safe_base_name の180文字制限後も採番部分を残す。
+    root = root[:175]
+    used = set(str(value or "").lower() for value in used_base_names)
+    for sequence in range(1, 1000):
+        candidate = "%s_%03d_" % (root, sequence)
+        if candidate.lower() not in used:
+            return candidate
+    raise LayoutTarError("同じ基礎名の連番が999件を超えています: %s" % root)
+
+
 def _case_insensitive_sibling(path: Path, wanted_name: str) -> Optional[Path]:
     parent = Path(path).parent
     direct = parent / wanted_name
