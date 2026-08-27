@@ -593,6 +593,8 @@ execute:
 `setup.batches` 中的名称来自 `settings.yaml` 的 `batches:`。也支持无参数短写
 `- prepare`。任一前置 batch 超时或退出码与 `expected_exit_code` 不一致时，后续前置
 batch 和主 batch 都不会继续执行；自动执行模式下 `teardown` 仍会照常运行。
+前置 batch 的命令、stdout、stderr 和退出码会写入当次运行目录的 `run.log`；从 GUI
+执行时，也会同步显示在下方的运行日志中。
 
 ---
 

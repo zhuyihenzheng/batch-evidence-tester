@@ -377,6 +377,9 @@ class AutotestGui(object):
 
     def _common_options(self) -> List[str]:
         options = self._config_only()
+        # GUI 下部の実行ログにも CaseRunner の工程（前置 batch のコマンド、
+        # stdout、stderr を含む）を逐次表示する。
+        options.append("--verbose")
         if self.offline_var.get():
             options.append("--offline")
         return options

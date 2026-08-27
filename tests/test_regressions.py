@@ -1884,6 +1884,38 @@ class TestSetupBatches(TmpDirCase):
         self.assertEqual(calls, ["prepare"], "失敗後に次の前置 batch を実行している")
         self.assertIn("prepare failed", str(ctx.exception))
 
+    def test_command_stdout_and_stderr_are_written_to_progress_log(self):
+        from autotest import orchestrator as orch
+        from autotest.models import ExecutionInfo
+
+        def fake_run(settings, args, dry_run=False, batch_name=None, on_progress=None):
+            info = ExecutionInfo(command="prepare.exe --case B2")
+            info.exit_code = 0
+            info.stdout = "prepared one\nprepared two\n"
+            info.stderr = "warning only\n"
+            return info
+
+        messages = []
+        runner = orch.CaseRunner(self._settings(), self.tmp / "out")
+        runner._progress = messages.append
+        saved_run = orch.run_batch
+        try:
+            orch.run_batch = fake_run
+            runner._run_setup_batches([
+                {"batch": "prepare", "args": ["--case", "B2"]},
+            ])
+        finally:
+            orch.run_batch = saved_run
+
+        self.assertEqual(messages, [
+            "前置batch実行 1/1（prepare）",
+            "前置batch 1/1（prepare） コマンド: prepare.exe --case B2",
+            "前置batch 1/1（prepare） stdout: prepared one",
+            "前置batch 1/1（prepare） stdout: prepared two",
+            "前置batch 1/1（prepare） stderr: warning only",
+            "前置batch完了 1/1（prepare、終了コード 0、0.0 秒）",
+        ])
+
     def test_preflight_checks_every_setup_batch_before_changes(self):
         from autotest.config import TestCase
         from autotest.orchestrator import preflight_case

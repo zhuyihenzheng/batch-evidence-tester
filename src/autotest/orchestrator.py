@@ -753,6 +753,15 @@ class CaseRunner:
                 batch_name=batch_name,
                 on_progress=self._progress,
             )
+            # 前置 batch は主 batch の ExecutionInfo には入らないため、ここで
+            # コマンドと標準出力を工程ログへ明示的に流す。失敗時も判定より先に
+            # 記録し、run.log と GUI の実行ログから原因を追えるようにする。
+            prefix = "前置batch %d/%d（%s）" % (i, total, label)
+            if info.command:
+                self._step("%s コマンド: %s" % (prefix, info.command))
+            for stream_name, output in (("stdout", info.stdout), ("stderr", info.stderr)):
+                for line in (output or "").splitlines():
+                    self._step("%s %s: %s" % (prefix, stream_name, line))
             if not self.dry_run and info.exit_code != expected_exit_code:
                 if info.timed_out:
                     reason = "タイムアウトしました"
