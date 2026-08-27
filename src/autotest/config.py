@@ -280,7 +280,8 @@ CASE_TOP_KEYS = {
 #            autotest manual --phase before / after で証跡だけ採る
 CASE_MODES = ("auto", "manual")
 SETUP_KEYS = {
-    "clean_dirs", "remove_dirs", "sql", "input_files", "replace_files", "batches", "db_lock",
+    "clean_dirs", "remove_dirs", "sql", "input_files", "replace_files", "batches",
+    "sql_after_batches", "db_lock",
 }
 SETUP_BATCH_KEYS = {"batch", "args", "expected_exit_code"}
 COLLECT_KEYS = {"files", "folder_evidence"}
@@ -483,6 +484,10 @@ def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> Lis
     # リストや辞書を渡されても orchestrator は文字列として扱うため、先に弾く
     if "db_lock" in setup and not isinstance(setup["db_lock"], str):
         problems.append("setup.db_lock は SQL 文字列で指定してください（指定値: %r）" % setup["db_lock"])
+
+    for key in ("sql", "sql_after_batches"):
+        if key in setup and not isinstance(setup[key], list):
+            problems.append("setup.%s はリストで指定してください" % key)
 
     for key in ("clean_dirs", "remove_dirs"):
         for i, spec in enumerate(setup.get(key) or []):

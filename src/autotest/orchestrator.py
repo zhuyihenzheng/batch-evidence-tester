@@ -147,24 +147,30 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
             )
 
     # --- setup の資材 -------------------------------------------------------
-    for sql_spec in (case.setup or {}).get("sql", []):
-        if isinstance(sql_spec, dict) and "file" in sql_spec:
-            sql_path = settings.project_root / sql_spec["file"]
-            if not sql_path.exists():
-                problems.append("セットアップ SQL がありません: %s" % sql_path)
+    for sql_key in ("sql", "sql_after_batches"):
+        for sql_spec in (case.setup or {}).get(sql_key, []):
+            if isinstance(sql_spec, dict) and "file" in sql_spec:
+                sql_path = settings.project_root / sql_spec["file"]
+                if not sql_path.exists():
+                    problems.append("setup.%s の SQL がありません: %s" % (sql_key, sql_path))
 
     for spec in (case.setup or {}).get("input_files", []):
         src_raw = spec.get("src")
         if not src_raw:
             problems.append("setup.input_files に src がありません: %s" % spec)
             continue
-        src = Path(src_raw)
-        if not src.is_absolute():
-            src = case.dir / src
-        if not src.exists():
-            problems.append("投入元がありません: %s" % src)
-        elif src.is_dir() and spec.get("corrupt"):
-            problems.append("フォルダの投入には corrupt を指定できません: %s" % src)
+        try:
+            sources = fsops.resolve_input_sources(case.dir, src_raw)
+        except ConfigError as exc:
+            problems.append(str(exc))
+            sources = []
+        if spec.get("rename") and len(sources) > 1:
+            problems.append(
+                "通配符で複数の投入元に一致した場合は rename を指定できません: %s"
+                % src_raw)
+        for src in sources:
+            if src.is_dir() and spec.get("corrupt"):
+                problems.append("フォルダの投入には corrupt を指定できません: %s" % src)
         dest_alias = spec.get("dest_dir", "input_dir")
         if dest_alias not in aliases:
             problems.append("input_files.dest_dir の論理名が paths に未定義です: %s" % dest_alias)
@@ -712,18 +718,7 @@ class CaseRunner:
         for alias in setup.get("remove_dirs", []):
             fsops.remove_dir(self.settings, alias, dry_run=self.dry_run)
 
-        for sql_spec in setup.get("sql", []):
-            if isinstance(sql_spec, str):
-                sql_text = sql_spec
-            elif "file" in sql_spec:
-                sql_path = self.settings.project_root / sql_spec["file"]
-                if not sql_path.exists():
-                    raise ConfigError(f"セットアップ SQL が見つかりません: {sql_path}")
-                sql_text = sql_path.read_text(encoding="utf-8-sig")
-            else:
-                sql_text = sql_spec.get("inline", "")
-            if sql_text.strip() and not self.dry_run:
-                client.execute_script(sql_text)
+        self._run_setup_sql(setup.get("sql", []), client, "setup.sql")
 
         fsops.put_input_files(self.settings, case.dir, setup.get("input_files", []), dry_run=self.dry_run)
 
@@ -738,6 +733,25 @@ class CaseRunner:
         # YAML の mapping 順には依存させない。前置 batch は必ず、投入ファイルと
         # ケース用設定の配置がすべて終わった後、主 batch の実行前に動かす。
         self._run_setup_batches(setup.get("batches") or [])
+
+        # 前置 batch が作ったデータを主 batch 実行前に更新する用途。
+        self._run_setup_sql(
+            setup.get("sql_after_batches", []), client, "setup.sql_after_batches")
+
+    def _run_setup_sql(self, specs, client: db_mod.DbClient, label: str) -> None:
+        """setup SQL を定義順に実行する。"""
+        for sql_spec in specs:
+            if isinstance(sql_spec, str):
+                sql_text = sql_spec
+            elif "file" in sql_spec:
+                sql_path = self.settings.project_root / sql_spec["file"]
+                if not sql_path.exists():
+                    raise ConfigError("%s の SQL が見つかりません: %s" % (label, sql_path))
+                sql_text = sql_path.read_text(encoding="utf-8-sig")
+            else:
+                sql_text = sql_spec.get("inline", "")
+            if sql_text.strip() and not self.dry_run:
+                client.execute_script(sql_text)
 
     def _run_setup_batches(self, specs) -> None:
         """前置 batch を YAML のリスト順に同期実行する。"""

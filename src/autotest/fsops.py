@@ -7,6 +7,7 @@
 """
 
 import fnmatch
+import glob
 import hashlib
 import os
 import shutil
@@ -17,6 +18,24 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import ConfigError, Settings
+
+
+def resolve_input_sources(case_dir: Path, src_value: str) -> List[Path]:
+    """投入元を解決する。`data*.tar` などの glob にも対応する。"""
+    raw = str(src_value or "").strip()
+    source = Path(raw)
+    if not source.is_absolute():
+        source = Path(case_dir) / source
+
+    if glob.has_magic(str(source)):
+        matches = [Path(value) for value in glob.glob(str(source), recursive=True)]
+        matches = sorted((path for path in matches if path.exists()), key=lambda p: str(p).lower())
+    else:
+        matches = [source] if source.exists() else []
+
+    if not matches:
+        raise ConfigError("投入元が見つかりません: %s" % source)
+    return matches
 
 
 def _force_remove(func, path, exc):
@@ -330,7 +349,7 @@ def put_input_files(
 ) -> List[Path]:
     """テストデータを投入フォルダへコピーする。コピー先のパス一覧を返す。
 
-    src にはファイルとフォルダの両方を指定できる。フォルダの場合は
+    src にはファイル、フォルダ、glob 通配符を指定できる。フォルダの場合は
     ``dest_dir / (rename または src のフォルダ名)`` へ、配下の構造を保ったまま
     コピーする。コピー先が既にあれば、ファイル投入の上書き動作と同じく
     同名ファイルを上書きし、それ以外の既存ファイルは残す。
@@ -341,59 +360,62 @@ def put_input_files(
         if not src_raw:
             raise ConfigError(f"setup.input_files に src がありません: {spec}")
 
-        src = Path(src_raw)
-        if not src.is_absolute():
-            src = case_dir / src
-        if not src.exists():
-            raise ConfigError(f"投入元が見つかりません: {src}")
-
         dest_dir = settings.resolve_dir(spec.get("dest_dir", "input_dir"))
-        # 投入時のリネームにも {date} を使えるようにする
-        dest_name = settings.expand(spec.get("rename")) if spec.get("rename") else src.name
-        dest = dest_dir / dest_name
-
-        corrupt = spec.get("corrupt")
-        if corrupt and src.is_dir():
-            # dry-run でも設定不備は見逃さない。実行時だけ失敗すると、事前確認の
-            # 役割を果たせないため、ファイルシステムを触る前に判定する。
+        sources = resolve_input_sources(case_dir, src_raw)
+        rename = spec.get("rename")
+        if rename and len(sources) > 1:
             raise ConfigError(
-                "フォルダの投入には corrupt を指定できません: %s" % src)
+                "通配符で複数の投入元に一致した場合は rename を指定できません: %s"
+                % src_raw)
 
-        if not dry_run:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            if corrupt:
-                # 壊れたファイルは正常な資材から生成する（意図が定義に残る）
-                if not isinstance(corrupt, dict):
-                    corrupt = {"mode": str(corrupt)}
-                dest.write_bytes(corrupt_bytes(src.read_bytes(), corrupt))
-            elif src.is_dir():
-                if dest.exists() and not dest.is_dir():
-                    raise ConfigError(
-                        "投入先に同名のファイルがあるため、フォルダをコピーできません: %s"
-                        % dest)
-                # shutil.copytree(..., dirs_exist_ok=True) は Python 3.8 以降。
-                # 対象環境の Python 3.6 でも同じマージ動作になるよう明示的に辿る。
-                for root, dirs, files in os.walk(str(src)):
-                    root_path = Path(root)
-                    relative = root_path.relative_to(src)
-                    target_root = dest / relative
-                    target_root.mkdir(parents=True, exist_ok=True)
-                    for dirname in dirs:
-                        (target_root / dirname).mkdir(parents=True, exist_ok=True)
-                    for filename in files:
-                        target = target_root / filename
-                        if target.exists() and target.is_dir():
-                            raise ConfigError(
-                                "投入先に同名のフォルダがあるため、ファイルをコピーできません: %s"
-                                % target)
-                        shutil.copy2(root_path / filename, target)
-            else:
-                if dest.exists() and dest.is_dir():
-                    raise ConfigError(
-                        "投入先に同名のフォルダがあるため、ファイルをコピーできません: %s"
-                        % dest)
-                shutil.copy2(src, dest)
-        placed.append(dest)
+        for src in sources:
+            # 投入時のリネームにも {date} を使えるようにする
+            dest_name = settings.expand(rename) if rename else src.name
+            dest = dest_dir / dest_name
+
+            corrupt = spec.get("corrupt")
+            if corrupt and src.is_dir():
+                # dry-run でも設定不備は見逃さない。実行時だけ失敗すると、事前確認の
+                # 役割を果たせないため、ファイルシステムを触る前に判定する。
+                raise ConfigError(
+                    "フォルダの投入には corrupt を指定できません: %s" % src)
+
+            if not dry_run:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                if corrupt:
+                    # 壊れたファイルは正常な資材から生成する（意図が定義に残る）
+                    corrupt_spec = corrupt
+                    if not isinstance(corrupt_spec, dict):
+                        corrupt_spec = {"mode": str(corrupt_spec)}
+                    dest.write_bytes(corrupt_bytes(src.read_bytes(), corrupt_spec))
+                elif src.is_dir():
+                    if dest.exists() and not dest.is_dir():
+                        raise ConfigError(
+                            "投入先に同名のファイルがあるため、フォルダをコピーできません: %s"
+                            % dest)
+                    # shutil.copytree(..., dirs_exist_ok=True) は Python 3.8 以降。
+                    # 対象環境の Python 3.6 でも同じマージ動作になるよう明示的に辿る。
+                    for root, dirs, files in os.walk(str(src)):
+                        root_path = Path(root)
+                        relative = root_path.relative_to(src)
+                        target_root = dest / relative
+                        target_root.mkdir(parents=True, exist_ok=True)
+                        for dirname in dirs:
+                            (target_root / dirname).mkdir(parents=True, exist_ok=True)
+                        for filename in files:
+                            target = target_root / filename
+                            if target.exists() and target.is_dir():
+                                raise ConfigError(
+                                    "投入先に同名のフォルダがあるため、ファイルをコピーできません: %s"
+                                    % target)
+                            shutil.copy2(root_path / filename, target)
+                else:
+                    if dest.exists() and dest.is_dir():
+                        raise ConfigError(
+                            "投入先に同名のフォルダがあるため、ファイルをコピーできません: %s"
+                            % dest)
+                    shutil.copy2(src, dest)
+            placed.append(dest)
     return placed
 
 

@@ -1842,7 +1842,7 @@ class TestSetupBatches(TmpDirCase):
 
         class FakeClient:
             def execute_script(self, sql):
-                events.append("sql")
+                events.append(sql)
 
         def fake_put(*args, **kwargs):
             events.append("input_files")
@@ -1860,7 +1860,7 @@ class TestSetupBatches(TmpDirCase):
         case = TestCase(
             case_id="T", name="T", source=self.tmp / "T.yaml",
             setup={
-                "sql": ["SELECT 1"],
+                "sql": ["DELETE FROM T_WORK"],
                 "input_files": [{"src": "input.csv", "dest_dir": "input_dir"}],
                 "replace_files": [{"src": "case.config", "dest_dir": "input_dir"}],
                 # 同じ batch を複数回実行でき、記載順を保持する。
@@ -1868,6 +1868,7 @@ class TestSetupBatches(TmpDirCase):
                     {"batch": "prepare", "args": ["first"]},
                     {"batch": "prepare", "args": ["second"]},
                 ],
+                "sql_after_batches": ["UPDATE T_WORK SET READY = 1"],
             })
 
         saved_put = fsops.put_input_files
@@ -1884,9 +1885,26 @@ class TestSetupBatches(TmpDirCase):
             orch.run_batch = saved_run
 
         self.assertEqual(events, [
-            "sql", "input_files", "replace_files",
+            "DELETE FROM T_WORK", "input_files", "replace_files",
             "batch:prepare:first", "batch:prepare:second",
+            "UPDATE T_WORK SET READY = 1",
         ])
+
+    def test_preflight_accepts_input_file_glob(self):
+        from autotest.config import TestCase
+        from autotest.orchestrator import preflight_case
+
+        source_dir = self.tmp / "cases" / "T" / "input"
+        source_dir.mkdir(parents=True)
+        (source_dir / "data001.tar").write_bytes(b"one")
+        (source_dir / "data002.tar").write_bytes(b"two")
+        case = TestCase(
+            case_id="T", name="T", source=self.tmp / "cases" / "T.yaml",
+            setup={"input_files": [{
+                "src": "input/data*.tar", "dest_dir": "input_dir",
+            }]})
+
+        self.assertEqual(preflight_case(self._settings(), case), [])
 
     def test_unexpected_setup_batch_exit_code_stops_setup(self):
         from autotest import orchestrator as orch
@@ -1991,8 +2009,16 @@ class TestCaseSchemaValidation(TmpDirCase):
             "  input_files:\n    - {src: input.csv, dest_dir: input_dir}\n"
             "  batches:\n"
             "    - {batch: prepare, args: ['--case', B2]}\n"
-            "    - prepare\n")
+            "    - prepare\n"
+            "  sql_after_batches:\n"
+            "    - UPDATE T_WORK SET READY = 1\n")
         self.assertEqual(len(got[0].setup["batches"]), 2)
+        self.assertEqual(len(got[0].setup["sql_after_batches"]), 1)
+
+    def test_sql_after_batches_must_be_a_list(self):
+        self._expect_error(
+            "id: B5\nname: B5\nsetup:\n  sql_after_batches: UPDATE T SET A = 1\n",
+            "setup.sql_after_batches はリスト")
 
     def test_setup_batches_args_as_string_is_rejected(self):
         self._expect_error(
@@ -2199,6 +2225,54 @@ class TestCorruptFileGeneration(TmpDirCase):
 
         self.assertEqual(source.read_bytes(), original, "元の資材を壊してはいけない")
         self.assertEqual(self._zip_status((dest_dir / "DATA.zip").read_bytes()), "broken")
+
+    def test_put_input_files_supports_glob_patterns(self):
+        """data*.tar に一致する複数ファイルを元の名前で投入する。"""
+        case_dir = self.tmp / "case"
+        source_dir = case_dir / "input"
+        source_dir.mkdir(parents=True)
+        (source_dir / "data001.tar").write_bytes(b"one")
+        (source_dir / "data002.tar").write_bytes(b"two")
+        (source_dir / "other.tar").write_bytes(b"skip")
+
+        dest_dir = self.tmp / "in"
+        settings = self.write_settings({"input_dir": str(dest_dir)})
+        placed = fsops.put_input_files(settings, case_dir, [
+            {"src": "input/data*.tar", "dest_dir": "input_dir"},
+        ])
+
+        self.assertEqual([path.name for path in placed], ["data001.tar", "data002.tar"])
+        self.assertEqual((dest_dir / "data001.tar").read_bytes(), b"one")
+        self.assertEqual((dest_dir / "data002.tar").read_bytes(), b"two")
+        self.assertFalse((dest_dir / "other.tar").exists())
+
+    def test_put_input_files_glob_requires_at_least_one_match(self):
+        case_dir = self.tmp / "case"
+        (case_dir / "input").mkdir(parents=True)
+        settings = self.write_settings({"input_dir": str(self.tmp / "in")})
+
+        with self.assertRaises(ConfigError) as ctx:
+            fsops.put_input_files(settings, case_dir, [
+                {"src": "input/data*.tar", "dest_dir": "input_dir"},
+            ])
+
+        self.assertIn("投入元が見つかりません", str(ctx.exception))
+
+    def test_put_input_files_glob_rejects_rename_for_multiple_matches(self):
+        case_dir = self.tmp / "case"
+        source_dir = case_dir / "input"
+        source_dir.mkdir(parents=True)
+        (source_dir / "data001.tar").write_bytes(b"one")
+        (source_dir / "data002.tar").write_bytes(b"two")
+        settings = self.write_settings({"input_dir": str(self.tmp / "in")})
+
+        with self.assertRaises(ConfigError) as ctx:
+            fsops.put_input_files(settings, case_dir, [
+                {"src": "input/data*.tar", "dest_dir": "input_dir",
+                 "rename": "data.tar"},
+            ])
+
+        self.assertIn("rename", str(ctx.exception))
 
     def test_shorthand_string_form(self):
         case_dir = self.tmp / "case"

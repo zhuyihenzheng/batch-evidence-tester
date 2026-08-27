@@ -284,7 +284,7 @@ setup:                                    # ① 前处理
   sql:
     - file: sql/TC001_setup.sql           # 支持 GO 分隔；也可写 inline
   input_files:
-    - src: "input/DATA_20260803.csv"      # 相对 cases\<id>\；也可指定文件夹
+    - src: "input/DATA_20260803.csv"      # 相对 cases\<id>\；也可指定文件夹或 glob
       dest_dir: input_dir
   batches:                                # 可选：文件投入完成后执行的前置 batch
     - batch: prepare                      # settings.batches.prepare
@@ -478,6 +478,19 @@ setup:
 `dest_dir`；`rename` 可用于修改复制后的文件夹名。目标文件夹已存在时会合并，
 同名文件覆盖，目标中其他既有文件保留。`corrupt` 仅适用于文件，不能用于文件夹。
 
+`src` 也支持 glob 通配符（不是正则表达式），例如固定前缀的 TAR：
+
+```yaml
+setup:
+  input_files:
+    - src: "input/data*.tar"
+      dest_dir: input_dir
+```
+
+匹配到的文件会按文件名顺序全部投入，并保持各自的原文件名。一个文件都没有匹配到时，
+`validate` 和执行都会按配置错误处理。匹配到多个文件时不能使用 `rename`，以免多个文件
+静默覆盖到同一个目标名。
+
 ```yaml
 setup:
   input_files:
@@ -566,14 +579,18 @@ Excel 里各占一个 sheet）。
   → 投入 input_files
   → 替换 replace_files
   → 按列表顺序执行 setup.batches
+  → 执行 setup.sql_after_batches
   → 执行前文件夹证迹和 DB 快照
   → execute 中的主 batch
 ```
 
 ```yaml
 setup:
+  sql:
+    - DELETE FROM T_WORK WHERE CASE_ID = 'CASE001'
+
   input_files:
-    - src: "input/CASE001.csv"
+    - src: "input/data*.tar"
       dest_dir: input_dir
 
   batches:
@@ -585,6 +602,9 @@ setup:
       args: ["--date", "{date}"]
       expected_exit_code: 0             # 省略时也是 0
 
+  sql_after_batches:
+    - UPDATE T_WORK SET READY = 1 WHERE CASE_ID = 'CASE001'
+
 execute:
   batch: main                           # 最后执行的被测主 batch
   args: ["--date", "{date}"]
@@ -592,7 +612,8 @@ execute:
 
 `setup.batches` 中的名称来自 `settings.yaml` 的 `batches:`。也支持无参数短写
 `- prepare`。任一前置 batch 超时或退出码与 `expected_exit_code` 不一致时，后续前置
-batch 和主 batch 都不会继续执行；自动执行模式下 `teardown` 仍会照常运行。
+batch、`sql_after_batches` 和主 batch 都不会继续执行；自动执行模式下 `teardown`
+仍会照常运行。
 前置 batch 的命令、stdout、stderr 和退出码会写入当次运行目录的 `run.log`；从 GUI
 执行时，也会同步显示在下方的运行日志中。
 

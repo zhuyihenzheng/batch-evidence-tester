@@ -28,7 +28,8 @@ setup:
   # sql:
   #   - file: sql/{case_id}_setup.sql
 
-  # テストデータの投入。src は cases/{case_id}/ からの相対パス（ファイル・フォルダ対応）
+  # テストデータの投入。src は cases/{case_id}/ からの相対パス。
+  # ファイル・フォルダのほか、"input/data*.tar" のような glob 通配符にも対応する。
   input_files:
     - src: "input/（投入ファイル名）.csv"
       dest_dir: input_dir
@@ -43,6 +44,11 @@ setup:
   #     expected_exit_code: 0          # 省略時は 0
   #   - batch: prepare                 # 同じ batch の 2 回目
   #     args: ["--date", "{date-1}"]
+
+  # 前置 batch の完了後、主 batch の実行前に流す SQL。
+  # 例: sql で DELETE → batches でデータ作成 → ここで UPDATE。
+  # sql_after_batches:
+  #   - file: sql/{case_id}_after_batches.sql
 
 # --- DB スナップショット（実行前後の 2 時点を取得）-------------------------------
 # snapshot:
