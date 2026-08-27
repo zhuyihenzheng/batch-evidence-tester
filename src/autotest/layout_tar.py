@@ -9,6 +9,7 @@ import csv
 import io
 import os
 import re
+import shutil
 import tarfile
 import tempfile
 from pathlib import Path
@@ -236,11 +237,34 @@ class PackageItem(object):
 
 class PackageResult(object):
     def __init__(self, tar_file: Path, archive_members: List[str],
-                 item_count: int, manifest_name: str = "") -> None:
+                 item_count: int, manifest_name: str = "",
+                 view_folder: Optional[Path] = None) -> None:
         self.tar_file = tar_file
         self.archive_members = archive_members
         self.item_count = item_count
         self.manifest_name = manifest_name
+        self.view_folder = view_folder
+
+
+def format_package_tar_name(image_txt_template: str,
+                            image_csv_template: str,
+                            include_manifest: bool,
+                            source: str,
+                            form_ids: Sequence[str]) -> str:
+    raw = image_csv_template if include_manifest else image_txt_template
+    raw = str(raw or "").strip()
+    if not raw:
+        raw = "image_package" if include_manifest else "{source}_layout_data"
+    values = []
+    for value in form_ids:
+        value = str(value or "").strip()
+        if value and value not in values:
+            values.append(value)
+    form_value = values[0] if len(values) == 1 else "all"
+    try:
+        return raw.format(source=str(source or "images"), form_id=form_value)
+    except (KeyError, ValueError, IndexError) as exc:
+        raise LayoutTarError("梱包TAR名テンプレートが不正です: %s" % exc)
 
 
 def parse_extra_fields(text: str) -> Dict[str, str]:
@@ -406,6 +430,94 @@ def _atomic_write(path: Path, payload: bytes) -> None:
         raise
 
 
+def _path_exists(path: Path) -> bool:
+    return os.path.lexists(str(path))
+
+
+def _remove_path(path: Path) -> None:
+    if not _path_exists(path):
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    else:
+        shutil.rmtree(str(path))
+
+
+def _publish_package_outputs(output_dir: Path, tar_file: Path,
+                             tar_payload: bytes,
+                             rendered: Sequence[Tuple[str, bytes]],
+                             view_folder: Optional[Path],
+                             overwrite: bool) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    targets = [tar_file]
+    if view_folder is not None:
+        targets.append(view_folder)
+
+    existing = [path for path in targets if _path_exists(path)]
+    if existing and not overwrite:
+        raise LayoutTarError(
+            "既存のTARまたは確認用フォルダを上書きしません。"
+            "上書きを有効にするかTAR名を変えてください: %s"
+            % ", ".join(str(path) for path in existing))
+    if _path_exists(tar_file) and tar_file.is_dir():
+        raise LayoutTarError("TAR出力先がフォルダです: %s" % tar_file)
+    if (view_folder is not None and _path_exists(view_folder) and
+            (view_folder.is_symlink() or not view_folder.is_dir())):
+        raise LayoutTarError("確認用フォルダの出力先がフォルダではありません: %s" % view_folder)
+
+    staging_root = Path(tempfile.mkdtemp(
+        prefix=".%s." % tar_file.stem, dir=str(output_dir)))
+    backup_root = None  # type: Optional[Path]
+    backups = {}  # type: Dict[Path, Path]
+    published = []  # type: List[Path]
+    try:
+        staged_tar = staging_root / tar_file.name
+        _atomic_write(staged_tar, tar_payload)
+        staged_outputs = [(staged_tar, tar_file)]
+        if view_folder is not None:
+            staged_folder = staging_root / view_folder.name
+            staged_folder.mkdir()
+            for name, payload in rendered:
+                _atomic_write(staged_folder / name, payload)
+            staged_outputs.append((staged_folder, view_folder))
+
+        if existing:
+            backup_root = Path(tempfile.mkdtemp(
+                prefix=".%s.backup." % tar_file.stem, dir=str(output_dir)))
+            for target in existing:
+                backup = backup_root / target.name
+                os.replace(str(target), str(backup))
+                backups[target] = backup
+
+        for staged, target in staged_outputs:
+            os.replace(str(staged), str(target))
+            published.append(target)
+    except Exception as exc:
+        for target in reversed(published):
+            try:
+                _remove_path(target)
+            except OSError:
+                pass
+        restore_errors = []
+        for target, backup in backups.items():
+            if _path_exists(backup):
+                try:
+                    os.replace(str(backup), str(target))
+                except OSError as restore_exc:
+                    restore_errors.append(str(restore_exc))
+        if restore_errors:
+            kept_backup = backup_root
+            backup_root = None
+            raise LayoutTarError(
+                "出力の復元に失敗しました。退避データを確認してください: %s: %s"
+                % (kept_backup, "; ".join(restore_errors))) from exc
+        raise
+    finally:
+        shutil.rmtree(str(staging_root), ignore_errors=True)
+        if backup_root is not None:
+            shutil.rmtree(str(backup_root), ignore_errors=True)
+
+
 def build_image_tar(items: Sequence[PackageItem], output_dir: Path,
                     tar_name: str,
                     include_recognition_txt: bool = True,
@@ -415,7 +527,8 @@ def build_image_tar(items: Sequence[PackageItem], output_dir: Path,
                     text_encoding: str = "cp932",
                     csv_encoding: str = "cp932",
                     overwrite: bool = False,
-                    manifest_style: str = "custom") -> PackageResult:
+                    manifest_style: str = "custom",
+                    create_view_folder: bool = True) -> PackageResult:
     """正面、任意の背面、任意の認識TXT/一覧CSVを1つのTARへまとめる。"""
     selected = list(items)
     if not selected:
@@ -483,18 +596,20 @@ def build_image_tar(items: Sequence[PackageItem], output_dir: Path,
     raw_tar_name = str(tar_name or "image_package").strip()
     if raw_tar_name.lower().endswith(".tar"):
         raw_tar_name = raw_tar_name[:-4]
-    tar_file = Path(output_dir) / (_safe_name(raw_tar_name, "image_package") + ".tar")
-    if tar_file.exists() and not overwrite:
-        raise LayoutTarError(
-            "既存TARを上書きしません。上書きを有効にするかTAR名を変えてください: %s"
-            % tar_file)
+    output_dir = Path(output_dir)
+    safe_tar_stem = _safe_name(raw_tar_name, "image_package")
+    tar_file = output_dir / (safe_tar_stem + ".tar")
+    view_folder = output_dir / safe_tar_stem if create_view_folder else None
 
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
         for name, payload in rendered:
             _add_tar_member(archive, name, payload)
-    _atomic_write(tar_file, stream.getvalue())
+    _publish_package_outputs(
+        output_dir, tar_file, stream.getvalue(), rendered,
+        view_folder, overwrite)
     return PackageResult(
         tar_file=tar_file,
         archive_members=[name for name, _payload in rendered],
-        item_count=len(selected), manifest_name=actual_manifest_name)
+        item_count=len(selected), manifest_name=actual_manifest_name,
+        view_folder=view_folder)

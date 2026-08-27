@@ -1038,6 +1038,9 @@ run_layout_txt.bat
 
 ### TAR 输出列表的操作方法
 
+输出列表上方会始终显示固定 CSV 的默认值。添加数据前可直接修改；已经添加后，选择目标行并
+点击「選択行／全行へ反映」即可批量更新。自动生成的值会根据当前行和实际文件名填写。
+
 1. 在「背面認識値（1項目）」输入背面默认值，初始值是 `1`。这个值只用于背面。
 2. 需要背面时先勾选「背面画像あり」，不需要时保持未勾选。
 3. 添加方式二选一：
@@ -1049,14 +1052,18 @@ run_layout_txt.bat
    - 是否打包（`TAR=1/0`）
    - `FORM_ID`
    - 文件基名
+   - 固定 CSV 的各行数据
    - 背面识别值（只有一个字段）
    - 关联文件名
    - CSV 扩展字段（`key=value; key2=value2`）
 6. 已添加的背面可以通过「選択行の背面画像を設定」替换或移除。
-7. 输入最终 TAR 名。需要 CSV 时，再输入 CSV 文件名、文字编码和列定义。
+7. 在「生成・ファイル設定」分别输入图片＋TXT TAR 名和图片＋CSV TAR 名。需要 CSV 时，
+   再在打包区域输入 CSV 文件名、文字编码和格式。
 8. 点击其中一个完成打包：
    - 「選択画像＋認識TXTをTAR化」
    - 「選択画像＋一覧CSVをTAR化」
+
+两种操作都会同时生成 `.tar` 和同名文件夹。文件夹内容与 TAR 内部一致，可直接打开确认。
 
 正面和背面只通过文件名最后一位区分：
 
@@ -1067,8 +1074,8 @@ DATA001R.tif    背面图片（可选）
 DATA001R.txt    背面TXT（可选，只有一个可编辑字段）
 ```
 
-同名 TAR 默认不覆盖；只有勾选「既存ファイルを上書き」后才会替换。外部原图只读，
-不会被修改或删除。
+同名 TAR 或同名文件夹默认不覆盖；只有勾选「既存ファイルを上書き」后才会整套替换。
+外部原图只读，不会被修改或删除。
 
 ### 最终成果物
 
@@ -1078,10 +1085,11 @@ DATA001R.txt    背面TXT（可选，只有一个可编辑字段）
 
 ```text
 image_package.tar
+image_package/
 ├─ DATA001F.tif
-├─ DATA001F.txt       # 原有FORM_ID完整内容
-├─ DATA001R.tif       # 选择背面时存在
-├─ DATA001R.txt       # 选择背面时存在，只有一个字段
+├─ DATA001F.txt
+├─ DATA001R.tif
+├─ DATA001R.txt
 ├─ DATA002F.png
 └─ DATA002F.txt
 ```
@@ -1106,13 +1114,18 @@ image_package.tar
 
 ```text
 image_list_package.tar
+image_list_package/
 ├─ DATA001F.tif
 ├─ DATA001R.tif       # 可选
 ├─ DATA002F.png
 └─ file_list.csv
 ```
 
-CSV 列使用“显示名=内部键”的形式设置，例如：
+固定格式为 10 列、无表头、每张图片一行，所有值使用双引号，默认采用 `cp932` 和
+`CRLF`。正面和背面分别占一行，但使用相同的三位序号；文件名列与实际图片名一致。
+这种打包方式不包含识别 TXT。
+
+如选择自定义格式，CSV 列使用“显示名=内部键”的形式设置，例如：
 
 ```text
 正面文件=front_image_file,背面文件=back_image_file,ID=form_id,背面结果=back_recognition_result,关联文件=related_file,分类=type
@@ -1126,9 +1139,7 @@ DATA001F.tif,DATA001R.tif,1001,1,REF001.dat,normal
 DATA002F.png,,1002,0,REF002.dat,error
 ```
 
-每一行的额外值在输出列表中填写，例如 `type=normal`。勾选
-「CSV梱包にも認識TXTを含める」时，这种 TAR 也会包含正面 TXT；存在背面时，
-同时包含背面 TXT。
+每一行的额外值在输出列表中填写，例如 `type=normal`。
 
 可用的标准内部键：
 

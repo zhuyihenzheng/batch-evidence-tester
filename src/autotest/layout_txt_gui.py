@@ -33,6 +33,7 @@ from .layout_tar import (
     PackageItem,
     base_name_from_front,
     build_image_tar,
+    format_package_tar_name,
     format_extra_fields,
     matching_back_image,
     matching_recognition_file,
@@ -116,15 +117,15 @@ PACKAGE_COLUMNS = (
 )
 
 PACKAGE_HEADINGS = {
-    "include": "TAR", "scan_batch_id": "スキャンバッチID",
-    "image_sequence": "イメージ連番", "form_id": "帳票ID",
+    "include": "TAR", "scan_batch_id": "編集位置1",
+    "image_sequence": "自動項目1", "form_id": "自動項目3",
     "base_name": "基礎名（編集可）",
     "front_image": "正面画像（末尾F）", "front_recognition": "正面TXT（FORM生成）",
     "back_image": "背面画像（末尾R）", "back_recognition": "背面TXT（1項目）",
     "back_recognition_result": "背面認識値（編集可）",
-    "arrival_date": "書類到着日", "application_number": "申出番号",
-    "reception_number": "受付番号", "format_id": "フォーマットID",
-    "delivery_date": "バンチ納品日", "delivery_shot": "バンチ納品ショット",
+    "arrival_date": "編集位置2", "application_number": "編集位置3",
+    "reception_number": "編集位置4", "format_id": "編集位置5",
+    "delivery_date": "編集位置6", "delivery_shot": "編集位置7",
     "related_file": "関連ファイル名", "extra_fields": "CSV追加項目 key=value;...",
     "source": "画像元",
 }
@@ -160,7 +161,7 @@ SETTING_VARIABLE_NAMES = (
     "format_var", "encoding_var", "split_var", "overwrite_var",
     "package_tar_name_var", "package_result_var", "package_include_back_var",
     "manifest_name_var", "manifest_columns_var", "manifest_encoding_var",
-    "manifest_include_txt_var", "manifest_style_var",
+    "manifest_style_var",
     "package_scan_batch_id_var", "package_arrival_date_var",
     "package_application_number_var", "package_reception_number_var",
     "package_format_id_var", "package_delivery_date_var",
@@ -221,7 +222,6 @@ class LayoutTxtGui(object):
                   "FORM_ID=form_id,背面認識結果=back_recognition_result,"
                   "関連ファイル=related_file")
         self.manifest_encoding_var = tk.StringVar(value="cp932")
-        self.manifest_include_txt_var = tk.BooleanVar(value=False)
         self.manifest_style_var = tk.StringVar(value=CSV_STYLE_LABELS[0][0])
         self.package_scan_batch_id_var = tk.StringVar(value="")
         self.package_arrival_date_var = tk.StringVar(value="")
@@ -246,7 +246,6 @@ class LayoutTxtGui(object):
         self.package_sequence = 0
         self.package_editor = None
         self.package_editor_context = None
-        self.csv_defaults_dialog = None
 
         self._load_persisted_settings()
         if initial_excel:
@@ -391,8 +390,9 @@ class LayoutTxtGui(object):
 
         generation = ttk.LabelFrame(outer, text="生成・ファイル設定", padding=8)
         generation.grid(row=2, column=0, sticky="we", pady=(8, 0))
-        for column in range(8):
-            generation.columnconfigure(column, weight=1 if column in (1, 3, 5, 7) else 0)
+        for column in range(10):
+            generation.columnconfigure(
+                column, weight=1 if column in (1, 3, 5, 7, 9) else 0)
 
         ttk.Label(generation, text="データ:").grid(row=0, column=0, sticky="w")
         ttk.Combobox(
@@ -416,24 +416,29 @@ class LayoutTxtGui(object):
         ttk.Label(generation, text="TXT名:").grid(row=1, column=0, sticky="w", pady=(7, 0))
         ttk.Entry(generation, textvariable=self.filename_template_var).grid(
             row=1, column=1, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="TAR名:").grid(row=1, column=2, sticky="w", pady=(7, 0))
+        ttk.Label(generation, text="画像＋TXT TAR名:").grid(
+            row=1, column=2, sticky="w", pady=(7, 0))
         ttk.Entry(generation, textvariable=self.tar_name_var).grid(
             row=1, column=3, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="形式:").grid(row=1, column=4, sticky="w", pady=(7, 0))
+        ttk.Label(generation, text="画像＋CSV TAR名:").grid(
+            row=1, column=4, sticky="w", pady=(7, 0))
+        ttk.Entry(generation, textvariable=self.package_tar_name_var).grid(
+            row=1, column=5, sticky="we", padx=(5, 12), pady=(7, 0))
+        ttk.Label(generation, text="形式:").grid(row=1, column=6, sticky="w", pady=(7, 0))
         ttk.Combobox(
             generation, textvariable=self.format_var,
             values=[label for label, _value in FORMAT_LABELS],
             state="readonly", width=16).grid(
-                row=1, column=5, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="文字コード:").grid(row=1, column=6, sticky="w", pady=(7, 0))
+                row=1, column=7, sticky="we", padx=(5, 12), pady=(7, 0))
+        ttk.Label(generation, text="文字コード:").grid(row=1, column=8, sticky="w", pady=(7, 0))
         ttk.Combobox(
             generation, textvariable=self.encoding_var,
             values=("cp932", "utf-8-sig", "utf-8"),
             state="readonly", width=12).grid(
-                row=1, column=7, sticky="we", padx=(5, 0), pady=(7, 0))
+                row=1, column=9, sticky="we", padx=(5, 0), pady=(7, 0))
 
         flags = ttk.Frame(generation)
-        flags.grid(row=2, column=0, columnspan=8, sticky="w", pady=(7, 0))
+        flags.grid(row=2, column=0, columnspan=10, sticky="w", pady=(7, 0))
         ttk.Checkbutton(flags, text="FormIDごとに分割", variable=self.split_var).pack(
             side="left", padx=(0, 14))
         ttk.Checkbutton(flags, text="同名TIFを生成", variable=self.generate_tif_var).pack(
@@ -451,12 +456,12 @@ class LayoutTxtGui(object):
 
         ttk.Label(
             generation,
-            text="TXT名: {form_id}/{pattern}/{seq:02d}/{source}  TAR名: {form_id}/{source}",
-            foreground="#666").grid(row=3, column=0, columnspan=8, sticky="w", pady=(5, 0))
+            text="TXT名: {form_id}/{pattern}/{seq:02d}/{source}  両TAR名: {form_id}/{source}",
+            foreground="#666").grid(row=3, column=0, columnspan=10, sticky="w", pady=(5, 0))
         ttk.Label(
             generation, text="設定保存先: %s" % self.settings_path,
             foreground="#666").grid(
-                row=4, column=0, columnspan=8, sticky="w", pady=(3, 0))
+                row=4, column=0, columnspan=10, sticky="w", pady=(3, 0))
 
         selector = ttk.LabelFrame(outer, text="FORM_IDを選択して内容を編集", padding=8)
         selector.grid(row=3, column=0, sticky="we", pady=(8, 0))
@@ -521,17 +526,39 @@ class LayoutTxtGui(object):
             command=self._remove_package_items).pack(side="left", padx=(0, 8))
         ttk.Button(
             package_toolbar, text="全消去",
-            command=self._clear_package_items).pack(side="left", padx=(0, 8))
+            command=self._clear_package_items).pack(side="left")
+
+        csv_defaults = ttk.Frame(package)
+        csv_defaults.grid(row=1, column=0, sticky="we", pady=(6, 0))
+        ttk.Label(csv_defaults, text="CSV出力初期値\n（追加時に反映）").pack(
+            side="left", padx=(0, 10))
+        default_fields = (
+            ("編集位置1", self.package_scan_batch_id_var, 14),
+            ("編集位置2", self.package_arrival_date_var, 9),
+            ("編集位置3", self.package_application_number_var, 11),
+            ("編集位置4", self.package_reception_number_var, 16),
+            ("編集位置5", self.package_format_id_var, 5),
+            ("編集位置6", self.package_delivery_date_var, 9),
+            ("編集位置7", self.package_delivery_shot_var, 5),
+        )
+        for label, variable, width in default_fields:
+            field = ttk.Frame(csv_defaults)
+            field.pack(side="left", padx=(0, 8))
+            ttk.Label(field, text=label).pack(anchor="w")
+            ttk.Entry(field, textvariable=variable, width=width).pack(anchor="w")
+        ttk.Label(
+            csv_defaults, text="その他3項目は自動設定",
+            foreground="#666").pack(side="left", padx=(0, 8))
         ttk.Button(
-            package_toolbar, text="CSV共通値...",
-            command=self._open_package_csv_defaults).pack(side="left")
+            csv_defaults, text="選択行／全行へ反映",
+            command=self._apply_package_csv_defaults).pack(side="right")
 
         package_table = ttk.Frame(package)
-        package_table.grid(row=1, column=0, sticky="we", pady=(6, 0))
+        package_table.grid(row=2, column=0, sticky="we", pady=(6, 0))
         package_table.columnconfigure(0, weight=1)
         self.package_tree = ttk.Treeview(
             package_table, columns=PACKAGE_COLUMNS, show="headings",
-            selectmode="extended", height=5)
+            selectmode="extended", height=3)
         for name in PACKAGE_COLUMNS:
             self.package_tree.heading(name, text=PACKAGE_HEADINGS[name])
             self.package_tree.column(
@@ -549,25 +576,22 @@ class LayoutTxtGui(object):
         self.package_tree.bind("<Double-1>", self._begin_package_cell_edit)
 
         package_options = ttk.Frame(package)
-        package_options.grid(row=2, column=0, sticky="we", pady=(7, 0))
+        package_options.grid(row=3, column=0, sticky="we", pady=(7, 0))
         package_options.columnconfigure(1, weight=1)
+        package_options.columnconfigure(3, weight=1)
         package_options.columnconfigure(5, weight=1)
-        ttk.Label(package_options, text="梱包TAR名:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(
-            package_options, textvariable=self.package_tar_name_var).grid(
-                row=0, column=1, sticky="we", padx=(5, 12))
-        ttk.Label(package_options, text="一覧CSV名:").grid(row=0, column=2, sticky="w")
+        ttk.Label(package_options, text="一覧CSV名:").grid(row=0, column=0, sticky="w")
         ttk.Entry(
             package_options, textvariable=self.manifest_name_var, width=18).grid(
-                row=0, column=3, sticky="w", padx=(5, 12))
-        ttk.Label(package_options, text="CSV文字コード:").grid(row=0, column=4, sticky="w")
+                row=0, column=1, sticky="we", padx=(5, 12))
+        ttk.Label(package_options, text="CSV文字コード:").grid(row=0, column=2, sticky="w")
         ttk.Combobox(
             package_options, textvariable=self.manifest_encoding_var,
             values=("cp932", "utf-8-sig", "utf-8"), state="readonly", width=11).grid(
-                row=0, column=5, sticky="w", padx=(5, 12))
-        ttk.Checkbutton(
-            package_options, text="CSV梱包にも認識TXTを含める",
-            variable=self.manifest_include_txt_var).grid(row=0, column=6, sticky="w")
+                row=0, column=3, sticky="w", padx=(5, 12))
+        ttk.Label(
+            package_options, text="TARと同名の確認用フォルダも生成",
+            foreground="#666").grid(row=0, column=4, columnspan=4, sticky="e")
 
         ttk.Label(package_options, text="CSV形式:").grid(
             row=1, column=0, sticky="w", pady=(6, 0))
@@ -591,9 +615,8 @@ class LayoutTxtGui(object):
                 row=1, column=7, sticky="e", pady=(6, 0))
         ttk.Label(
             package_options,
-            text="固定10列: スキャンバッチID / イメージ連番 / イメージID / 書類到着日 / "
-                 "帳票ID / 申出番号 / 受付番号 / フォーマットID / バンチ納品日 / "
-                 "バンチ納品ショット。画像ごとに1行、ヘッダーなし、全項目を引用します。",
+            text="固定10列: 編集位置1～7と自動設定3項目。"
+                 "画像ごとに1行、ヘッダーなし、全項目を引用します。",
             foreground="#666").grid(
                 row=2, column=0, columnspan=8, sticky="w", pady=(4, 0))
 
@@ -946,58 +969,6 @@ class LayoutTxtGui(object):
         self.package_tree.see(iid)
         return iid
 
-    def _open_package_csv_defaults(self) -> None:
-        if (self.csv_defaults_dialog is not None and
-                self.csv_defaults_dialog.winfo_exists()):
-            self.csv_defaults_dialog.lift()
-            self.csv_defaults_dialog.focus_force()
-            return
-        dialog = tk.Toplevel(self.root)
-        self.csv_defaults_dialog = dialog
-        dialog.title("固定10列CSVの共通値")
-        dialog.transient(self.root)
-        dialog.resizable(False, False)
-        frame = ttk.Frame(dialog, padding=12)
-        frame.pack(fill="both", expand=True)
-        fields = (
-            ("スキャンバッチID", "=13", self.package_scan_batch_id_var),
-            ("書類到着日", "<=8", self.package_arrival_date_var),
-            ("申出番号", "<=10", self.package_application_number_var),
-            ("受付番号", "<=30", self.package_reception_number_var),
-            ("フォーマットID", "<=2", self.package_format_id_var),
-            ("バンチ納品日", "<=8", self.package_delivery_date_var),
-            ("バンチ納品ショット", "<=2", self.package_delivery_shot_var),
-        )
-        for row, (label, size, variable) in enumerate(fields):
-            ttk.Label(frame, text=label + ":").grid(
-                row=row, column=0, sticky="w", pady=(0, 6))
-            ttk.Entry(frame, textvariable=variable, width=34).grid(
-                row=row, column=1, sticky="we", padx=(8, 6), pady=(0, 6))
-            ttk.Label(frame, text=size, foreground="#666").grid(
-                row=row, column=2, sticky="w", pady=(0, 6))
-        ttk.Label(
-            frame,
-            text="イメージ連番は001から自動設定し、イメージIDは実際の画像名を使用します。",
-            foreground="#666").grid(
-                row=len(fields), column=0, columnspan=3, sticky="w", pady=(2, 10))
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=len(fields) + 1, column=0, columnspan=3, sticky="e")
-        ttk.Button(
-            buttons, text="選択行／全行へ反映",
-            command=self._apply_package_csv_defaults).pack(side="left", padx=(0, 8))
-
-        def close_dialog():
-            dialog.destroy()
-            self.csv_defaults_dialog = None
-
-        ttk.Button(buttons, text="閉じる", command=close_dialog).pack(side="left")
-        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
-        dialog.bind("<Escape>", lambda _event: close_dialog())
-        dialog.update_idletasks()
-        dialog.geometry("+%d+%d" % (
-            self.root.winfo_rootx() + 100, self.root.winfo_rooty() + 100))
-        dialog.focus_force()
-
     def _apply_package_csv_defaults(self) -> None:
         self._finish_package_cell_edit(save=True)
         targets = list(self.package_tree.selection())
@@ -1005,7 +976,7 @@ class LayoutTxtGui(object):
             targets = list(self.package_tree.get_children(""))
         if not targets:
             messagebox.showwarning(
-                "CSV共通値", "出力リストへ画像を追加してください。", parent=self.root)
+                "CSV出力初期値", "出力リストへ画像を追加してください。", parent=self.root)
             return
         values = {
             "scan_batch_id": self.package_scan_batch_id_var.get().strip(),
@@ -1022,7 +993,7 @@ class LayoutTxtGui(object):
                 setattr(item, name, value)
             include = self.package_tree.set(iid, "include") or "1"
             self.package_tree.item(iid, values=self._package_values(item, include))
-        self.status_var.set("CSV共通値を%d件へ反映しました。" % len(targets))
+        self.status_var.set("CSV出力初期値を%d件へ反映しました。" % len(targets))
 
     def _add_current_form_to_package(self) -> None:
         if not self.form_fields:
@@ -1339,19 +1310,12 @@ class LayoutTxtGui(object):
             raise LayoutTarError("TAR列が1の画像を1件以上追加してください")
         return items
 
-    def _custom_package_tar_name(self, items) -> str:
-        raw = self.package_tar_name_var.get().strip() or "image_package"
+    def _custom_package_tar_name(self, items, include_manifest: bool) -> str:
         excel_raw = self.excel_var.get().strip()
         source = Path(excel_raw).stem if excel_raw else "images"
-        form_ids = []
-        for item in items:
-            if item.form_id and item.form_id not in form_ids:
-                form_ids.append(item.form_id)
-        form_value = form_ids[0] if len(form_ids) == 1 else "all"
-        try:
-            return raw.format(source=source, form_id=form_value)
-        except (KeyError, ValueError, IndexError) as exc:
-            raise LayoutTarError("梱包TAR名テンプレートが不正です: %s" % exc)
+        return format_package_tar_name(
+            self.tar_name_var.get(), self.package_tar_name_var.get(),
+            include_manifest, source, [item.form_id for item in items])
 
     def _run_package(self, include_manifest: bool) -> None:
         output_raw = self.output_var.get().strip()
@@ -1366,20 +1330,19 @@ class LayoutTxtGui(object):
             columns = None
             if include_manifest and manifest_style == "custom":
                 columns = parse_manifest_columns(self.manifest_columns_var.get())
-            include_txt = (
-                True if not include_manifest else self.manifest_include_txt_var.get())
             result = build_image_tar(
                 items=items,
                 output_dir=Path(output_raw),
-                tar_name=self._custom_package_tar_name(items),
-                include_recognition_txt=include_txt,
+                tar_name=self._custom_package_tar_name(items, include_manifest),
+                include_recognition_txt=not include_manifest,
                 include_manifest_csv=include_manifest,
                 manifest_name=self.manifest_name_var.get().strip(),
                 manifest_columns=columns,
                 manifest_style=manifest_style,
                 text_encoding=self.encoding_var.get(),
                 csv_encoding=self.manifest_encoding_var.get(),
-                overwrite=self.overwrite_var.get())
+                overwrite=self.overwrite_var.get(),
+                create_view_folder=True)
         except (LayoutTarError, OSError) as exc:
             self.status_var.set("TARを生成できませんでした: %s" % exc)
             messagebox.showerror("TAR生成エラー", str(exc), parent=self.root)
@@ -1387,14 +1350,16 @@ class LayoutTxtGui(object):
 
         self._save_persisted_settings(show_message=False)
         self.status_var.set(
-            "梱包完了: 帳票%d件 / TAR内%dファイル / %s"
-            % (result.item_count, len(result.archive_members), result.tar_file))
+            "梱包完了: 帳票%d件 / TAR内%dファイル / %s / %s"
+            % (result.item_count, len(result.archive_members), result.tar_file,
+               result.view_folder))
         messagebox.showinfo(
             "TAR生成完了",
             "画像TARを生成しました。\n\n帳票: %d件\n格納ファイル: %d件\n"
-            "CSV: %s\n\n%s"
+            "CSV: %s\n\nTAR: %s\n確認用フォルダ: %s"
             % (result.item_count, len(result.archive_members),
-               result.manifest_name or "なし", result.tar_file),
+               result.manifest_name or "なし", result.tar_file,
+               result.view_folder),
             parent=self.root)
 
     def _save_defaults_to_excel(self) -> None:

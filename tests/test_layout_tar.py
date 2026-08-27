@@ -17,6 +17,7 @@ from autotest.layout_tar import (  # noqa: E402
     base_name_from_front,
     build_image_tar,
     format_extra_fields,
+    format_package_tar_name,
     matching_back_image,
     matching_recognition_file,
     parse_extra_fields,
@@ -34,6 +35,21 @@ class TestLayoutImageTar(unittest.TestCase):
     def _members(self, path):
         with tarfile.open(str(path), "r") as archive:
             return archive.getnames()
+
+    def test_txt_and_csv_packages_use_separate_file_setting_names(self):
+        self.assertEqual(
+            format_package_tar_name(
+                "TXT_{source}_{form_id}", "CSV_{source}_{form_id}",
+                False, "layout", ["1001"]),
+            "TXT_layout_1001")
+        self.assertEqual(
+            format_package_tar_name(
+                "TXT_{source}_{form_id}", "CSV_{source}_{form_id}",
+                True, "layout", ["1001"]),
+            "CSV_layout_1001")
+        self.assertEqual(
+            format_package_tar_name("", "", False, "layout", ["1001"]),
+            "layout_layout_data")
 
     def test_front_back_images_use_f_r_and_result_txt_is_separate(self):
         external_front = self.tmp / "scanF.png"
@@ -58,11 +74,19 @@ class TestLayoutImageTar(unittest.TestCase):
         result = build_image_tar(items, self.tmp, "CUSTOM_PACKAGE")
 
         self.assertEqual(result.tar_file.name, "CUSTOM_PACKAGE.tar")
+        self.assertEqual(result.view_folder, self.tmp / "CUSTOM_PACKAGE")
         self.assertEqual(result.archive_members, [
             "FORM1001F.tif", "FORM1001F.txt", "FORM1001R.tif", "FORM1001R.txt",
             "scanF.png", "scanF.txt", "scanR.png", "scanR.txt",
         ])
+        self.assertEqual(
+            sorted(path.name for path in result.view_folder.iterdir()),
+            sorted(result.archive_members))
         with tarfile.open(str(result.tar_file), "r") as archive:
+            for name in result.archive_members:
+                self.assertEqual(
+                    (result.view_folder / name).read_bytes(),
+                    archive.extractfile(name).read())
             self.assertEqual(archive.extractfile("FORM1001F.tif").read(), b"TIF-F")
             self.assertEqual(archive.extractfile("FORM1001R.tif").read(), b"TIF-R")
             self.assertEqual(
@@ -128,6 +152,11 @@ class TestLayoutImageTar(unittest.TestCase):
             "2020123100001_001_R.TIF",
             "CLM_PUNCH_IMAGE_INFO_01.csv",
         ])
+        self.assertFalse(any(name.lower().endswith(".txt")
+                             for name in result.archive_members))
+        self.assertEqual(
+            sorted(path.name for path in result.view_folder.iterdir()),
+            sorted(result.archive_members))
         with tarfile.open(str(result.tar_file), "r") as archive:
             raw = archive.extractfile(
                 "CLM_PUNCH_IMAGE_INFO_01.csv").read().decode("cp932")
@@ -227,6 +256,38 @@ class TestLayoutImageTar(unittest.TestCase):
 
         build_image_tar([item], self.tmp, "protected", overwrite=True)
         self.assertNotEqual(target.read_bytes(), b"old")
+
+    def test_existing_view_folder_is_protected_and_replaced_with_overwrite(self):
+        folder = self.tmp / "folder_protected"
+        folder.mkdir()
+        marker = folder / "old.dat"
+        marker.write_bytes(b"old")
+        item = PackageItem(
+            base_name="A", front_image_bytes=b"A", front_recognition_text="TXT")
+
+        with self.assertRaises(LayoutTarError):
+            build_image_tar([item], self.tmp, "folder_protected")
+        self.assertFalse((self.tmp / "folder_protected.tar").exists())
+        self.assertEqual(marker.read_bytes(), b"old")
+
+        result = build_image_tar(
+            [item], self.tmp, "folder_protected", overwrite=True)
+        self.assertFalse(marker.exists())
+        self.assertEqual(
+            sorted(path.name for path in result.view_folder.iterdir()),
+            ["AF.tif", "AF.txt"])
+        self.assertFalse(any(
+            path.name.startswith(".folder_protected.")
+            for path in self.tmp.iterdir()))
+
+    def test_view_folder_can_be_disabled_for_library_callers(self):
+        item = PackageItem(
+            base_name="A", front_image_bytes=b"A", front_recognition_text="TXT")
+        result = build_image_tar(
+            [item], self.tmp, "tar_only", create_view_folder=False)
+        self.assertIsNone(result.view_folder)
+        self.assertTrue(result.tar_file.is_file())
+        self.assertFalse((self.tmp / "tar_only").exists())
 
     def test_extra_fields_round_trip_and_invalid_input(self):
         values = parse_extra_fields("case_type=normal; relation=ABC_R.txt")
