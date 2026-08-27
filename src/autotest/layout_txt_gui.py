@@ -165,6 +165,7 @@ SETTING_VARIABLE_NAMES = (
     "manifest_name_var", "manifest_columns_var", "manifest_encoding_var",
     "manifest_style_var",
     "package_scan_batch_id_var", "package_arrival_date_var",
+    "package_form_id_var",
     "package_application_number_var", "package_reception_number_var",
     "package_format_id_var", "package_delivery_date_var",
     "package_delivery_shot_var",
@@ -226,6 +227,7 @@ class LayoutTxtGui(object):
         self.manifest_style_var = tk.StringVar(value=CSV_STYLE_LABELS[0][0])
         self.package_scan_batch_id_var = tk.StringVar(value="")
         self.package_arrival_date_var = tk.StringVar(value="")
+        self.package_form_id_var = tk.StringVar(value="")
         self.package_application_number_var = tk.StringVar(value="")
         self.package_reception_number_var = tk.StringVar(value="")
         self.package_format_id_var = tk.StringVar(value="")
@@ -595,6 +597,7 @@ class LayoutTxtGui(object):
         default_fields = (
             ("CSV位置1", self.package_scan_batch_id_var, 14),
             ("CSV位置4", self.package_arrival_date_var, 9),
+            ("CSV位置5", self.package_form_id_var, 9),
             ("CSV位置6", self.package_application_number_var, 11),
             ("CSV位置7", self.package_reception_number_var, 16),
             ("CSV位置8", self.package_format_id_var, 5),
@@ -607,7 +610,7 @@ class LayoutTxtGui(object):
             ttk.Label(field, text=label).pack(anchor="w")
             ttk.Entry(field, textvariable=variable, width=width).pack(anchor="w")
         ttk.Label(
-            csv_defaults, text="位置2・3・5は追加内容から設定",
+            csv_defaults, text="位置2・3は追加内容から設定",
             foreground="#666").pack(side="left", padx=(0, 8))
         ttk.Button(
             csv_defaults, text="選択行／全行へ反映",
@@ -1007,6 +1010,9 @@ class LayoutTxtGui(object):
         if not item.image_sequence:
             item.image_sequence = (
                 match.group(2) if match else "%03d" % (self.package_sequence + 1))
+        form_id_default = self.package_form_id_var.get().strip()
+        if form_id_default:
+            item.form_id = form_id_default
         defaults = (
             ("arrival_date", self.package_arrival_date_var),
             ("application_number", self.package_application_number_var),
@@ -1042,6 +1048,7 @@ class LayoutTxtGui(object):
         values = {
             "scan_batch_id": self.package_scan_batch_id_var.get().strip(),
             "arrival_date": self.package_arrival_date_var.get().strip(),
+            "form_id": self.package_form_id_var.get().strip(),
             "application_number": self.package_application_number_var.get().strip(),
             "reception_number": self.package_reception_number_var.get().strip(),
             "format_id": self.package_format_id_var.get().strip(),
