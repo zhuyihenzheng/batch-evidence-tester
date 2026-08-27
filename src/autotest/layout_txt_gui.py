@@ -109,23 +109,25 @@ EDITABLE_COLUMNS = {
 }
 
 PACKAGE_COLUMNS = (
-    "include", "scan_batch_id", "image_sequence", "form_id", "base_name",
-    "front_image", "back_image", "arrival_date", "application_number",
-    "reception_number", "format_id", "delivery_date", "delivery_shot",
+    "include", "scan_batch_id", "image_sequence", "base_name",
+    "front_image", "back_image", "arrival_date", "form_id",
+    "application_number", "reception_number", "format_id", "delivery_date",
+    "delivery_shot",
     "front_recognition", "back_recognition", "back_recognition_result",
     "related_file", "extra_fields", "source",
 )
 
 PACKAGE_HEADINGS = {
-    "include": "TAR", "scan_batch_id": "編集位置1",
-    "image_sequence": "自動項目1", "form_id": "自動項目3",
-    "base_name": "基礎名（編集可）",
-    "front_image": "正面画像（末尾F）", "front_recognition": "正面TXT（FORM生成）",
-    "back_image": "背面画像（末尾R）", "back_recognition": "背面TXT（1項目）",
+    "include": "TAR", "scan_batch_id": "CSV位置1（編集可）",
+    "image_sequence": "CSV位置2（編集可）",
+    "base_name": "CSV位置3・画像基礎名（編集可）",
+    "front_image": "CSV位置3・正面画像", "front_recognition": "正面TXT（FORM生成）",
+    "back_image": "CSV位置3・背面画像", "back_recognition": "背面TXT（1項目）",
     "back_recognition_result": "背面認識値（編集可）",
-    "arrival_date": "編集位置2", "application_number": "編集位置3",
-    "reception_number": "編集位置4", "format_id": "編集位置5",
-    "delivery_date": "編集位置6", "delivery_shot": "編集位置7",
+    "arrival_date": "CSV位置4（編集可）", "form_id": "CSV位置5（編集可）",
+    "application_number": "CSV位置6（編集可）",
+    "reception_number": "CSV位置7（編集可）", "format_id": "CSV位置8（編集可）",
+    "delivery_date": "CSV位置9（編集可）", "delivery_shot": "CSV位置10（編集可）",
     "related_file": "関連ファイル名", "extra_fields": "CSV追加項目 key=value;...",
     "source": "画像元",
 }
@@ -530,16 +532,16 @@ class LayoutTxtGui(object):
 
         csv_defaults = ttk.Frame(package)
         csv_defaults.grid(row=1, column=0, sticky="we", pady=(6, 0))
-        ttk.Label(csv_defaults, text="CSV出力初期値\n（追加時に反映）").pack(
+        ttk.Label(csv_defaults, text="CSV初期値\n（追加時に反映）").pack(
             side="left", padx=(0, 10))
         default_fields = (
-            ("編集位置1", self.package_scan_batch_id_var, 14),
-            ("編集位置2", self.package_arrival_date_var, 9),
-            ("編集位置3", self.package_application_number_var, 11),
-            ("編集位置4", self.package_reception_number_var, 16),
-            ("編集位置5", self.package_format_id_var, 5),
-            ("編集位置6", self.package_delivery_date_var, 9),
-            ("編集位置7", self.package_delivery_shot_var, 5),
+            ("CSV位置1", self.package_scan_batch_id_var, 14),
+            ("CSV位置4", self.package_arrival_date_var, 9),
+            ("CSV位置6", self.package_application_number_var, 11),
+            ("CSV位置7", self.package_reception_number_var, 16),
+            ("CSV位置8", self.package_format_id_var, 5),
+            ("CSV位置9", self.package_delivery_date_var, 9),
+            ("CSV位置10", self.package_delivery_shot_var, 5),
         )
         for label, variable, width in default_fields:
             field = ttk.Frame(csv_defaults)
@@ -547,7 +549,7 @@ class LayoutTxtGui(object):
             ttk.Label(field, text=label).pack(anchor="w")
             ttk.Entry(field, textvariable=variable, width=width).pack(anchor="w")
         ttk.Label(
-            csv_defaults, text="その他3項目は自動設定",
+            csv_defaults, text="位置2・3・5は追加内容から設定",
             foreground="#666").pack(side="left", padx=(0, 8))
         ttk.Button(
             csv_defaults, text="選択行／全行へ反映",
@@ -615,7 +617,8 @@ class LayoutTxtGui(object):
                 row=1, column=7, sticky="e", pady=(6, 0))
         ttk.Label(
             package_options,
-            text="固定10列: 編集位置1～7と自動設定3項目。"
+            text="固定10列: CSV位置1～10は一覧でダブルクリック編集できます。"
+                 "位置3は画像基礎名を編集すると正面・背面へ反映されます。"
                  "画像ごとに1行、ヘッダーなし、全項目を引用します。",
             foreground="#666").grid(
                 row=2, column=0, columnspan=8, sticky="w", pady=(4, 0))
@@ -918,11 +921,11 @@ class LayoutTxtGui(object):
             include,
             item.scan_batch_id,
             item.image_sequence,
-            item.form_id,
             item.safe_base_name,
             item.front_image_name,
             item.back_image_name if item.has_back_image else "（なし）",
             item.arrival_date,
+            item.form_id,
             item.application_number,
             item.reception_number,
             item.format_id,
@@ -976,7 +979,7 @@ class LayoutTxtGui(object):
             targets = list(self.package_tree.get_children(""))
         if not targets:
             messagebox.showwarning(
-                "CSV出力初期値", "出力リストへ画像を追加してください。", parent=self.root)
+                "CSV初期値", "出力リストへ画像を追加してください。", parent=self.root)
             return
         values = {
             "scan_batch_id": self.package_scan_batch_id_var.get().strip(),
@@ -993,7 +996,7 @@ class LayoutTxtGui(object):
                 setattr(item, name, value)
             include = self.package_tree.set(iid, "include") or "1"
             self.package_tree.item(iid, values=self._package_values(item, include))
-        self.status_var.set("CSV出力初期値を%d件へ反映しました。" % len(targets))
+        self.status_var.set("CSV初期値を%d件へ反映しました。" % len(targets))
 
     def _add_current_form_to_package(self) -> None:
         if not self.form_fields:

@@ -404,7 +404,8 @@ def _encode_single_field(name: str, value: str, encoding: str) -> bytes:
     if "\r" in str(value) or "\n" in str(value):
         raise LayoutTarError("背面認識値は1フィールドのため改行できません: %s" % name)
     stream = io.StringIO()
-    csv.writer(stream, lineterminator="\r\n").writerow([str(value)])
+    csv.writer(
+        stream, lineterminator="\r\n", quoting=csv.QUOTE_ALL).writerow([str(value)])
     try:
         return stream.getvalue().encode(encoding)
     except (LookupError, UnicodeEncodeError) as exc:

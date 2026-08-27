@@ -92,7 +92,7 @@ class TestLayoutImageTar(unittest.TestCase):
             self.assertEqual(
                 archive.extractfile("FORM1001F.txt").read(),
                 b'"1001","1","1001","VALUE","0","0,0,0,1"\r\n')
-            self.assertEqual(archive.extractfile("FORM1001R.txt").read(), b"1\r\n")
+            self.assertEqual(archive.extractfile("FORM1001R.txt").read(), b'"1"\r\n')
             self.assertEqual(archive.extractfile("scanF.txt").read(), b"FRONT_RESULT\r\n")
             self.assertEqual(archive.extractfile("scanR.txt").read(), b'"1,2"\r\n')
 
