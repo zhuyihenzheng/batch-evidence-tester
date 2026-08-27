@@ -182,8 +182,7 @@ class LayoutTxtGui(object):
     def __init__(self, root, initial_excel: Optional[Path] = None) -> None:
         self.root = root
         root.title("Layout TXT / TIF / TAR 生成ツール")
-        root.geometry("1380x980")
-        root.minsize(1080, 800)
+        self._configure_window_for_screen()
 
         self.excel_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value="")
@@ -263,6 +262,45 @@ class LayoutTxtGui(object):
         if self.settings_load_error:
             self.status_var.set(self.settings_load_error)
 
+    def _configure_window_for_screen(self) -> None:
+        screen_width = max(320, int(self.root.winfo_screenwidth()))
+        screen_height = max(300, int(self.root.winfo_screenheight()))
+        available_width = max(320, screen_width - 40)
+        available_height = max(300, screen_height - 100)
+        width = min(1380, available_width)
+        height = min(980, available_height)
+        left = max(0, (screen_width - width) // 2)
+        top = max(0, (screen_height - height) // 2)
+        self.root.geometry("%dx%d+%d+%d" % (width, height, left, top))
+        self.root.minsize(min(900, width), min(620, height))
+
+    def _sync_content_scrollregion(self, _event=None) -> None:
+        if self.content_canvas is not None:
+            self.content_canvas.configure(
+                scrollregion=self.content_canvas.bbox("all"))
+
+    def _fit_content_to_canvas(self, event) -> None:
+        if self.content_canvas is None or self.content_window is None:
+            return
+        requested_width = self.content_frame.winfo_reqwidth()
+        requested_height = self.content_frame.winfo_reqheight()
+        # Treeview の要求幅は全列幅の合計になるが、表には専用の横スクロールがある。
+        # ページ全体をその幅（約2500px）まで広げず、従来の設計幅を上限にする。
+        target_width = max(event.width, min(1380, requested_width))
+        target_height = max(event.height, requested_height)
+        current_width = float(self.content_canvas.itemcget(
+            self.content_window, "width") or 0)
+        current_height = float(self.content_canvas.itemcget(
+            self.content_window, "height") or 0)
+        changes = {}
+        if int(current_width) != target_width:
+            changes["width"] = target_width
+        if int(current_height) != target_height:
+            changes["height"] = target_height
+        if changes:
+            self.content_canvas.itemconfigure(self.content_window, **changes)
+        self._sync_content_scrollregion()
+
     def _load_persisted_settings(self) -> None:
         try:
             settings = load_settings(self.settings_path)
@@ -316,8 +354,28 @@ class LayoutTxtGui(object):
             self.root.destroy()
 
     def _build(self) -> None:
-        outer = ttk.Frame(self.root, padding=10)
-        outer.pack(fill="both", expand=True)
+        shell = ttk.Frame(self.root)
+        shell.pack(fill="both", expand=True)
+        shell.rowconfigure(0, weight=1)
+        shell.columnconfigure(0, weight=1)
+
+        self.content_canvas = tk.Canvas(shell, highlightthickness=0, borderwidth=0)
+        page_ybar = ttk.Scrollbar(
+            shell, orient="vertical", command=self.content_canvas.yview)
+        page_xbar = ttk.Scrollbar(
+            shell, orient="horizontal", command=self.content_canvas.xview)
+        self.content_canvas.configure(
+            yscrollcommand=page_ybar.set, xscrollcommand=page_xbar.set)
+        self.content_canvas.grid(row=0, column=0, sticky="nsew")
+        page_ybar.grid(row=0, column=1, sticky="ns")
+        page_xbar.grid(row=1, column=0, sticky="we")
+
+        outer = ttk.Frame(self.content_canvas, padding=10)
+        self.content_frame = outer
+        self.content_window = self.content_canvas.create_window(
+            (0, 0), window=outer, anchor="nw")
+        outer.bind("<Configure>", self._sync_content_scrollregion)
+        self.content_canvas.bind("<Configure>", self._fit_content_to_canvas)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(5, weight=1)
 
