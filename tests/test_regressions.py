@@ -1084,6 +1084,39 @@ class TestReplaceFiles(TmpDirCase):
         self.assertTrue(problems, "復元失敗が報告されていない")
         self.assertIn("OrderBatch.exe.config", " ".join(problems))
 
+    def test_replaced_config_evidence_uses_a_short_label(self):
+        """成果物には設定ファイル名以外の差し替え・復元説明を載せない。"""
+        from autotest.config import TestCase
+        from autotest.orchestrator import CaseRunner
+
+        batch_dir, case_dir = self._setup_layout()
+        settings = self._settings(batch_dir)
+        case = TestCase(
+            case_id="TC", name="TC", source=case_dir.parent / "TC.yaml",
+            setup={"replace_files": [{
+                "src": "config/case01.config",
+                "dest_dir": "batch_dir",
+                "name": "OrderBatch.exe.config",
+            }]})
+
+        class RendererStub(object):
+            def __init__(self, image_path):
+                self.image_path = image_path
+                self.calls = []
+
+            def text_page(self, **kwargs):
+                self.calls.append(kwargs)
+                return [self.image_path]
+
+        renderer = RendererStub(self.tmp / "config.png")
+        images = CaseRunner(settings, self.tmp / "run")._render_replaced_configs(
+            renderer, case)
+
+        self.assertEqual(renderer.calls[0]["title"], "設定ファイル")
+        self.assertEqual(images[0].title, "設定ファイル")
+        self.assertEqual(images[0].caption, "")
+        self.assertNotIn("復元", renderer.calls[0]["title"] + images[0].caption)
+
     def test_preflight_rejects_cleaning_the_replace_target(self):
         """差し替え先を clean_dirs に入れる矛盾を検出すること。"""
         from autotest.config import TestCase

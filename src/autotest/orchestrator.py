@@ -1030,18 +1030,17 @@ class CaseRunner:
                 src, self.settings.log.get("encoding", "utf-8"),
                 self.settings.log.get("encoding_fallbacks", ["cp932"]))
             paths = renderer.text_page(
-                title=f"差し替えた設定: {name}",
+                title="設定ファイル",
                 subtitle=str(dest_dir / name),
                 lines=text.splitlines(),
                 stem=f"config_{Path(name).stem}",
                 max_lines=int(cfg.get("file_preview_lines", 40)),
                 max_cols=int(cfg.get("file_preview_cols", 160)),
             )
-            for i, path in enumerate(paths, start=1):
+            for path in paths:
                 images.append(ImageEvidence(
-                    title=f"差し替えた設定: {name}" + (f" ({i}/{len(paths)})" if len(paths) > 1 else ""),
+                    title="設定ファイル",
                     path=path,
-                    caption=f"差し替え元: {src}  /  実行後に元の内容へ復元済み",
                 ))
         return images
 
