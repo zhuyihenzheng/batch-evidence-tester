@@ -90,7 +90,7 @@ TREE_COLUMNS = (
 
 TREE_HEADINGS = {
     "include": "出力", "row": "Excel行", "layout_id": "LAYOUT_ID",
-    "field_id": "ELEMENT_ID", "item_name": "ITEM_NAME",
+    "field_id": "FIELD_ID", "item_name": "ITEM_NAME",
     "data_type": "DATA_TYPE", "ime_name": "IME", "max_digits": "MAX",
     "value": "OCR生成値（編集可）", "attribute_flag": "属性",
     "coordinates": "座標", "input_attribute": "入力属性",
@@ -414,7 +414,7 @@ class LayoutTxtGui(object):
 
         required_column_items = (
             ("FormID", self.form_col_var), ("LayoutID", self.layout_col_var),
-            ("FieldID", self.field_col_var), ("ITEM_NAME", self.item_col_var),
+            ("ELEMENT_ID", self.field_col_var), ("ITEM_NAME", self.item_col_var),
             ("DATA_TYPE", self.type_col_var), ("IME", self.ime_col_var),
             ("MAX", self.max_col_var),
         )
@@ -559,7 +559,7 @@ class LayoutTxtGui(object):
             row=0, column=6, sticky="w")
         ttk.Label(
             selector,
-            text="出力/OCR値/属性/ELEMENT_ID/座標はダブルクリックで編集できます。"
+            text="出力/OCR値/属性/FIELD_ID/座標はダブルクリックで編集できます。"
                  " 保存ボタンは表示中FORMのOCR値を入力Excelへ書き戻します。",
             foreground="#666").grid(row=1, column=0, columnspan=7, sticky="w", pady=(5, 0))
 

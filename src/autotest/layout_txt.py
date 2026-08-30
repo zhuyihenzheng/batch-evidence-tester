@@ -571,7 +571,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                 ws.iter_rows(min_row=actual_header_row + 1), actual_header_row + 1):
             raw_form_id = _value_at(row, raw_columns.get("form_id"))
             raw_layout_id = _value_at(row, raw_columns.get("layout_id"))
-            field_id = _value_at(row, raw_columns.get("field_id"))
+            element_id = _value_at(row, raw_columns.get("field_id"))
             item_name = _value_at(row, raw_columns.get("item_name"))
             data_type = _value_at(row, raw_columns.get("data_type"))
             ime_name = _value_at(row, raw_columns.get("ime"))
@@ -583,7 +583,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             default_raw = _raw_value_at(row, raw_columns.get("default_value"))
 
             # 値を引き継ぐ前に、完全な空行を表末尾として無視する。
-            if not any((raw_form_id, raw_layout_id, field_id, item_name,
+            if not any((raw_form_id, raw_layout_id, element_id, item_name,
                         data_type, ime_name, max_raw)):
                 continue
             # 結合セルや省略表記の ID は直前値を引き継ぐ。
@@ -597,19 +597,20 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                 raise LayoutTxtError("%d 行目の FormID が空です。" % row_number)
             if not layout_id:
                 raise LayoutTxtError("%d 行目の LayoutID が空です。" % row_number)
-            if not field_id:
-                raise LayoutTxtError("%d 行目の FieldID が空です。" % row_number)
+            if not element_id:
+                raise LayoutTxtError("%d 行目の ELEMENT_ID が空です。" % row_number)
             if not form_id.isdigit():
                 raise LayoutTxtError(
                     "%d 行目の FormID は数字で指定してください: %r" % (row_number, form_id))
             if not layout_id.isdigit():
                 raise LayoutTxtError(
                     "%d 行目の LayoutID は数字で指定してください: %r" % (row_number, layout_id))
-            if not field_id.isdigit():
+            if not element_id.isdigit():
                 raise LayoutTxtError(
-                    "%d 行目の FieldID は数字で指定してください: %r" % (row_number, field_id))
+                    "%d 行目の ELEMENT_ID は数字で指定してください: %r" %
+                    (row_number, element_id))
             if not item_name:
-                item_name = field_id
+                item_name = element_id
 
             max_digits = _parse_max_digits(max_raw, row_number)
             dtype = _normalize(data_type)
@@ -642,7 +643,9 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
 
                 fields.append(LayoutField(
                     form_id=form_id, layout_id=layout_id,
-                    field_id=field_id, item_name=item_name,
+                    # 出力 FieldID は Excel の ELEMENT_ID ではなく、各 FormID
+                    # の実際の出力項目を 1 から数えた連番にする。
+                    field_id=str(coordinate_index + 1), item_name=item_name,
                     data_type=data_type, ime_name=ime_name, max_digits=max_digits,
                     value=value, row_number=row_number,
                     attribute_flag=attribute_flag,
@@ -1452,7 +1455,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--header-row", type=int, default=None, help="見出し行番号（省略時は自動検出）")
     parser.add_argument("--form-column", default="auto", help="FormID 列（見出し名 / 列記号 / auto）")
     parser.add_argument("--layout-column", default="auto", help="LayoutID 列（見出し名 / 列記号 / auto）")
-    parser.add_argument("--field-column", default="auto", help="FieldID 列（見出し名 / 列記号 / auto）")
+    parser.add_argument("--field-column", default="auto", help="ELEMENT_ID 入力列（見出し名 / 列記号 / auto）")
     parser.add_argument("--item-column", default="auto", help="項目名列（見出し名 / 列記号 / auto）")
     parser.add_argument("--data-type-column", default="I", help="データ型列（既定: I）")
     parser.add_argument("--ime-column", default="J", help="IME/入力制限列（既定: J）")
