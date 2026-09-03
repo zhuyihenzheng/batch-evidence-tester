@@ -2,7 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-C# 制 batch（无界面 .exe）的自动测试 + 证跡（エビデンス）采集工具。目标运行环境是 **Windows + SQL Server + Anaconda 5.2**，但开发/验证可以在 macOS 上用 `--offline` 沙箱完成。
+仓库里有**两个共用同一份代码基盤的工具**，目标运行环境都是 **Windows + Anaconda 5.2**：
+
+1. **autotest**（主体）— C# 制 batch（无界面 .exe）的自动测试 + 证跡（エビデンス）采集。
+   需要 SQL Server，但开发/验证可以在 macOS 上用 `--offline` 沙箱完成。入口 `python -m autotest`。
+2. **layout_txt**（`src/autotest/layout_txt*.py` + `layout_tar.py`）— 从 Excel 布局定义生成
+   OCR 取込测试用的 TXT / TIF / TAR。**不碰 DB、不碰 autotest 的用例体系**，只是恰好住在同一个包里
+   并共享 3.6 兼容约束。有独立 GUI，还会被打包成独立 Windows EXE 分发给不装 Python 的人。
+   入口 `python -m autotest.layout_txt`。近期提交大多集中在这一侧。
+
 详细的使用说明、用例 YAML 全字段、Excel 成果物结构见 `README.md`（本项目的主文档）。
 
 ## 硬性约束
@@ -30,9 +38,11 @@ python tools/check_py36_compat.py src/autotest demo
 ## 常用命令
 
 ```bash
-# 单元测试（只用标准库 unittest，没有 pytest）
+# 单元测试（全部写成标准库 unittest 风格；pytest 不在 requirements 里，本地不需要装）
 python -m unittest discover -s tests -v
 python -m unittest tests.test_regressions.TestKeepEnvOption.test_teardown_skipped_and_reported  # 单个
+#   ※ 唯一的例外是 GitHub Actions，它另装 pytest 跑 layout 相关测试（见「EXE 打包与 CI」）。
+#      所以测试要保持 unittest 风格 —— 这样两边都能跑。
 
 # 3.6 兼容检查
 python tools/check_py36_compat.py src/autotest demo
@@ -54,13 +64,21 @@ PYTHONPATH=src python -m autotest manual --case TC008_manual_demo --phase before
 PYTHONPATH=src python -m autotest report --run <run_id> --run <session> --out merged.xlsx
 PYTHONPATH=src python -m autotest finalize --run <run_id> --run <session> --excel merged.xlsx --out final.xlsx
 PYTHONPATH=src python -m autotest gui                 # 操作画面（需要 tkinter）
+
+# layout_txt（另一个工具，和上面的用例体系无关）
+PYTHONPATH=src python -m autotest.layout_txt definition.xlsx --out-dir output/layout_txt
+PYTHONPATH=src python -m autotest.layout_txt --gui     # 独立 GUI
+
+# 转送包：无法传文件的环境靠 RDP 剪贴板搬项目（生成自解压 .ps1 到 transfer/）
+python tools/make_transfer_bundle.py --chunk-kb 30
 ```
 
 GUI 的自动化冒烟测试要 `root.withdraw()` + 只用 `root.update()` 驱动事件循环，
 不要 `mainloop()`（会挂住）。
 
-Windows 侧入口是 `.bat`（`setup_windows.bat` / `run_test.bat` / `run_demo.bat`），它们会自动选
-`.venv` 或 PATH 上的 python 并设好 `PYTHONPATH`。macOS 上直接用上面的 CLI。
+Windows 侧入口是 `.bat`（`setup_windows.bat` / `run_test.bat` / `run_demo.bat` /
+`run_layout_txt.bat` / `build_layout_exe.bat`），它们会自动选 `.venv` 或 PATH 上的 python
+并设好 `PYTHONPATH`。macOS 上直接用上面的 CLI。
 
 **退出码是对外契约**（タスクスケジューラ / CI 依赖它）：`0`=全 OK、`1`=有 NG、`2`=设定错误、`3`=有「要確認」。
 
@@ -97,6 +115,56 @@ preflight → setup（清空/SQL/投入）→ 実行前快照+文件夹撮影 �
   已删除——它和 `autotest copy` / GUI 的複製按钮互斥，而且深合并的「列表整个替换」会让
   case 级的 `assert.db` 静默顶掉 defaults 继承的检查（断言变少、零警告，正是偽 OK 方向）。
   要共享共通部分，走**显式的按文件引用**（如 `sql: {file:}`），不要做隐式合并。
+
+## layout_txt 子系统
+
+从 Excel 的布局定义生成 OCR 取込测试用的数据。**和用例/DB/证迹体系完全无关**，
+改这边不会影响 autotest，反之亦然——但它住在 `src/autotest/` 下，所以同样受 3.6 兼容约束。
+
+- **`layout_txt.py`** 是核心：读 Excel，按固定顺序生成 CSV 形式的 1 行 = 1 数据单位
+  （FormID 情报 → 对象有无 → 之后 FieldID / OCR 文字识别结果 / 属性 flag / 座标 按对象项目数重复）。
+  OCR 值由 Excel 的 **I/J/K 列（数据型 / IME / 最大位数）** 决定。
+  **列位置和输出格式全部走命令引数**，就是为了不让「数据种别不同」变成复制一份代码。
+  生成的是**测试数据的变体**，这是这个工具存在的理由：`--profile normal|max|over`（正常值/最大位数/超长）、
+  `--date-mode`（和暦/西暦/跨年度 coverage 等）、`--error-patterns none|core|all`。
+  加新变体时优先加 flag，不要新开一个模块。
+- **`layout_tar.py`** 把正面/背面图像、识别结果 TXT、任意 CSV 打成一个 TAR。
+  正面用后缀 `F`、背面用 `R`；正面 TXT 保持既有 FORM 生成内容，只有背面 TXT 作为可编辑字段暴露。
+- **`layout_txt_gui.py`** 是独立 GUI（不是 autotest 那个 `gui.py`）。
+- **`layout_txt_settings.py`**：GUI 设定**刻意存在应用文件夹之外**——
+  `%APPDATA%\AUTO_TEST_BATCH\layout_txt_gui.json`（非 Windows 是 `~/.auto_test_batch/`），
+  可用环境变量 `AUTOTEST_LAYOUT_GUI_CONFIG` 覆盖。原因：分发形态是 onedir EXE 文件夹，
+  整包替换升级时写在里面的设定会被冲掉，而且那个目录可能只读。
+
+## EXE 打包与 CI
+
+layout_txt 要分发给没有 Python 的人，所以有一条独立的打包链。
+
+```bash
+build_layout_exe.bat --install    # 装 PyInstaller 4.10 后打包
+build_layout_exe.bat              # 环境已备好时
+#   可用 set LAYOUT_BUILD_PYTHON=C:\ProgramData\Anaconda3\python.exe 指定解释器
+```
+
+几个不写下来就会踩的点：
+
+- **PyInstaller 钉死 4.10**（`requirements-build-py36.txt`），因为那是支持 Python 3.6 的最后一条线。
+  BAT 会先检查解释器在 **3.6～3.10** 之间，不在就直接失败。
+- **`pyinstaller_compat.py`** 打的是 Anaconda 5.2 特有的坑：它那版 Python 3.6 把
+  `sysconfig._get_sysconfigdata_name` 的 `check_exists` 改成了必需参数，而 PyInstaller 4.10
+  按上游签名无参调用。补丁**只在签名确实要求位置参数时才打**，不无条件覆盖。
+- **产物是 onedir 不是单文件**：`dist/LayoutTxtGenerator/`。**要整个文件夹一起分发**，只拷 .exe 会跑不起来。
+- **`layout_txt_exe.py --smoke-test`** 只 import 全部运行时依赖（tkinter / openpyxl / Pillow / 两个 layout 模块）
+  而不开窗口。打包前后各跑一次——打包前验环境，打包后验产物。改依赖时记得同步这个 import 列表，
+  否则缺库要等用户双击才发现。
+
+CI 是 `.github/workflows/build-layout-exe.yml`（windows-2022 / Python **3.10.11**）：
+按 path 过滤触发 → 装 `openpyxl==3.0.10` `Pillow==9.5.0` `pytest==7.4.4` →
+**pytest** 跑 `test_layout_txt` / `test_layout_txt_exe` / `test_pyinstaller_compat` →
+`build_layout_exe.bat --install` → 上传 artifact。
+
+注意两件事：CI 用 3.10 构建，**真正保证 3.6 目标的是 `check_py36_compat.py` 而不是这条流水线**；
+以及新增 layout 相关文件时要同步 workflow 的 `paths:` 列表，否则改了不触发构建。
 
 ## 改代码时最要紧的一条：偽 OK 是最重的缺陷
 
