@@ -13,10 +13,14 @@ on:
       - "layout_txt_version_info.txt"
       - "pyinstaller_compat.py"
       - "requirements-build-py36.txt"
+      - "requirements-build-modern.txt"
+      - "src/autotest/layout_tar.py"
       - "src/autotest/layout_txt.py"
       - "src/autotest/layout_txt_gui.py"
       - "src/autotest/layout_txt_settings.py"
       - "tests/test_layout_txt.py"
+      - "tests/test_layout_tar.py"
+      - "tests/test_gui.py"
       - "tests/test_layout_txt_exe.py"
       - "tests/test_layout_txt_settings.py"
       - "tests/test_pyinstaller_compat.py"
@@ -42,6 +46,7 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-build-py36.txt
+            requirements-build-modern.txt
 
       - name: Install runtime and test dependencies
         shell: cmd
@@ -56,6 +61,8 @@ jobs:
         run: >-
           python -m pytest
           tests\test_layout_txt.py
+          tests\test_layout_tar.py
+          tests\test_gui.py
           tests\test_layout_txt_exe.py
           tests\test_pyinstaller_compat.py
           -q

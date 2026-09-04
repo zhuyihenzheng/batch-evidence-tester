@@ -3,7 +3,7 @@ rem ============================================================================
 rem  Layout TXT / TIF / TAR Generator - Windows EXE build
 rem
 rem  Usage:
-rem    build_layout_exe.bat --install   Install PyInstaller 4.10, then build
+rem    build_layout_exe.bat --install   Install the matching PyInstaller, then build
 rem    build_layout_exe.bat             Build with an already prepared env
 rem
 rem  Optional:
@@ -27,26 +27,35 @@ if errorlevel 1 (
     goto :error
 )
 
-"%BUILD_PYTHON%" -c "import sys; sys.exit(0 if (3, 6) <= sys.version_info[:2] <= (3, 10) else 1)"
+"%BUILD_PYTHON%" -c "import sys; sys.exit(0 if (3, 6) <= sys.version_info[:2] <= (3, 14) else 1)"
 if errorlevel 1 (
     echo.
-    echo PyInstaller 4.10 requires Python 3.6 through 3.10 for this build.
-    echo The target environment is Anaconda 5.2 / Python 3.6.5.
+    echo This build supports Python 3.6 through 3.14.
+    echo Python 3.6-3.10 uses PyInstaller 4.10; Python 3.11-3.14 uses 6.16.0.
     goto :error
 )
+
+set "BUILD_REQUIREMENTS=requirements-build-py36.txt"
+set "BUILD_PYINSTALLER_VERSION=4.10"
+"%BUILD_PYTHON%" -c "import sys; sys.exit(0 if sys.version_info[:2] <= (3, 10) else 1)"
+if errorlevel 1 (
+    set "BUILD_REQUIREMENTS=requirements-build-modern.txt"
+    set "BUILD_PYINSTALLER_VERSION=6.16.0"
+)
+echo Build profile: PyInstaller %BUILD_PYINSTALLER_VERSION% ^(%BUILD_REQUIREMENTS%^)
 
 if /I "%~1"=="--install" (
     echo.
     echo [2/5] Installing pinned build dependency
-    "%BUILD_PYTHON%" -m pip install -r requirements-build-py36.txt
+    "%BUILD_PYTHON%" -m pip install -r "%BUILD_REQUIREMENTS%"
     if errorlevel 1 goto :error
 ) else (
     echo.
     echo [2/5] Checking pinned build dependency
-    "%BUILD_PYTHON%" -c "import PyInstaller, sys; print('PyInstaller ' + PyInstaller.__version__); sys.exit(0 if PyInstaller.__version__ == '4.10' else 1)"
+    "%BUILD_PYTHON%" -c "import PyInstaller, sys; print('PyInstaller ' + PyInstaller.__version__); sys.exit(0 if PyInstaller.__version__ == sys.argv[1] else 1)" "%BUILD_PYINSTALLER_VERSION%"
     if errorlevel 1 (
         echo.
-        echo PyInstaller 4.10 is not installed in this Python environment.
+        echo PyInstaller %BUILD_PYINSTALLER_VERSION% is not installed in this Python environment.
         echo Run: build_layout_exe.bat --install
         goto :error
     )

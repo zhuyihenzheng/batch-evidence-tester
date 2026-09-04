@@ -1,0 +1,4 @@
+# Reproducible Windows EXE build for Python 3.11 through 3.14.
+# PyInstaller 6.16.0 supports Python 3.8-3.14; the legacy Python 3.6 path
+# remains pinned separately in requirements-build-py36.txt.
+pyinstaller==6.16.0

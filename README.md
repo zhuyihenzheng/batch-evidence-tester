@@ -1240,7 +1240,12 @@ python -m autotest.layout_txt layout.xlsx ^
 build_layout_exe.bat --install
 ```
 
-首次执行会安装固定版本 `PyInstaller 4.10`，然后构建并自动做依赖冒烟检查。完成后的程序位于：
+首次执行会根据当前 Python 自动安装固定版本的 PyInstaller，然后构建并自动做依赖冒烟检查：
+
+- Python 3.6～3.10：`PyInstaller 4.10`（兼容 Anaconda 5.2）
+- Python 3.11～3.14：`PyInstaller 6.16.0`
+
+完成后的程序位于：
 
 ```text
 dist\LayoutTxtGenerator\LayoutTxtGenerator.exe
@@ -1258,7 +1263,7 @@ build_layout_exe.bat --install
 ```
 
 PyInstaller不是交叉编译器，因此Windows EXE必须在Windows上构建；macOS/Linux只能验证源码和
-spec，不能产出可运行的Windows EXE。构建环境支持Python 3.6～3.10，本项目基准为
+spec，不能产出可运行的Windows EXE。构建环境支持Python 3.6～3.14，本项目基准为
 Anaconda 5.2 / Python 3.6.5。
 
 推送上述相关文件到 `main` 后，GitHub Actions的 `Build Layout Generator EXE` 也会自动
