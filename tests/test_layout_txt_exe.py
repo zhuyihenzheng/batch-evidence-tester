@@ -63,18 +63,12 @@ def test_smoke_test_exercises_excel_txt_tif_and_tar(monkeypatch, tmp_path):
     created_temp = tmp_path / "smoke"
     created_temp.mkdir()
 
-    class FixedTemporaryDirectory(object):
-        def __init__(self, prefix):
-            self.path = str(created_temp)
-
-        def __enter__(self):
-            return self.path
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            return False
-
     monkeypatch.setattr(
-        layout_txt_exe.tempfile, "TemporaryDirectory", FixedTemporaryDirectory)
+        layout_txt_exe.tempfile, "mkdtemp",
+        lambda prefix: str(created_temp))
+    monkeypatch.setattr(
+        layout_txt_exe, "_cleanup_smoke_directory",
+        lambda path: True)
 
     assert layout_txt_exe._functional_smoke_test() == 0
     assert (created_temp / "output" / "1001.txt").is_file()
@@ -83,6 +77,42 @@ def test_smoke_test_exercises_excel_txt_tif_and_tar(monkeypatch, tmp_path):
     assert package.is_file()
     with tarfile.open(str(package), "r") as archive:
         assert archive.getnames() == ["1001.txt", "1001.tif"]
+
+
+def test_smoke_cleanup_retries_transient_windows_file_lock(monkeypatch, tmp_path):
+    created_temp = tmp_path / "locked"
+    created_temp.mkdir()
+    attempts = []
+    real_rmtree = layout_txt_exe.shutil.rmtree
+
+    def flaky_rmtree(path):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise PermissionError(32, "file is being used", "smoke.xlsx")
+        real_rmtree(path)
+
+    monkeypatch.setattr(layout_txt_exe.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(layout_txt_exe.time, "sleep", lambda delay: None)
+
+    assert layout_txt_exe._cleanup_smoke_directory(
+        created_temp, attempts=2, delay=0) is True
+    assert len(attempts) == 2
+    assert not created_temp.exists()
+
+
+def test_smoke_cleanup_does_not_fail_build_for_persistent_lock(
+        monkeypatch, tmp_path):
+    created_temp = tmp_path / "locked"
+    created_temp.mkdir()
+
+    def locked_rmtree(path):
+        raise PermissionError(32, "file is being used", "smoke.xlsx")
+
+    monkeypatch.setattr(layout_txt_exe.shutil, "rmtree", locked_rmtree)
+    monkeypatch.setattr(layout_txt_exe.time, "sleep", lambda delay: None)
+
+    assert layout_txt_exe._cleanup_smoke_directory(
+        created_temp, attempts=2, delay=0) is False
 
 
 def test_spec_excludes_unrelated_broken_anaconda_gevent_packages():

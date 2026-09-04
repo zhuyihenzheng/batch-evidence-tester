@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """Windows EXE entry point for the Layout TXT/TIF/TAR generator."""
 
+import gc
+import shutil
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -19,6 +22,21 @@ def _prepare_source_path():
             sys.path.insert(0, source_text)
 
 
+def _cleanup_smoke_directory(path, attempts=10, delay=0.1):
+    """Best-effort cleanup that tolerates transient Windows file locks."""
+    gc.collect()
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(str(path))
+            return True
+        except OSError:
+            if not Path(path).exists():
+                return True
+            if attempt + 1 < attempts:
+                time.sleep(delay)
+    return False
+
+
 def _functional_smoke_test():
     """Exercise the packaged Excel -> TXT/TIF/TAR generation path."""
     from openpyxl import Workbook
@@ -26,8 +44,8 @@ def _functional_smoke_test():
 
     from autotest.layout_txt import generate_layout_txt
 
-    with tempfile.TemporaryDirectory(prefix="layout_txt_smoke_") as temp_dir:
-        root = Path(temp_dir)
+    root = Path(tempfile.mkdtemp(prefix="layout_txt_smoke_"))
+    try:
         workbook_path = root / "smoke.xlsx"
         output_dir = root / "output"
         workbook = Workbook()
@@ -56,6 +74,13 @@ def _functional_smoke_test():
         with tarfile.open(str(result.tar_file), "r") as archive:
             if sorted(archive.getnames()) != sorted(result.archive_members):
                 raise RuntimeError("Smoke TAR members do not match generated files")
+    finally:
+        if not _cleanup_smoke_directory(root):
+            print(
+                "Warning: Windows is still using the smoke-test directory; "
+                "temporary files were left at %s" % root,
+                file=sys.stderr,
+            )
 
     return 0
 

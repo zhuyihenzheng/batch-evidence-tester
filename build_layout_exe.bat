@@ -117,8 +117,8 @@ set "PYTHONPATH=%CD%\src"
 "%BUILD_PYTHON%" layout_txt_exe.py --smoke-test
 if errorlevel 1 (
     echo.
-    echo openpyxl, Pillow, tkinter, or the Layout generator could not be imported.
-    echo Run setup_windows.bat, then retry this build.
+    echo Runtime dependency check or Excel/TXT/TIF/TAR smoke test failed.
+    echo Review the traceback above. If an import is missing, run setup_windows.bat.
     goto :error
 )
 
