@@ -20,6 +20,8 @@ from autotest.layout_tar import (  # noqa: E402
     format_package_tar_name,
     matching_back_image,
     matching_recognition_file,
+    existing_package_output_paths,
+    package_output_paths,
     parse_extra_fields,
     parse_manifest_columns,
 )
@@ -256,6 +258,18 @@ class TestLayoutImageTar(unittest.TestCase):
 
         build_image_tar([item], self.tmp, "protected", overwrite=True)
         self.assertNotEqual(target.read_bytes(), b"old")
+
+    def test_package_output_paths_match_sanitised_build_targets(self):
+        tar_file, view_folder = package_output_paths(
+            self.tmp, "renamed:package.tar")
+        self.assertEqual(tar_file, self.tmp / "renamed_package.tar")
+        self.assertEqual(view_folder, self.tmp / "renamed_package")
+
+        tar_file.write_bytes(b"old")
+        view_folder.mkdir()
+        self.assertEqual(
+            existing_package_output_paths(self.tmp, "renamed:package.tar"),
+            [tar_file, view_folder])
 
     def test_existing_view_folder_is_protected_and_replaced_with_overwrite(self):
         folder = self.tmp / "folder_protected"

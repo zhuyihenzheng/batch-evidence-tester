@@ -3,6 +3,7 @@
 
 import queue
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -17,11 +18,13 @@ try:
     import tkinter  # noqa: F401
 except ImportError:
     tkinter_stub = types.ModuleType("tkinter")
+    tkinter_stub.filedialog = types.SimpleNamespace()
     tkinter_stub.messagebox = types.SimpleNamespace()
     tkinter_stub.ttk = types.SimpleNamespace()
     sys.modules["tkinter"] = tkinter_stub
 
 from autotest import gui  # noqa: E402
+from autotest import layout_txt_gui  # noqa: E402
 from autotest.layout_tar import next_numbered_base_name  # noqa: E402
 
 
@@ -87,6 +90,41 @@ class LayoutPackageFilenameCase(unittest.TestCase):
             "BASE_NAME_002_F.TIF",
             "BASE_NAME_003_F.TIF",
         ])
+
+    def test_existing_package_requires_confirmation_before_overwrite(self):
+        with tempfile.TemporaryDirectory(prefix="package_confirm_") as temp_dir:
+            output = Path(temp_dir)
+            (output / "renamed.tar").write_bytes(b"old")
+            holder = types.SimpleNamespace(
+                overwrite_var=mock.Mock(), root=object(), status_var=mock.Mock())
+            holder.overwrite_var.get.return_value = True
+
+            with mock.patch.object(
+                    layout_txt_gui.messagebox, "askyesno",
+                    return_value=False, create=True) as confirm:
+                accepted = layout_txt_gui.LayoutTxtGui._confirm_package_overwrite(
+                    holder, output, "renamed")
+
+            self.assertFalse(accepted)
+            confirm.assert_called_once()
+            self.assertIn("renamed.tar", confirm.call_args.args[1])
+            holder.status_var.set.assert_called_once_with(
+                "TARの上書きをキャンセルしました。")
+
+    def test_new_package_does_not_show_overwrite_confirmation(self):
+        with tempfile.TemporaryDirectory(prefix="package_confirm_") as temp_dir:
+            holder = types.SimpleNamespace(
+                overwrite_var=mock.Mock(), root=object(), status_var=mock.Mock())
+            holder.overwrite_var.get.return_value = True
+
+            with mock.patch.object(
+                    layout_txt_gui.messagebox, "askyesno",
+                    create=True) as confirm:
+                accepted = layout_txt_gui.LayoutTxtGui._confirm_package_overwrite(
+                    holder, Path(temp_dir), "new_package")
+
+            self.assertTrue(accepted)
+            confirm.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -457,6 +457,31 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(str(path))
 
 
+def package_output_paths(output_dir: Path, tar_name: str,
+                         create_view_folder: bool = True
+                         ) -> Tuple[Path, Optional[Path]]:
+    """Return the exact TAR/folder paths after filename sanitisation."""
+    raw_tar_name = str(tar_name or "image_package").strip()
+    if raw_tar_name.lower().endswith(".tar"):
+        raw_tar_name = raw_tar_name[:-4]
+    safe_tar_stem = _safe_name(raw_tar_name, "image_package")
+    output_path = Path(output_dir)
+    tar_file = output_path / (safe_tar_stem + ".tar")
+    view_folder = output_path / safe_tar_stem if create_view_folder else None
+    return tar_file, view_folder
+
+
+def existing_package_output_paths(output_dir: Path, tar_name: str,
+                                  create_view_folder: bool = True) -> List[Path]:
+    """Return existing targets that a package build would replace."""
+    tar_file, view_folder = package_output_paths(
+        output_dir, tar_name, create_view_folder=create_view_folder)
+    targets = [tar_file]
+    if view_folder is not None:
+        targets.append(view_folder)
+    return [path for path in targets if _path_exists(path)]
+
+
 def _publish_package_outputs(output_dir: Path, tar_file: Path,
                              tar_payload: bytes,
                              rendered: Sequence[Tuple[str, bytes]],
@@ -607,13 +632,9 @@ def build_image_tar(items: Sequence[PackageItem], output_dir: Path,
             manifest_payload))
         seen.add(folded)
 
-    raw_tar_name = str(tar_name or "image_package").strip()
-    if raw_tar_name.lower().endswith(".tar"):
-        raw_tar_name = raw_tar_name[:-4]
     output_dir = Path(output_dir)
-    safe_tar_stem = _safe_name(raw_tar_name, "image_package")
-    tar_file = output_dir / (safe_tar_stem + ".tar")
-    view_folder = output_dir / safe_tar_stem if create_view_folder else None
+    tar_file, view_folder = package_output_paths(
+        output_dir, tar_name, create_view_folder=create_view_folder)
 
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:

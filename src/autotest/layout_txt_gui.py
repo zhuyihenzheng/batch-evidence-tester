@@ -33,6 +33,7 @@ from .layout_tar import (
     PackageItem,
     base_name_from_front,
     build_image_tar,
+    existing_package_output_paths,
     format_package_tar_name,
     format_extra_fields,
     matching_back_image,
@@ -1394,6 +1395,23 @@ class LayoutTxtGui(object):
             self.tar_name_var.get(), self.package_tar_name_var.get(),
             include_manifest, source, [item.form_id for item in items])
 
+    def _confirm_package_overwrite(self, output_dir: Path, tar_name: str) -> bool:
+        if not self.overwrite_var.get():
+            return True
+        existing = existing_package_output_paths(
+            output_dir, tar_name, create_view_folder=True)
+        if not existing:
+            return True
+        targets = "\n".join("・%s" % path for path in existing)
+        confirmed = messagebox.askyesno(
+            "既存ファイルの上書き確認",
+            "次の既存ファイル／フォルダは削除して置き換えられます。\n\n"
+            "%s\n\n元に戻せません。上書きしてよろしいですか？" % targets,
+            icon="warning", parent=self.root)
+        if not confirmed:
+            self.status_var.set("TARの上書きをキャンセルしました。")
+        return confirmed
+
     def _run_package(self, include_manifest: bool) -> None:
         output_raw = self.output_var.get().strip()
         if not output_raw:
@@ -1407,10 +1425,14 @@ class LayoutTxtGui(object):
             columns = None
             if include_manifest and manifest_style == "custom":
                 columns = parse_manifest_columns(self.manifest_columns_var.get())
+            output_dir = Path(output_raw)
+            tar_name = self._custom_package_tar_name(items, include_manifest)
+            if not self._confirm_package_overwrite(output_dir, tar_name):
+                return
             result = build_image_tar(
                 items=items,
-                output_dir=Path(output_raw),
-                tar_name=self._custom_package_tar_name(items, include_manifest),
+                output_dir=output_dir,
+                tar_name=tar_name,
                 include_recognition_txt=not include_manifest,
                 include_manifest_csv=include_manifest,
                 manifest_name=self.manifest_name_var.get().strip(),
