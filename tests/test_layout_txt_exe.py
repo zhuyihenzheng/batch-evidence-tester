@@ -37,3 +37,11 @@ def test_build_script_selects_modern_profile_for_new_python():
     assert "(3, 14)" in script
     assert "requirements-build-modern.txt" in script
     assert "BUILD_PYINSTALLER_VERSION=6.16.0" in script
+
+
+def test_build_script_removes_obsolete_typing_backport():
+    root = Path(layout_txt_exe.__file__).resolve().parent
+    script = (root / "build_layout_exe.bat").read_text()
+    assert "pip show typing" in script
+    assert "pip uninstall -y typing" in script
+    assert "conda remove typing" in script

@@ -61,6 +61,31 @@ if /I "%~1"=="--install" (
     )
 )
 
+rem Python 3.5+ already includes typing in the standard library. Some old
+rem Anaconda environments also contain the obsolete backport distribution,
+rem which PyInstaller intentionally refuses to build with. Remove only that
+rem distribution from the explicitly selected build interpreter.
+"%BUILD_PYTHON%" -m pip show typing >nul 2>nul
+if not errorlevel 1 (
+    echo.
+    echo Removing obsolete typing backport that conflicts with PyInstaller...
+    "%BUILD_PYTHON%" -m pip uninstall -y typing
+    if errorlevel 1 (
+        echo.
+        echo Could not remove the obsolete typing backport automatically.
+        echo Run this in the same Anaconda environment, then retry:
+        echo   conda remove typing
+        goto :error
+    )
+    "%BUILD_PYTHON%" -m pip show typing >nul 2>nul
+    if not errorlevel 1 (
+        echo.
+        echo The obsolete typing backport is still installed.
+        echo Run: conda remove typing
+        goto :error
+    )
+)
+
 echo.
 echo [3/5] Checking runtime dependencies
 set "PYTHONPATH=%CD%\src"
