@@ -225,6 +225,7 @@ python -m autotest run --config config\settings.demo.yaml --offline
 | PowerShell 里 `conda activate` 报错 | Anaconda 5.2 的 conda 4.5 不支持。换 **Command Prompt** 终端，用 `activate base` |
 | `ModuleNotFoundError: No module named 'autotest'` | 没设 `PYTHONPATH=src`，或没在项目根目录下执行 |
 | PyInstaller 提示 `typing package is an obsolete backport` | 旧 Anaconda 重复安装了 `typing` backport。新版 `build_layout_exe.bat` 会通过 pip 自动移除；不要使用会触发旧 conda solver 的 `conda remove typing` |
+| `No metadata path found for distribution 'greenlet'` | 旧 Anaconda 的 `gevent/greenlet` 元数据不完整。Layout 工具不使用这两个包，新版 `layout_txt.spec` 已明确排除，更新代码后重新构建即可 |
 | 终端里日文乱码 | 先敲 `chcp 65001` 切到 UTF-8 |
 | 右下角解释器和终端里的 `python` 不一致 | VSCode 的解释器设置只影响运行/调试，不改终端 PATH。以 `check_env.py` 输出的 `sys.executable` 为准 |
 
@@ -1235,10 +1236,14 @@ python -m autotest.layout_txt layout.xlsx ^
 
 ### 构建Windows EXE
 
-在目标Windows机器的 **Anaconda Prompt** 中执行：
+在目标 Windows 机器的 **Anaconda Prompt** 中，可以选择两种打包模式：
 
 ```cmd
-build_layout_exe.bat --install
+:: 默认：稳定的文件夹模式，必须分发整个文件夹
+build_layout_exe.bat --onedir --install
+
+:: 单文件模式，只需分发一个 EXE
+build_layout_exe.bat --onefile --install
 ```
 
 首次执行会根据当前 Python 自动安装固定版本的 PyInstaller，然后构建并自动做依赖冒烟检查：
@@ -1249,15 +1254,17 @@ build_layout_exe.bat --install
 旧 Anaconda 如果安装了与 PyInstaller 冲突的 `typing` backport，构建脚本会先从选中的
 Python 环境中移除它；Python 3.6 自带的标准库 `typing` 不受影响。
 
-完成后的程序位于：
+两种模式的输出位置分别是：
 
 ```text
-dist\LayoutTxtGenerator\LayoutTxtGenerator.exe
+onedir : dist\LayoutTxtGenerator\LayoutTxtGenerator.exe
+onefile: dist\LayoutTxtGenerator.exe
 ```
 
-这是稳定性优先的 `onedir` 版本。交付时请复制整个
-`dist\LayoutTxtGenerator` 文件夹，不能只复制其中的EXE。目标电脑不需要另外安装Python。
-以后构建环境不变时直接执行 `build_layout_exe.bat` 即可。
+不指定 `--onedir` / `--onefile` 时默认使用稳定性优先的 `onedir`。该模式交付时必须复制整个
+`dist\LayoutTxtGenerator` 文件夹；`onefile` 模式只需复制 `dist\LayoutTxtGenerator.exe`，
+但首次启动通常更慢。两种模式的目标电脑都不需要另外安装 Python。依赖已经安装后可以省略
+`--install`，例如执行 `build_layout_exe.bat --onefile`。
 
 如果要明确使用Anaconda 5.2的Python：
 

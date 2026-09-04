@@ -45,3 +45,21 @@ def test_build_script_removes_obsolete_typing_backport():
     assert "pip show typing" in script
     assert "pip uninstall -y typing" in script
     assert "Do not use conda remove" in script
+
+
+def test_build_script_supports_onedir_and_onefile_modes():
+    root = Path(layout_txt_exe.__file__).resolve().parent
+    script = (root / "build_layout_exe.bat").read_text()
+    spec = (root / "layout_txt.spec").read_text()
+    assert "--onefile" in script
+    assert "--onedir" in script
+    assert "LAYOUT_BUILD_MODE=%BUILD_MODE%" in script
+    assert 'os.environ.get("LAYOUT_BUILD_MODE", "onedir")' in spec
+    assert 'if build_mode == "onefile"' in spec
+
+
+def test_spec_excludes_unrelated_broken_anaconda_gevent_packages():
+    root = Path(layout_txt_exe.__file__).resolve().parent
+    spec = (root / "layout_txt.spec").read_text()
+    assert '"gevent"' in spec
+    assert '"greenlet"' in spec

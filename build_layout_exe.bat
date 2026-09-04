@@ -3,8 +3,10 @@ rem ============================================================================
 rem  Layout TXT / TIF / TAR Generator - Windows EXE build
 rem
 rem  Usage:
-rem    build_layout_exe.bat --install   Install the matching PyInstaller, then build
-rem    build_layout_exe.bat             Build with an already prepared env
+rem    build_layout_exe.bat --install            Install dependencies; build onedir
+rem    build_layout_exe.bat --onefile            Build one distributable EXE
+rem    build_layout_exe.bat --onefile --install  Combine options in any order
+rem    build_layout_exe.bat --onedir             Explicitly build the default mode
 rem
 rem  Optional:
 rem    set LAYOUT_BUILD_PYTHON=C:\ProgramData\Anaconda3\python.exe
@@ -13,6 +15,26 @@ setlocal
 cd /d "%~dp0"
 chcp 65001 > nul
 
+set "INSTALL_DEPS=0"
+set "BUILD_MODE=onedir"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /I "%~1"=="--install" (
+    set "INSTALL_DEPS=1"
+) else if /I "%~1"=="--onefile" (
+    set "BUILD_MODE=onefile"
+) else if /I "%~1"=="--onedir" (
+    set "BUILD_MODE=onedir"
+) else (
+    echo Unknown option: %~1
+    echo Usage: build_layout_exe.bat [--install] [--onedir ^| --onefile]
+    goto :error
+)
+shift
+goto :parse_args
+
+:args_done
 set "BUILD_PYTHON="
 if defined LAYOUT_BUILD_PYTHON set "BUILD_PYTHON=%LAYOUT_BUILD_PYTHON%"
 if not defined BUILD_PYTHON if exist ".venv\Scripts\python.exe" set "BUILD_PYTHON=%CD%\.venv\Scripts\python.exe"
@@ -43,8 +65,9 @@ if errorlevel 1 (
     set "BUILD_PYINSTALLER_VERSION=6.16.0"
 )
 echo Build profile: PyInstaller %BUILD_PYINSTALLER_VERSION% ^(%BUILD_REQUIREMENTS%^)
+echo Package mode: %BUILD_MODE%
 
-if /I "%~1"=="--install" (
+if "%INSTALL_DEPS%"=="1" (
     echo.
     echo [2/5] Installing pinned build dependency
     "%BUILD_PYTHON%" -m pip install -r "%BUILD_REQUIREMENTS%"
@@ -100,17 +123,23 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/5] Building onedir Windows application
+echo [4/5] Building %BUILD_MODE% Windows application
+set "LAYOUT_BUILD_MODE=%BUILD_MODE%"
 "%BUILD_PYTHON%" -m PyInstaller --noconfirm --clean layout_txt.spec
 if errorlevel 1 goto :error
 
 echo.
 echo [5/5] Verifying packaged application
-if not exist "dist\LayoutTxtGenerator\LayoutTxtGenerator.exe" (
+if /I "%BUILD_MODE%"=="onefile" (
+    set "PACKAGED_EXE=%CD%\dist\LayoutTxtGenerator.exe"
+) else (
+    set "PACKAGED_EXE=%CD%\dist\LayoutTxtGenerator\LayoutTxtGenerator.exe"
+)
+if not exist "%PACKAGED_EXE%" (
     echo EXE was not created at the expected path.
     goto :error
 )
-start "" /wait "dist\LayoutTxtGenerator\LayoutTxtGenerator.exe" --smoke-test
+start "" /wait "%PACKAGED_EXE%" --smoke-test
 if errorlevel 1 (
     echo Packaged application smoke test failed.
     goto :error
@@ -119,10 +148,13 @@ if errorlevel 1 (
 echo.
 echo ============================================================================
 echo Build completed successfully.
-echo Distribute this entire folder, not only the EXE:
-echo   %CD%\dist\LayoutTxtGenerator
+if /I "%BUILD_MODE%"=="onefile" (
+    echo Distribute this single EXE:
+) else (
+    echo Distribute this entire folder, not only the EXE:
+)
 echo Start application:
-echo   %CD%\dist\LayoutTxtGenerator\LayoutTxtGenerator.exe
+echo   %PACKAGED_EXE%
 echo ============================================================================
 exit /b 0
 

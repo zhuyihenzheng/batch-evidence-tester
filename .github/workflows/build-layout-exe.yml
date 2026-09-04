@@ -72,10 +72,22 @@ jobs:
         shell: cmd
         run: build_layout_exe.bat --install
 
+      - name: Build and smoke-test single-file EXE
+        shell: cmd
+        run: build_layout_exe.bat --onefile
+
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
           name: LayoutTxtGenerator-windows-x64
           path: dist/LayoutTxtGenerator
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload single-file Windows application
+        uses: actions/upload-artifact@v4
+        with:
+          name: LayoutTxtGenerator-windows-x64-onefile
+          path: dist/LayoutTxtGenerator.exe
           if-no-files-found: error
           retention-days: 30
