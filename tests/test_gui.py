@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """操作画面の子プロセス出力に関する回帰テスト。"""
 
+import os
 import queue
 import sys
 import tempfile
@@ -38,7 +39,7 @@ class GuiSubprocessEncodingCase(unittest.TestCase):
 
         gui.AutotestGui._reader(holder, proc)
 
-        self.assertEqual(holder.queue.get(), ("line", text + "\n"))
+        self.assertEqual(holder.queue.get(), ("line", text + os.linesep))
         self.assertEqual(holder.queue.get(), ("exit", 0))
 
 
