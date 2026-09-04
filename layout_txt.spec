@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files
 
 
 project_root = Path(SPECPATH)
@@ -17,7 +17,11 @@ from pyinstaller_compat import patch_anaconda_sysconfig
 
 patch_anaconda_sysconfig()
 
-hidden_imports = collect_submodules("openpyxl") + collect_submodules("PIL")
+# PyInstaller's built-in openpyxl/Pillow hooks already collect their required
+# modules. Collecting every submodule here also follows optional imports into
+# large packages present in Anaconda (NumPy/Pandas/MKL/Qt), inflating this
+# small application to hundreds of megabytes.
+hidden_imports = []
 data_files = collect_data_files("openpyxl")
 
 block_cipher = None
@@ -38,7 +42,12 @@ a = Analysis(
     # Anaconda installations gevent/greenlet metadata is often incomplete;
     # allowing PyInstaller to discover it loads hook-gevent and aborts the
     # otherwise unrelated build.
-    excludes=["mss", "pyodbc", "yaml", "gevent", "greenlet"],
+    excludes=[
+        "mss", "pyodbc", "yaml", "gevent", "greenlet",
+        "numpy", "pandas", "scipy", "matplotlib",
+        "IPython", "jupyter", "notebook",
+        "PyQt5", "PyQt6", "PySide2", "PySide6",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

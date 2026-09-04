@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import tarfile
 from pathlib import Path
 
 import layout_txt_exe
@@ -58,8 +59,42 @@ def test_build_script_supports_onedir_and_onefile_modes():
     assert 'if build_mode == "onefile"' in spec
 
 
+def test_smoke_test_exercises_excel_txt_tif_and_tar(monkeypatch, tmp_path):
+    created_temp = tmp_path / "smoke"
+    created_temp.mkdir()
+
+    class FixedTemporaryDirectory(object):
+        def __init__(self, prefix):
+            self.path = str(created_temp)
+
+        def __enter__(self):
+            return self.path
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    monkeypatch.setattr(
+        layout_txt_exe.tempfile, "TemporaryDirectory", FixedTemporaryDirectory)
+
+    assert layout_txt_exe._functional_smoke_test() == 0
+    assert (created_temp / "output" / "1001.txt").is_file()
+    assert (created_temp / "output" / "1001.tif").is_file()
+    package = created_temp / "output" / "smoke_package.tar"
+    assert package.is_file()
+    with tarfile.open(str(package), "r") as archive:
+        assert archive.getnames() == ["1001.txt", "1001.tif"]
+
+
 def test_spec_excludes_unrelated_broken_anaconda_gevent_packages():
     root = Path(layout_txt_exe.__file__).resolve().parent
     spec = (root / "layout_txt.spec").read_text()
     assert '"gevent"' in spec
     assert '"greenlet"' in spec
+
+
+def test_spec_does_not_bundle_large_optional_anaconda_packages():
+    root = Path(layout_txt_exe.__file__).resolve().parent
+    spec = (root / "layout_txt.spec").read_text()
+    assert "collect_submodules" not in spec
+    for package in ("numpy", "pandas", "scipy", "matplotlib", "PyQt5"):
+        assert '"%s"' % package in spec

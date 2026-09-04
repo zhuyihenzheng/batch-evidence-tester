@@ -1266,6 +1266,10 @@ onefile: dist\LayoutTxtGenerator.exe
 但首次启动通常更慢。两种模式的目标电脑都不需要另外安装 Python。依赖已经安装后可以省略
 `--install`，例如执行 `build_layout_exe.bat --onefile`。
 
+构建配置只收集 Layout 工具实际使用的模块，并排除 Anaconda 中常见但未使用的
+NumPy、Pandas、MKL、Qt 等大型可选依赖。GitHub Actions 的最小 Windows 环境生成的
+单文件 EXE 约十几 MB；不同 Python/Pillow 版本会让大小略有变化，但不应达到数百 MB。
+
 如果要明确使用Anaconda 5.2的Python：
 
 ```cmd
