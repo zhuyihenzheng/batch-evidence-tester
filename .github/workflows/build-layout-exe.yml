@@ -54,6 +54,7 @@ jobs:
           python -m pip install
           openpyxl==3.0.10
           Pillow==9.5.0
+          PyYAML==6.0.2
           pytest==7.4.4
 
       - name: Run Layout generator tests
