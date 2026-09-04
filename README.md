@@ -1055,11 +1055,16 @@ run_layout_txt.bat
    「全FORM_IDを直接出力」。
 6. 需要把不同 `FORM_ID` 或外部图片组合到一个 TAR 时，使用「TAR出力リスト」。
 
-当前设置可以通过「設定を保存」立即保存。程序关闭时也会自动保存，Windows 默认位置：
+当前设置可以通过「設定を保存」立即保存。程序关闭时也会自动保存。打包后的 Windows
+程序会将配置保存在 EXE 同一目录：
 
 ```text
-%APPDATA%\AUTO_TEST_BATCH\layout_txt_gui.json
+layout_txt_gui.json
 ```
+
+因此复制 `onedir` 文件夹或移动 `onefile` EXE 时，可以把这个 JSON 一起复制，继续使用
+原来的画面设置。直接从源码运行时仍使用 `%APPDATA%\AUTO_TEST_BATCH`；如需指定其他位置，
+可设置环境变量 `AUTOTEST_LAYOUT_GUI_CONFIG`。
 
 窗口会根据当前屏幕尺寸自动调整。小屏幕上如果内容超过可视区域，可使用窗口右侧和底部的
 滚动条访问全部设置；输出列表和项目表格仍保留各自的滚动条。

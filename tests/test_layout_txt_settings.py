@@ -43,6 +43,15 @@ class TestLayoutTxtSettings(unittest.TestCase):
         with mock.patch.dict("os.environ", {CONFIG_ENV: str(self.path)}):
             self.assertEqual(default_settings_path(), self.path)
 
+    def test_frozen_application_stores_settings_next_to_executable(self):
+        executable = self.tmp / "dist" / "LayoutTxtGenerator.exe"
+        with mock.patch.dict("os.environ", {}, clear=True), \
+                mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "executable", str(executable)):
+            self.assertEqual(
+                default_settings_path(),
+                executable.resolve().parent / "layout_txt_gui.json")
+
     def test_invalid_json_is_reported(self):
         self.path.parent.mkdir(parents=True)
         self.path.write_text("{invalid", encoding="utf-8")

@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Layout generator GUI settings stored outside the application folder."""
+"""Layout generator GUI settings persistence."""
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
 
 CONFIG_ENV = "AUTOTEST_LAYOUT_GUI_CONFIG"
+CONFIG_FILENAME = "layout_txt_gui.json"
 
 
 class LayoutGuiSettingsError(Exception):
@@ -19,10 +21,13 @@ def default_settings_path():
     if override:
         return Path(override).expanduser()
 
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / CONFIG_FILENAME
+
     app_data = os.environ.get("APPDATA", "").strip()
     if os.name == "nt" and app_data:
-        return Path(app_data) / "AUTO_TEST_BATCH" / "layout_txt_gui.json"
-    return Path.home() / ".auto_test_batch" / "layout_txt_gui.json"
+        return Path(app_data) / "AUTO_TEST_BATCH" / CONFIG_FILENAME
+    return Path.home() / ".auto_test_batch" / CONFIG_FILENAME
 
 
 def load_settings(path=None):
