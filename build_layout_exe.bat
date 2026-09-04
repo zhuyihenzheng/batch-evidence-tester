@@ -73,15 +73,17 @@ if not errorlevel 1 (
     if errorlevel 1 (
         echo.
         echo Could not remove the obsolete typing backport automatically.
-        echo Run this in the same Anaconda environment, then retry:
-        echo   conda remove typing
+        echo Do not use conda remove; old conda solvers may fail before removal.
+        echo Run this with the selected Python, then retry:
+        echo   "%BUILD_PYTHON%" -m pip uninstall -y typing
         goto :error
     )
     "%BUILD_PYTHON%" -m pip show typing >nul 2>nul
     if not errorlevel 1 (
         echo.
         echo The obsolete typing backport is still installed.
-        echo Run: conda remove typing
+        echo Do not use conda remove. Check this command's full output:
+        echo   "%BUILD_PYTHON%" -m pip uninstall -y typing
         goto :error
     )
 )

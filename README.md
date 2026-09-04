@@ -224,7 +224,7 @@ python -m autotest run --config config\settings.demo.yaml --offline
 | `python` 提示不是内部或外部命令 | Anaconda 没加进 PATH。用 **Anaconda Prompt**，或填全路径 `C:\ProgramData\Anaconda3\python.exe` |
 | PowerShell 里 `conda activate` 报错 | Anaconda 5.2 的 conda 4.5 不支持。换 **Command Prompt** 终端，用 `activate base` |
 | `ModuleNotFoundError: No module named 'autotest'` | 没设 `PYTHONPATH=src`，或没在项目根目录下执行 |
-| PyInstaller 提示 `typing package is an obsolete backport` | 旧 Anaconda 重复安装了 `typing` backport。新版 `build_layout_exe.bat` 会自动移除；也可先执行 `conda remove typing` |
+| PyInstaller 提示 `typing package is an obsolete backport` | 旧 Anaconda 重复安装了 `typing` backport。新版 `build_layout_exe.bat` 会通过 pip 自动移除；不要使用会触发旧 conda solver 的 `conda remove typing` |
 | 终端里日文乱码 | 先敲 `chcp 65001` 切到 UTF-8 |
 | 右下角解释器和终端里的 `python` 不一致 | VSCode 的解释器设置只影响运行/调试，不改终端 PATH。以 `check_env.py` 输出的 `sys.executable` 为准 |
 

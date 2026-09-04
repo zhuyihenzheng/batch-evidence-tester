@@ -44,4 +44,4 @@ def test_build_script_removes_obsolete_typing_backport():
     script = (root / "build_layout_exe.bat").read_text()
     assert "pip show typing" in script
     assert "pip uninstall -y typing" in script
-    assert "conda remove typing" in script
+    assert "Do not use conda remove" in script
