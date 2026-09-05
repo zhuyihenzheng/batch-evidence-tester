@@ -128,5 +128,51 @@ class LayoutPackageFilenameCase(unittest.TestCase):
             confirm.assert_not_called()
 
 
+@unittest.skipUnless(os.name == "nt", "Actual Windows Tk layout check")
+class LayoutSmallScreenCase(unittest.TestCase):
+    def test_controls_fit_without_page_horizontal_scrolling(self):
+        root = layout_txt_gui.tk.Tk()
+        self.addCleanup(root.destroy)
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                    layout_txt_gui, "default_settings_path",
+                    return_value=Path(directory) / "settings.json"):
+                app = layout_txt_gui.LayoutTxtGui(root)
+
+            def descendants(widget):
+                for child in widget.winfo_children():
+                    yield child
+                    for nested in descendants(child):
+                        yield nested
+
+            # 1280px screen with window margins, plus resizing and larger fonts.
+            for scaling, width in ((1.333, 1240), (1.333, 1000), (1.667, 1240)):
+                with self.subTest(scaling=scaling, width=width):
+                    root.tk.call("tk", "scaling", scaling)
+                    root.geometry("%dx668+0+0" % width)
+                    root.update()
+                    canvas = app.content_canvas
+                    self.assertEqual(canvas.xview(), (0.0, 1.0))
+                    left = canvas.winfo_rootx()
+                    right = left + canvas.winfo_width()
+                    for widget in descendants(app.content_frame):
+                        if widget.winfo_class() not in (
+                                "TButton", "TEntry", "TCombobox", "TCheckbutton"):
+                            continue
+                        label = "%s %s" % (widget, widget.winfo_class())
+                        self.assertGreater(widget.winfo_width(), 1, label)
+                        self.assertGreaterEqual(widget.winfo_rootx(), left, label)
+                        self.assertLessEqual(
+                            widget.winfo_rootx() + widget.winfo_width(), right, label)
+                    for button in (app.all_button, app.selected_button):
+                        self.assertLessEqual(
+                            button.winfo_rooty() + button.winfo_height(),
+                            root.winfo_rooty() + root.winfo_height())
+                    self.assertLess(canvas.yview()[1], 1.0)
+                    canvas.yview_moveto(1.0)
+                    root.update()
+                    self.assertAlmostEqual(canvas.yview()[1], 1.0, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

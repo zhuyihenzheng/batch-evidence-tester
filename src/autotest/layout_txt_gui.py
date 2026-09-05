@@ -181,6 +181,38 @@ def _value_for_label(pairs, label):
     return pairs[0][1]
 
 
+def _wrap_controls(frame):
+    """Wrap a toolbar's controls using their actual font/DPI-dependent sizes."""
+    children = frame.winfo_children()
+    for child in children:
+        child.pack_forget()
+
+    def reflow(event):
+        if event.widget != frame:
+            return
+        x, y, row_height = 0, 3, 0
+        for child in children:
+            width = child.winfo_reqwidth() + 12
+            height = child.winfo_reqheight()
+            if x and x + width > event.width:
+                x, y, row_height = 0, y + row_height + 6, 0
+            child.place(x=x, y=y)
+            x += width
+            row_height = max(row_height, height)
+        frame.configure(height=y + row_height + 3)
+
+    frame.bind("<Configure>", reflow)
+
+
+def _wrap_description(parent, **kwargs):
+    label = ttk.Label(parent, wraplength=600, **kwargs)
+    parent.bind(
+        "<Configure>",
+        lambda event: label.configure(wraplength=max(100, event.width - 24)),
+        add="+")
+    return label
+
+
 class LayoutTxtGui(object):
     def __init__(self, root, initial_excel: Optional[Path] = None) -> None:
         self.root = root
@@ -280,18 +312,16 @@ class LayoutTxtGui(object):
 
     def _sync_content_scrollregion(self, _event=None) -> None:
         if self.content_canvas is not None:
+            self._fit_content_to_canvas()
             self.content_canvas.configure(
                 scrollregion=self.content_canvas.bbox("all"))
 
-    def _fit_content_to_canvas(self, event) -> None:
+    def _fit_content_to_canvas(self, event=None) -> None:
         if self.content_canvas is None or self.content_window is None:
             return
-        requested_width = self.content_frame.winfo_reqwidth()
         requested_height = self.content_frame.winfo_reqheight()
-        # Treeview の要求幅は全列幅の合計になるが、表には専用の横スクロールがある。
-        # ページ全体をその幅（約2500px）まで広げず、従来の設計幅を上限にする。
-        target_width = max(event.width, min(1380, requested_width))
-        target_height = max(event.height, requested_height)
+        target_width = max(1, self.content_canvas.winfo_width())
+        target_height = max(self.content_canvas.winfo_height(), requested_height)
         current_width = float(self.content_canvas.itemcget(
             self.content_window, "width") or 0)
         current_height = float(self.content_canvas.itemcget(
@@ -303,7 +333,8 @@ class LayoutTxtGui(object):
             changes["height"] = target_height
         if changes:
             self.content_canvas.itemconfigure(self.content_window, **changes)
-        self._sync_content_scrollregion()
+        self.content_canvas.configure(
+            scrollregion=(0, 0, target_width, target_height))
 
     def _load_persisted_settings(self) -> None:
         try:
@@ -366,13 +397,9 @@ class LayoutTxtGui(object):
         self.content_canvas = tk.Canvas(shell, highlightthickness=0, borderwidth=0)
         page_ybar = ttk.Scrollbar(
             shell, orient="vertical", command=self.content_canvas.yview)
-        page_xbar = ttk.Scrollbar(
-            shell, orient="horizontal", command=self.content_canvas.xview)
-        self.content_canvas.configure(
-            yscrollcommand=page_ybar.set, xscrollcommand=page_xbar.set)
+        self.content_canvas.configure(yscrollcommand=page_ybar.set)
         self.content_canvas.grid(row=0, column=0, sticky="nsew")
         page_ybar.grid(row=0, column=1, sticky="ns")
-        page_xbar.grid(row=1, column=0, sticky="we")
 
         outer = ttk.Frame(self.content_canvas, padding=10)
         self.content_frame = outer
@@ -429,28 +456,30 @@ class LayoutTxtGui(object):
         columns_frame = ttk.Frame(source)
         columns_frame.grid(row=3, column=0, columnspan=8, sticky="we", pady=(7, 0))
         for index, (label, variable) in enumerate(required_column_items):
-            ttk.Label(columns_frame, text=label + ":").grid(row=0, column=index * 2, sticky="w")
+            row, column = divmod(index, 4)
+            ttk.Label(columns_frame, text=label + ":").grid(row=row, column=column * 2, sticky="w")
             ttk.Entry(columns_frame, textvariable=variable, width=9).grid(
-                row=0, column=index * 2 + 1, sticky="w", padx=(3, 10))
+                row=row, column=column * 2 + 1, sticky="w", padx=(3, 10), pady=3)
         for index, (label, variable) in enumerate(optional_column_items):
+            row, column = divmod(index, 4)
             ttk.Label(columns_frame, text=label + ":").grid(
-                row=1, column=index * 2, sticky="w", pady=(6, 0))
+                row=row + 2, column=column * 2, sticky="w", pady=(6, 0))
             ttk.Entry(columns_frame, textvariable=variable, width=12).grid(
-                row=1, column=index * 2 + 1, sticky="w", padx=(3, 10), pady=(6, 0))
+                row=row + 2, column=column * 2 + 1, sticky="w", padx=(3, 10), pady=(6, 0))
         ttk.Label(
             columns_frame, text="任意列は auto / 列記号 / 見出し名 / none",
             foreground="#666").grid(
-                row=1, column=10, columnspan=4, sticky="w", pady=(6, 0))
+                row=4, column=0, columnspan=8, sticky="w", pady=(6, 0))
         ttk.Checkbutton(
             columns_frame, text="ExcelのOCR既定値を使用",
             variable=self.use_default_value_var,
             command=self._default_value_usage_changed).grid(
-                row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+                row=5, column=0, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Label(
             columns_frame,
             text="OFFにすると既定値列を残したまま自動生成値へ戻します。",
             foreground="#666").grid(
-                row=2, column=4, columnspan=10, sticky="w", pady=(6, 0))
+                row=6, column=0, columnspan=8, sticky="w", pady=(6, 0))
 
         generation = ttk.LabelFrame(outer, text="生成・ファイル設定", padding=8)
         generation.grid(row=2, column=0, sticky="we", pady=(8, 0))
@@ -518,14 +547,28 @@ class LayoutTxtGui(object):
             command=lambda: self._save_persisted_settings(show_message=True)).pack(
                 side="left", padx=(16, 0))
 
-        ttk.Label(
+        _wrap_description(
             generation,
             text="TXT名: {form_id}/{pattern}/{seq:02d}/{source}  両TAR名: {form_id}/{source}",
             foreground="#666").grid(row=3, column=0, columnspan=10, sticky="w", pady=(5, 0))
-        ttk.Label(
+        _wrap_description(
             generation, text="設定保存先: %s" % self.settings_path,
             foreground="#666").grid(
                 row=4, column=0, columnspan=10, sticky="w", pady=(3, 0))
+
+        # Two label/input pairs per row keep every field accessible at 1280px.
+        for widget in generation.winfo_children():
+            position = widget.grid_info()
+            row, column = int(position["row"]), int(position["column"])
+            if row < 2:
+                widget.grid_configure(
+                    row=(0 if row == 0 else 2) + column // 4,
+                    column=column % 4)
+            else:
+                widget.grid_configure(row=row + 3, columnspan=4, sticky="we")
+        for column in range(10):
+            generation.columnconfigure(column, weight=1 if column in (1, 3) else 0)
+        _wrap_controls(flags)
 
         selector = ttk.LabelFrame(outer, text="FORM_IDを選択して内容を編集", padding=8)
         selector.grid(row=3, column=0, sticky="we", pady=(8, 0))
@@ -551,18 +594,18 @@ class LayoutTxtGui(object):
         self.defaults_button = ttk.Button(
             selector, text="編集OCR値をExcelへ既定値保存",
             command=self._save_defaults_to_excel)
-        self.defaults_button.grid(row=0, column=4, padx=(0, 10))
+        self.defaults_button.grid(row=1, column=0, columnspan=3, sticky="w", pady=4)
         self.add_form_button = ttk.Button(
             selector, text="表示中FORMを出力リストへ追加",
             command=self._add_current_form_to_package)
-        self.add_form_button.grid(row=0, column=5, padx=(0, 10))
-        ttk.Label(selector, textvariable=self.form_summary_var, foreground="#444").grid(
-            row=0, column=6, sticky="w")
-        ttk.Label(
+        self.add_form_button.grid(row=1, column=3, columnspan=4, sticky="w", pady=4)
+        _wrap_description(selector, textvariable=self.form_summary_var, foreground="#444").grid(
+            row=2, column=0, columnspan=7, sticky="w")
+        _wrap_description(
             selector,
             text="出力/OCR値/属性/FIELD_ID/座標はダブルクリックで編集できます。"
                  " 保存ボタンは表示中FORMのOCR値を入力Excelへ書き戻します。",
-            foreground="#666").grid(row=1, column=0, columnspan=7, sticky="w", pady=(5, 0))
+            foreground="#666").grid(row=3, column=0, columnspan=7, sticky="w", pady=(5, 0))
 
         package = ttk.LabelFrame(
             outer, text="TAR出力リスト（複数FORM・外部画像を追加して最後にまとめて梱包）",
@@ -591,6 +634,7 @@ class LayoutTxtGui(object):
         ttk.Button(
             package_toolbar, text="全消去",
             command=self._clear_package_items).pack(side="left")
+        _wrap_controls(package_toolbar)
 
         csv_defaults = ttk.Frame(package)
         csv_defaults.grid(row=1, column=0, sticky="we", pady=(6, 0))
@@ -617,6 +661,7 @@ class LayoutTxtGui(object):
         ttk.Button(
             csv_defaults, text="選択行／全行へ反映",
             command=self._apply_package_csv_defaults).pack(side="right")
+        _wrap_controls(csv_defaults)
 
         package_table = ttk.Frame(package)
         package_table.grid(row=2, column=0, sticky="we", pady=(6, 0))
@@ -673,18 +718,18 @@ class LayoutTxtGui(object):
         ttk.Button(
             package_options, text="選択画像＋認識TXTをTAR化",
             command=lambda: self._run_package(include_manifest=False)).grid(
-                row=1, column=6, sticky="e", padx=(0, 8), pady=(6, 0))
+                row=2, column=0, columnspan=2, sticky="w", padx=(0, 8), pady=(6, 0))
         ttk.Button(
             package_options, text="選択画像＋一覧CSVをTAR化",
             command=lambda: self._run_package(include_manifest=True)).grid(
-                row=1, column=7, sticky="e", pady=(6, 0))
-        ttk.Label(
+                row=2, column=2, columnspan=4, sticky="w", pady=(6, 0))
+        _wrap_description(
             package_options,
             text="固定10列: CSV位置1～10は一覧でダブルクリック編集できます。"
                  "位置3は画像基礎名を編集すると正面・背面へ反映されます。"
                  "画像ごとに1行、ヘッダーなし、全項目を引用します。",
             foreground="#666").grid(
-                row=2, column=0, columnspan=8, sticky="w", pady=(4, 0))
+                row=3, column=0, columnspan=8, sticky="w", pady=(4, 0))
 
         table_frame = ttk.Frame(outer)
         table_frame.grid(row=5, column=0, sticky="nsew", pady=(8, 0))
@@ -705,12 +750,14 @@ class LayoutTxtGui(object):
         xbar.grid(row=1, column=0, sticky="we")
         self.tree.bind("<Double-1>", self._begin_cell_edit)
 
-        status = tk.Label(outer, textvariable=self.status_var, anchor="w", justify="left",
+        status = tk.Label(shell, textvariable=self.status_var, anchor="w", justify="left",
                           fg="#333", wraplength=1160)
-        status.grid(row=6, column=0, sticky="we", pady=(8, 4))
+        status.grid(row=1, column=0, sticky="we", padx=10, pady=(8, 4))
+        shell.bind("<Configure>", lambda event: status.configure(
+            wraplength=max(100, event.width - 30)), add="+")
 
-        buttons = ttk.Frame(outer)
-        buttons.grid(row=7, column=0, sticky="e")
+        buttons = ttk.Frame(shell)
+        buttons.grid(row=2, column=0, sticky="e", padx=10, pady=(0, 8))
         ttk.Button(buttons, text="閉じる", command=self._close).pack(
             side="right", padx=(8, 0))
         self.all_button = ttk.Button(
