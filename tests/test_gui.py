@@ -150,6 +150,7 @@ class LayoutSmallScreenCase(unittest.TestCase):
                 with self.subTest(scaling=scaling, width=width):
                     root.tk.call("tk", "scaling", scaling)
                     root.geometry("%dx668+0+0" % width)
+                    app.content_canvas.yview_moveto(0.0)
                     root.update()
                     canvas = app.content_canvas
                     self.assertEqual(canvas.xview(), (0.0, 1.0))
