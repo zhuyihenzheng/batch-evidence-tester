@@ -174,7 +174,7 @@ class LayoutSmallScreenCase(unittest.TestCase):
                     root.update()
                     self.assertAlmostEqual(canvas.yview()[1], 1.0, places=2)
                     root.report_callback_exception.assert_not_called()
-                    root.withdraw()
+                    self.doCleanups()
 
 
 if __name__ == "__main__":

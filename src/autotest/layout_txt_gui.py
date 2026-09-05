@@ -325,6 +325,8 @@ class LayoutTxtGui(object):
     def _fit_content_to_canvas(self, event=None) -> None:
         if self.content_canvas is None or self.content_window is None:
             return
+        first, last = self.content_canvas.yview()
+        keep_bottom_visible = first > 0 and last >= 1.0
         requested_height = self.content_frame.winfo_reqheight()
         target_width = max(1, self.content_canvas.winfo_width())
         target_height = max(self.content_canvas.winfo_height(), requested_height)
@@ -341,6 +343,9 @@ class LayoutTxtGui(object):
             self.content_canvas.itemconfigure(self.content_window, **changes)
         self.content_canvas.configure(
             scrollregion=(0, 0, target_width, target_height))
+        # Windows can refine off-screen widget sizes when they first become visible.
+        if keep_bottom_visible:
+            self.content_canvas.yview_moveto(1.0)
 
     def _load_persisted_settings(self) -> None:
         try:
