@@ -131,14 +131,7 @@ class LayoutPackageFilenameCase(unittest.TestCase):
 @unittest.skipUnless(os.name == "nt", "Actual Windows Tk layout check")
 class LayoutSmallScreenCase(unittest.TestCase):
     def test_controls_fit_without_page_horizontal_scrolling(self):
-        root = layout_txt_gui.tk.Tk()
-        self.addCleanup(root.destroy)
         with tempfile.TemporaryDirectory() as directory:
-            with mock.patch.object(
-                    layout_txt_gui, "default_settings_path",
-                    return_value=Path(directory) / "settings.json"):
-                app = layout_txt_gui.LayoutTxtGui(root)
-
             def descendants(widget):
                 for child in widget.winfo_children():
                     yield child
@@ -148,7 +141,14 @@ class LayoutSmallScreenCase(unittest.TestCase):
             # 1280px screen with window margins, plus resizing and larger fonts.
             for scaling, width in ((1.333, 1240), (1.333, 1000), (1.667, 1240)):
                 with self.subTest(scaling=scaling, width=width):
+                    root = layout_txt_gui.tk.Tk()
+                    self.addCleanup(root.destroy)
                     root.tk.call("tk", "scaling", scaling)
+                    with mock.patch.object(
+                            layout_txt_gui, "default_settings_path",
+                            return_value=Path(directory) / "settings.json"):
+                        app = layout_txt_gui.LayoutTxtGui(root)
+                    root.report_callback_exception = mock.Mock()
                     root.geometry("%dx668+0+0" % width)
                     app.content_canvas.yview_moveto(0.0)
                     root.update()
@@ -173,6 +173,8 @@ class LayoutSmallScreenCase(unittest.TestCase):
                     canvas.yview_moveto(1.0)
                     root.update()
                     self.assertAlmostEqual(canvas.yview()[1], 1.0, places=2)
+                    root.report_callback_exception.assert_not_called()
+                    root.withdraw()
 
 
 if __name__ == "__main__":

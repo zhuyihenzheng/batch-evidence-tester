@@ -186,14 +186,19 @@ def _wrap_controls(frame):
     children = frame.winfo_children()
     for child in children:
         child.pack_forget()
+    previous = [None]
 
     def reflow(event):
         if event.widget != frame:
             return
+        sizes = [(child.winfo_reqwidth(), child.winfo_reqheight()) for child in children]
+        signature = (event.width, sizes)
+        if signature == previous[0]:
+            return
+        previous[0] = signature
         x, y, row_height = 0, 3, 0
-        for child in children:
-            width = child.winfo_reqwidth() + 12
-            height = child.winfo_reqheight()
+        for child, (requested_width, height) in zip(children, sizes):
+            width = requested_width + 12
             if x and x + width > event.width:
                 x, y, row_height = 0, y + row_height + 6, 0
             child.place(x=x, y=y)
@@ -206,10 +211,13 @@ def _wrap_controls(frame):
 
 def _wrap_description(parent, **kwargs):
     label = ttk.Label(parent, wraplength=600, **kwargs)
-    parent.bind(
-        "<Configure>",
-        lambda event: label.configure(wraplength=max(100, event.width - 24)),
-        add="+")
+
+    def resize(event):
+        width = max(100, event.width - 24)
+        if str(label.cget("wraplength")) != str(width):
+            label.configure(wraplength=width)
+
+    parent.bind("<Configure>", resize, add="+")
     return label
 
 
@@ -313,8 +321,6 @@ class LayoutTxtGui(object):
     def _sync_content_scrollregion(self, _event=None) -> None:
         if self.content_canvas is not None:
             self._fit_content_to_canvas()
-            self.content_canvas.configure(
-                scrollregion=self.content_canvas.bbox("all"))
 
     def _fit_content_to_canvas(self, event=None) -> None:
         if self.content_canvas is None or self.content_window is None:
