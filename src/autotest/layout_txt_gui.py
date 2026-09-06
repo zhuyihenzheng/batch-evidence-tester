@@ -568,7 +568,7 @@ class LayoutTxtGui(object):
         _wrap_description(
             generation,
             text="TXT名: {form_id}/{pattern}/{seq:02d}/{source}/{random9}  "
-                 "両TAR名: {form_id}/{source}/{random9}（{see:09}も9桁乱数）",
+                 "両TAR名: {form_id}/{source}/{random9}（生成ごとに9桁乱数）",
             foreground="#666").grid(row=3, column=0, columnspan=10, sticky="w", pady=(5, 0))
         _wrap_description(
             generation, text="設定保存先: %s" % self.settings_path,

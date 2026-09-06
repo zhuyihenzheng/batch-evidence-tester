@@ -109,7 +109,8 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             "{random9}0001_{form_id}")
         self.assertEqual(layout_naming.with_random_prefix("{form_id}"), "{random9}{form_id}")
         self.assertEqual(layout_naming.with_random_prefix("{random9}0001"), "{random9}0001")
-        self.assertEqual(layout_naming.with_random_prefix("{see:09}0001"), "{see:09}0001")
+        self.assertEqual(layout_naming.with_random_prefix("{seq:09}0001"), "{random9}0001")
+        self.assertEqual(layout_naming.with_random_prefix("{seq:09d}0001"), "{random9}0001")
         with mock.patch.object(layout_naming, "_used_random9", set()), \
                 mock.patch.object(layout_naming._random, "randrange",
                                   side_effect=[123456789, 123456789, 987654321]):
@@ -118,9 +119,10 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             self.assertEqual(
                 layout_naming.random_filename_values("{random9}"), {"random9": "987654321"})
 
-    def test_see_09_template_uses_nine_random_digits_and_retains_suffix(self):
+    def test_random_prefix_replaces_seq_but_preserves_other_template_fields(self):
+        template = layout_naming.with_random_prefix("{seq:09}0001_{form_id}")
         names = [resolve_form_filename_stem(
-            "{see:09}0001_{form_id}", "1001", self.book) for _ in range(2)]
+            template, "1001", self.book) for _ in range(2)]
         self.assertNotEqual(names[0], names[1])
         for name in names:
             self.assertRegex(name, r"^[1-9][0-9]{8}0001_1001$")

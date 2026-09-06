@@ -52,7 +52,7 @@ class TestLayoutImageTar(unittest.TestCase):
 
     def test_random_package_template_changes_for_each_export(self):
         names = [format_package_tar_name(
-            "{see:09}_TXT", "{random9}_CSV", include_csv, "layout", ["1001"])
+            "{random9}_TXT", "{random9}_CSV", include_csv, "layout", ["1001"])
             for include_csv in (False, True, True)]
         self.assertEqual(len(set(names)), 3)
         self.assertRegex(names[0], r"^[1-9][0-9]{8}_TXT$")

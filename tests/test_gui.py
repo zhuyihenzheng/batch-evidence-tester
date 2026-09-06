@@ -87,7 +87,7 @@ class LayoutPackageFilenameCase(unittest.TestCase):
             "package_format_id_var": "01",
             "package_delivery_date_var": "20260908",
             "package_delivery_shot_var": "02",
-            "filename_template_var": "{see:09}0001",
+            "filename_template_var": "{random9}0001",
         }
         variables = {name: mock.Mock() for name in layout_txt_gui.SETTING_VARIABLE_NAMES}
         for name, variable in variables.items():
