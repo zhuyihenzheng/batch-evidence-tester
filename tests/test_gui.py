@@ -77,6 +77,30 @@ class GuiCaseSelectionCase(unittest.TestCase):
 
 
 class LayoutPackageFilenameCase(unittest.TestCase):
+    def test_csv_defaults_and_random_template_survive_settings_reload(self):
+        expected = {
+            "package_scan_batch_id_var": "0123456789001",
+            "package_arrival_date_var": "20260907",
+            "package_form_id_var": "1001",
+            "package_application_number_var": "0001",
+            "package_reception_number_var": "0002",
+            "package_format_id_var": "01",
+            "package_delivery_date_var": "20260908",
+            "package_delivery_shot_var": "02",
+            "filename_template_var": "{see:09}0001",
+        }
+        variables = {name: mock.Mock() for name in layout_txt_gui.SETTING_VARIABLE_NAMES}
+        for name, variable in variables.items():
+            variable.get.return_value = expected.get(name, "")
+        holder = types.SimpleNamespace(visible_columns=["item_name"], **variables)
+        with tempfile.TemporaryDirectory() as directory:
+            holder.settings_path = Path(directory) / "layout_txt_gui.json"
+            layout_txt_gui.save_settings(
+                layout_txt_gui.LayoutTxtGui._settings_payload(holder), holder.settings_path)
+            layout_txt_gui.LayoutTxtGui._load_persisted_settings(holder)
+        for name, value in expected.items():
+            variables[name].set.assert_called_once_with(value)
+
     def test_current_form_base_name_uses_three_digit_sequence(self):
         """同じ基礎名のFORMを追加すると _001_、_002_、_003_ と採番する。"""
         used = []

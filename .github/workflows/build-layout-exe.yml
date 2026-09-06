@@ -15,6 +15,7 @@ on:
       - "requirements-build-py36.txt"
       - "requirements-build-modern.txt"
       - "src/autotest/layout_tar.py"
+      - "src/autotest/layout_naming.py"
       - "src/autotest/layout_txt.py"
       - "src/autotest/layout_txt_gui.py"
       - "src/autotest/layout_txt_settings.py"

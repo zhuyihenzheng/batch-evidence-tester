@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from openpyxl import Workbook, load_workbook
 
@@ -27,6 +28,7 @@ from autotest.layout_txt import (  # noqa: E402
     save_layout_default_values,
 )
 from autotest.layout_tar import PackageItem, base_name_from_front  # noqa: E402
+from autotest import layout_naming  # noqa: E402
 
 
 class LayoutWorkbookCase(unittest.TestCase):
@@ -86,6 +88,46 @@ class LayoutWorkbookCase(unittest.TestCase):
 
 
 class TestReadLayoutFields(LayoutWorkbookCase):
+    def test_random_names_change_per_generation_but_keep_txt_tif_pairs(self):
+        out = self.tmp / "random_names"
+        results = [generate_layout_txt(
+            self.book, out, filename_template="{random9}0001",
+            tar_name="{random9}_package", create_tar=True,
+            selected_form_ids=["1001"], selected_rows=[3], error_patterns="none")
+            for _ in range(2)]
+        self.assertNotEqual(results[0].txt_files[0].name, results[1].txt_files[0].name)
+        self.assertNotEqual(results[0].tar_file.name, results[1].tar_file.name)
+        for result in results:
+            self.assertRegex(result.txt_files[0].stem, r"^[1-9][0-9]{8}0001$")
+            self.assertEqual(result.txt_files[0].stem, result.tif_files[0].stem)
+            with tarfile.open(str(result.tar_file)) as archive:
+                self.assertEqual(sorted(archive.getnames()), sorted(result.archive_members))
+
+    def test_random_prefix_preserves_suffix_and_retries_used_numbers(self):
+        self.assertEqual(
+            layout_naming.with_random_prefix("2020123100001_{form_id}"),
+            "{random9}0001_{form_id}")
+        self.assertEqual(layout_naming.with_random_prefix("{form_id}"), "{random9}{form_id}")
+        self.assertEqual(layout_naming.with_random_prefix("{random9}0001"), "{random9}0001")
+        self.assertEqual(layout_naming.with_random_prefix("{see:09}0001"), "{see:09}0001")
+        with mock.patch.object(layout_naming, "_used_random9", set()), \
+                mock.patch.object(layout_naming._random, "randrange",
+                                  side_effect=[123456789, 123456789, 987654321]):
+            self.assertEqual(
+                layout_naming.random_filename_values("{random9}"), {"random9": "123456789"})
+            self.assertEqual(
+                layout_naming.random_filename_values("{random9}"), {"random9": "987654321"})
+
+    def test_see_09_template_uses_nine_random_digits_and_retains_suffix(self):
+        names = [resolve_form_filename_stem(
+            "{see:09}0001_{form_id}", "1001", self.book) for _ in range(2)]
+        self.assertNotEqual(names[0], names[1])
+        for name in names:
+            self.assertRegex(name, r"^[1-9][0-9]{8}0001_1001$")
+        self.assertEqual(
+            resolve_form_filename_stem("{seq:09}_{form_id}", "1001", self.book),
+            "000000001_1001")
+
     def test_auto_detects_header_and_identifier_columns(self):
         fields, sheet, header, columns = read_layout_fields(self.book)
         self.assertEqual(sheet, "帳票定義")

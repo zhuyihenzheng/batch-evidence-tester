@@ -15,6 +15,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .layout_naming import random_filename_values
+
 
 class LayoutTarError(Exception):
     """出力リストまたはTAR設定に問題がある。"""
@@ -275,7 +277,8 @@ def format_package_tar_name(image_txt_template: str,
             values.append(value)
     form_value = values[0] if len(values) == 1 else "all"
     try:
-        return raw.format(source=str(source or "images"), form_id=form_value)
+        return raw.format(source=str(source or "images"), form_id=form_value,
+                          **random_filename_values(raw))
     except (KeyError, ValueError, IndexError) as exc:
         raise LayoutTarError("梱包TAR名テンプレートが不正です: %s" % exc)
 

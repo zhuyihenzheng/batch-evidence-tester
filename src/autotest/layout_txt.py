@@ -34,6 +34,8 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 from openpyxl.utils import column_index_from_string, get_column_letter
 
+from .layout_naming import random_filename_values
+
 
 class LayoutTxtError(Exception):
     """入力定義または生成条件に問題がある。"""
@@ -1067,6 +1069,7 @@ def _case_stem(template: str, case: GeneratedCase, source_stem: str,
         "seq": case.sequence,
         "source": source_stem,
     }
+    values.update(random_filename_values(raw_template))
     try:
         stem = raw_template.format(**values)
     except (KeyError, ValueError, IndexError) as exc:
@@ -1265,7 +1268,8 @@ def _tar_stem(tar_name: str, source_stem: str,
         raw = raw[:-4]
     form_value = form_ids[0] if len(form_ids) == 1 else "all"
     try:
-        value = raw.format(source=source_stem, form_id=form_value)
+        value = raw.format(source=source_stem, form_id=form_value,
+                           **random_filename_values(raw))
     except (KeyError, ValueError, IndexError) as exc:
         raise LayoutTxtError("TARファイル名が不正です: %s" % exc)
     return _safe_filename(value)

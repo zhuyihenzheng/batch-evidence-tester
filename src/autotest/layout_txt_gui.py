@@ -17,6 +17,8 @@ except ImportError as exc:  # pragma: no cover - GUI無し環境
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+from .layout_naming import with_random_prefix
+
 from .layout_txt import (
     LayoutTxtError,
     _print_result,
@@ -559,10 +561,14 @@ class LayoutTxtGui(object):
             flags, text="設定を保存",
             command=lambda: self._save_persisted_settings(show_message=True)).pack(
                 side="left", padx=(16, 0))
+        ttk.Button(
+            flags, text="TXT名の先頭9桁をランダム化",
+            command=self._enable_random_filename_prefix).pack(side="left")
 
         _wrap_description(
             generation,
-            text="TXT名: {form_id}/{pattern}/{seq:02d}/{source}  両TAR名: {form_id}/{source}",
+            text="TXT名: {form_id}/{pattern}/{seq:02d}/{source}/{random9}  "
+                 "両TAR名: {form_id}/{source}/{random9}（{see:09}も9桁乱数）",
             foreground="#666").grid(row=3, column=0, columnspan=10, sticky="w", pady=(5, 0))
         _wrap_description(
             generation, text="設定保存先: %s" % self.settings_path,
@@ -674,6 +680,10 @@ class LayoutTxtGui(object):
         ttk.Button(
             csv_defaults, text="選択行／全行へ反映",
             command=self._apply_package_csv_defaults).pack(side="right")
+        ttk.Button(
+            csv_defaults, text="CSV初期値を保存",
+            command=lambda: self._save_persisted_settings(show_message=True)).pack(
+                side="right")
         _wrap_controls(csv_defaults)
 
         package_table = ttk.Frame(package)
@@ -779,6 +789,10 @@ class LayoutTxtGui(object):
         self.selected_button = ttk.Button(
             buttons, text="表示中FORM_IDを出力", command=self._generate_selected)
         self.selected_button.pack(side="right")
+
+    def _enable_random_filename_prefix(self) -> None:
+        self.filename_template_var.set(with_random_prefix(self.filename_template_var.get()))
+        self._save_persisted_settings(show_message=False)
 
     def _choose_excel(self) -> None:
         path = filedialog.askopenfilename(
