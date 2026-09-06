@@ -59,6 +59,10 @@ HEADER_ALIASES = {
         "OCR_DEFAULT_VALUE", "OCRDEFAULTVALUE", "DEFAULT_VALUE", "DEFAULTVALUE",
         "OCR既定値", "既定値", "デフォルト値", "默认值",
     ),
+    "coordinates": (
+        "COORDINATES", "COORDINATE", "DEFAULT_COORDINATES", "COORDINATES_DEFAULT_VALUE",
+        "座標", "座標情報", "座標既定値", "座標デフォルト値", "坐标", "坐标默认值",
+    ),
 }
 
 NULL_WORDS = ("", "NULL", "NONE", "N/A", "NA", "－", "-")
@@ -451,7 +455,8 @@ def _resolve_columns(ws, header_row: int, form_column: str, layout_column: str,
                      input_rule_column: str = "auto",
                      notes_column: str = "auto",
                      output_example_column: str = "auto",
-                     default_value_column: str = "auto") -> Dict[str, Optional[int]]:
+                     default_value_column: str = "auto",
+                     coordinates_column: str = "auto") -> Dict[str, Optional[int]]:
     headers = _header_map(ws, header_row)
     selectors = {
         "form_id": form_column,
@@ -466,6 +471,7 @@ def _resolve_columns(ws, header_row: int, form_column: str, layout_column: str,
         "notes": notes_column,
         "output_example": output_example_column,
         "default_value": default_value_column,
+        "coordinates": coordinates_column,
     }
     columns = {}
     for role, selector in selectors.items():
@@ -526,7 +532,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                        coverage_form_id: str = "4001",
                        attribute_flag: str = "0",
                        coordinates: str = "auto",
-                       default_value_column: str = "auto") -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
+                       default_value_column: str = "auto",
+                       coordinates_column: str = "auto") -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
     path = Path(excel_path)
     if not path.is_file():
         raise LayoutTxtError("Excel ファイルが見つかりません: %s" % path)
@@ -556,7 +563,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             input_rule_column=input_rule_column,
             notes_column=notes_column,
             output_example_column=output_example_column,
-            default_value_column=default_value_column)
+            default_value_column=default_value_column,
+            coordinates_column=coordinates_column)
 
         fields = []  # type: List[LayoutField]
         last_form_id = ""
@@ -581,6 +589,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             notes = _value_at(row, raw_columns.get("notes"))
             output_example = _value_at(row, raw_columns.get("output_example"))
             default_raw = _raw_value_at(row, raw_columns.get("default_value"))
+            saved_coordinates = _value_at(row, raw_columns.get("coordinates"))
 
             # 値を引き継ぐ前に、完全な空行を表末尾として無視する。
             if not any((raw_form_id, raw_layout_id, element_id, item_name,
@@ -649,7 +658,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                     data_type=data_type, ime_name=ime_name, max_digits=max_digits,
                     value=value, row_number=row_number,
                     attribute_flag=attribute_flag,
-                    coordinates=_coordinate_value(coordinates, coordinate_index),
+                    coordinates=(saved_coordinates or
+                                 _coordinate_value(coordinates, coordinate_index)),
                     input_attribute=input_attribute, input_rule=input_rule,
                     notes=notes, output_example=output_example,
                     occurrence_index=occurrence_index,
@@ -1019,7 +1029,9 @@ def _make_pattern_case(source_form_id: str, base_fields: Sequence[LayoutField],
     else:
         raise LayoutTxtError("未対応のエラーPatternです: %s" % pattern)
 
-    _deduplicate_coordinates(fields)
+    # Normal output must retain explicit Excel/GUI coordinates, including duplicates.
+    if pattern != "normal":
+        _deduplicate_coordinates(fields)
     return GeneratedCase(
         source_form_id=source_form_id, form_id=form_id, fields=fields,
         target_presence=target, pattern=pattern, sequence=sequence)
@@ -1322,7 +1334,8 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         field_overrides: Optional[Dict] = None,
                         create_tar: bool = False, tar_name: str = "",
                         tar_only: bool = False,
-                        default_value_column: str = "auto") -> GenerationResult:
+                        default_value_column: str = "auto",
+                        coordinates_column: str = "auto") -> GenerationResult:
     fields, actual_sheet, actual_header, columns = read_layout_fields(
         excel_path=excel_path, sheet_name=sheet_name, header_row=header_row,
         form_column=form_column, layout_column=layout_column,
@@ -1334,6 +1347,7 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
         notes_column=notes_column,
         output_example_column=output_example_column,
         default_value_column=default_value_column,
+        coordinates_column=coordinates_column,
         profile=profile, date_mode=date_mode,
         coverage_form_id=coverage_form_id,
         attribute_flag=attribute_flag, coordinates=coordinates)
@@ -1470,6 +1484,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="出力例列（見出し名 / 列記号 / auto / none）")
     parser.add_argument("--default-value-column", default="auto",
                         help="OCR既定値列（見出し名 / 列記号 / auto / none）")
+    parser.add_argument("--coordinates-column", default="auto",
+                        help="座標既定値列（見出し名 / 列記号 / auto / none）")
     parser.add_argument("--profile", choices=["normal", "max", "over"], default="normal",
                         help="normal=代表値 / max=最大桁 / over=最大桁+1")
     parser.add_argument("--date-mode",
@@ -1502,7 +1518,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attribute-flag", default="0", help="項目毎の属性フラグ（既定: 0）")
     parser.add_argument(
         "--coordinates", default="auto",
-        help="項目毎の座標情報（既定: autoでFORM毎に0,0,0,1から末尾を連番）")
+        help="Excel座標が空の場合の座標情報（既定: autoでFORM毎に末尾を連番）")
     parser.add_argument("--lf", action="store_true", help="改行を CRLF ではなく LF にする")
     return parser
 
@@ -1548,6 +1564,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             notes_column=args.notes_column,
             output_example_column=args.output_example_column,
             default_value_column=args.default_value_column,
+            coordinates_column=args.coordinates_column,
             profile=args.profile, date_mode=args.date_mode,
             coverage_form_id=args.coverage_form_id,
             error_patterns=args.error_patterns,

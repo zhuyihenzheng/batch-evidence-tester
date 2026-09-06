@@ -166,6 +166,56 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertNotIn("default_value", columns)
         self.assertEqual(fields[0].value, "傷病名1")
 
+    def test_excel_coordinates_are_detected_and_blank_cells_fall_back(self):
+        for header in ("座標", "坐标", "COORDINATES", "座標既定値"):
+            with self.subTest(header=header):
+                wb = load_workbook(str(self.book))
+                ws = wb.active
+                ws["R2"] = header
+                ws["R3"] = "10,20,30,40"
+                ws["R4"] = "   "
+                ws["R9"] = "50,60,70,80"
+                wb.save(str(self.book))
+                wb.close()
+
+                fields, _sheet, _header, columns = read_layout_fields(self.book)
+                self.assertEqual(columns["coordinates"], 18)
+                self.assertEqual(fields[0].coordinates, "10,20,30,40")
+                self.assertEqual(fields[1].coordinates, "0,0,0,2")
+                self.assertEqual(
+                    [field.coordinates for field in fields[6:52]],
+                    ["50,60,70,80"] * 46)
+
+    def test_coordinates_column_selector_and_none(self):
+        wb = load_workbook(str(self.book))
+        wb.active["R2"] = "会社独自座標"
+        wb.active["R3"] = "10,20,30,40"
+        wb.save(str(self.book))
+        wb.close()
+        for selector in ("R", "会社独自座標"):
+            fields, _, _, _ = read_layout_fields(
+                self.book, coordinates_column=selector, coordinates="9,8,7,6")
+            self.assertEqual(fields[0].coordinates, "10,20,30,40")
+            self.assertEqual(fields[1].coordinates, "9,8,7,6")
+        fields, _, _, _ = read_layout_fields(self.book, coordinates_column="none")
+        self.assertEqual(fields[0].coordinates, "0,0,0,1")
+
+    def test_normal_output_preserves_excel_coordinates_and_screen_overrides(self):
+        wb = load_workbook(str(self.book))
+        wb.active["R2"] = "会社独自座標"
+        for row in (3, 4, 5):
+            wb.active.cell(row, 18, "10,20,30,40")
+        wb.save(str(self.book))
+        wb.close()
+        out = self.tmp / "coordinates"
+        generate_layout_txt(
+            self.book, out, coordinates_column="R", selected_form_ids=["1001"],
+            selected_rows=[3, 4, 5], error_patterns="none", generate_tif=False,
+            field_overrides={5: {"coordinates": "1,2,3,4"}})
+        with (out / "1001.txt").open(encoding="cp932", newline="") as stream:
+            values = next(csv.reader(stream))
+        self.assertEqual(values[5::4], ["10,20,30,40", "10,20,30,40", "1,2,3,4"])
+
     def test_saved_default_values_are_read_on_next_load(self):
         path, column, count = save_layout_default_values(
             self.book,

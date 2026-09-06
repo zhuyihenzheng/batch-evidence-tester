@@ -158,7 +158,7 @@ SETTING_VARIABLE_NAMES = (
     "form_col_var", "layout_col_var", "field_col_var", "item_col_var",
     "type_col_var", "ime_col_var", "max_col_var",
     "input_attribute_col_var", "input_rule_col_var", "notes_col_var",
-    "output_example_col_var", "default_value_col_var", "use_default_value_var",
+    "output_example_col_var", "default_value_col_var", "coordinates_col_var", "use_default_value_var",
     "profile_var", "date_mode_var",
     "coverage_form_var", "error_pattern_var", "filename_template_var",
     "generate_tif_var", "create_tar_var", "tar_only_var", "tar_name_var",
@@ -243,6 +243,7 @@ class LayoutTxtGui(object):
         self.notes_col_var = tk.StringVar(value="auto")
         self.output_example_col_var = tk.StringVar(value="auto")
         self.default_value_col_var = tk.StringVar(value="auto")
+        self.coordinates_col_var = tk.StringVar(value="auto")
         self.use_default_value_var = tk.BooleanVar(value=True)
         self.profile_var = tk.StringVar(value=PROFILE_LABELS[0][0])
         self.date_mode_var = tk.StringVar(value=DATE_MODE_LABELS[0][0])
@@ -463,6 +464,7 @@ class LayoutTxtGui(object):
             ("補足", self.notes_col_var),
             ("出力例", self.output_example_col_var),
             ("OCR既定値", self.default_value_col_var),
+            ("座標既定値", self.coordinates_col_var),
         )
         columns_frame = ttk.Frame(source)
         columns_frame.grid(row=3, column=0, columnspan=8, sticky="we", pady=(7, 0))
@@ -859,6 +861,7 @@ class LayoutTxtGui(object):
             "default_value_column": (
                 self.default_value_col_var.get()
                 if self.use_default_value_var.get() else "none"),
+            "coordinates_column": self.coordinates_col_var.get(),
             "profile": _value_for_label(PROFILE_LABELS, self.profile_var.get()),
             "date_mode": _value_for_label(DATE_MODE_LABELS, self.date_mode_var.get()),
             "coverage_form_id": self.coverage_form_var.get().strip(),
@@ -1639,6 +1642,7 @@ class LayoutTxtGui(object):
                 default_value_column=(
                     self.default_value_col_var.get()
                     if self.use_default_value_var.get() else "none"),
+                coordinates_column=self.coordinates_col_var.get(),
                 profile=_value_for_label(PROFILE_LABELS, self.profile_var.get()),
                 date_mode=_value_for_label(DATE_MODE_LABELS, self.date_mode_var.get()),
                 coverage_form_id=self.coverage_form_var.get().strip(),
