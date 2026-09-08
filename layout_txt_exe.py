@@ -43,6 +43,7 @@ def _functional_smoke_test():
     from PIL import Image
 
     from autotest.layout_txt import generate_layout_txt
+    from autotest.layout_tar import PackageItem, append_form_record, build_image_tar
 
     root = Path(tempfile.mkdtemp(prefix="layout_txt_smoke_"))
     try:
@@ -74,6 +75,16 @@ def _functional_smoke_test():
         with tarfile.open(str(result.tar_file), "r") as archive:
             if sorted(archive.getnames()) != sorted(result.archive_members):
                 raise RuntimeError("Smoke TAR members do not match generated files")
+        record = result.txt_files[0].read_text(encoding="cp932")
+        item = PackageItem(
+            base_name="shared_", front_image_bytes=result.tif_files[0].read_bytes(),
+            front_recognition_text=append_form_record(record, record))
+        multi = build_image_tar([item], root / "multi", "shared_image")
+        with tarfile.open(str(multi.tar_file), "r") as archive:
+            if archive.getnames() != ["shared_F.tif", "shared_F.txt"]:
+                raise RuntimeError("Multi-form smoke test created unexpected files")
+            if archive.extractfile("shared_F.txt").read().decode("cp932").count('"1001"') != 2:
+                raise RuntimeError("Multi-form TXT did not retain both records")
     finally:
         if not _cleanup_smoke_directory(root):
             print(

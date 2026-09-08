@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from autotest.layout_tar import (  # noqa: E402
     LayoutTarError,
     PackageItem,
+    append_form_record,
     base_name_from_front,
     build_image_tar,
     format_extra_fields,
@@ -37,6 +38,43 @@ class TestLayoutImageTar(unittest.TestCase):
     def _members(self, path):
         with tarfile.open(str(path), "r") as archive:
             return archive.getnames()
+
+    def test_one_image_can_have_multiple_form_records_in_one_txt(self):
+        first = '"1001","1","1","帳票A","0","1,2,3,4"\r\n'
+        second = '"2001","1","1","帳票B","0","5,6,7,8"\r\n'
+        combined = append_form_record(first, second)
+        combined = append_form_record(combined, second)
+        item = PackageItem(
+            base_name="shared_", form_id="1001", front_image_bytes=b"original image",
+            front_recognition_text=combined)
+        self.assertEqual(item.front_form_count, 3)
+        result = build_image_tar(
+            [item], self.tmp, "multi", include_manifest_csv=True, manifest_style="image_list")
+        with tarfile.open(str(result.tar_file)) as archive:
+            self.assertEqual(archive.getnames(), ["shared_F.tif", "shared_F.txt", "file_list.csv"])
+            self.assertEqual(archive.extractfile("shared_F.tif").read(), b"original image")
+            text = archive.extractfile("shared_F.txt").read().decode("cp932")
+            self.assertEqual(text, first + second + second)
+            rows = list(csv.reader(io.StringIO(text)))
+            self.assertEqual([row[0] for row in rows], ["1001", "2001", "2001"])
+            manifest = list(csv.reader(io.StringIO(
+                archive.extractfile("file_list.csv").read().decode("cp932"))))
+            self.assertEqual(len(manifest), 1)
+            self.assertEqual(manifest[0][4], "1001")
+
+    def test_append_handles_missing_txt_and_quoted_newlines(self):
+        record = '"1001","1","1","A,\r\nB""C","0","0,0,0,1"\r\n'
+        combined = append_form_record(None, record)
+        combined = append_form_record(combined, record)
+        item = PackageItem(base_name="shared", front_recognition_text=combined)
+        self.assertEqual(item.front_form_count, 2)
+        self.assertEqual(next(csv.reader(io.StringIO(combined)))[3], 'A,\r\nB"C')
+
+    def test_append_rejects_non_layout_or_multiple_new_records(self):
+        record = '"1001","1","1","A","0","0,0,0,1"\r\n'
+        for existing, added in (("FormID=1001", record), (record, ""), (record, record * 2)):
+            with self.assertRaises(LayoutTarError):
+                append_form_record(existing, added)
 
     def test_txt_and_csv_packages_use_separate_file_setting_names(self):
         self.assertEqual(

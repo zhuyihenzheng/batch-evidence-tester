@@ -33,6 +33,7 @@ from .layout_tar import (
     IMAGE_EXTENSIONS,
     LayoutTarError,
     PackageItem,
+    append_form_record,
     base_name_from_front,
     build_image_tar,
     existing_package_output_paths,
@@ -114,7 +115,7 @@ EDITABLE_COLUMNS = {
 
 PACKAGE_COLUMNS = (
     "include", "scan_batch_id", "image_sequence", "base_name",
-    "front_image", "back_image", "arrival_date", "form_id",
+    "front_image", "front_form_count", "back_image", "arrival_date", "form_id",
     "application_number", "reception_number", "format_id", "delivery_date",
     "delivery_shot",
     "front_recognition", "back_recognition", "back_recognition_result",
@@ -126,6 +127,7 @@ PACKAGE_HEADINGS = {
     "image_sequence": "CSV位置2（編集可）",
     "base_name": "CSV位置3・画像基礎名（編集可）",
     "front_image": "CSV位置3・正面画像", "front_recognition": "正面TXT（FORM生成）",
+    "front_form_count": "TXT帳票数",
     "back_image": "CSV位置3・背面画像", "back_recognition": "背面TXT（1項目）",
     "back_recognition_result": "背面認識値（編集可）",
     "arrival_date": "CSV位置4（編集可）", "form_id": "CSV位置5（編集可）",
@@ -140,6 +142,7 @@ PACKAGE_WIDTHS = {
     "include": 45, "scan_batch_id": 125, "image_sequence": 90,
     "form_id": 80, "base_name": 150,
     "front_image": 160, "front_recognition": 165,
+    "front_form_count": 90,
     "back_image": 160, "back_recognition": 145,
     "back_recognition_result": 125, "related_file": 160,
     "arrival_date": 95, "application_number": 100,
@@ -648,6 +651,9 @@ class LayoutTxtGui(object):
             package_toolbar, text="選択行の背面画像を設定...",
             command=self._set_back_image_for_selected).pack(side="left", padx=(0, 8))
         ttk.Button(
+            package_toolbar, text="選択画像のTXTに表示中FORMを追記",
+            command=self._append_current_form_to_image).pack(side="left", padx=(0, 8))
+        ttk.Button(
             package_toolbar, text="選択行を削除",
             command=self._remove_package_items).pack(side="left", padx=(0, 8))
         ttk.Button(
@@ -1068,6 +1074,7 @@ class LayoutTxtGui(object):
             item.image_sequence,
             item.safe_base_name,
             item.front_image_name,
+            item.front_form_count if item.front_form_count is not None else "形式外",
             item.back_image_name if item.has_back_image else "（なし）",
             item.arrival_date,
             item.form_id,
@@ -1146,6 +1153,36 @@ class LayoutTxtGui(object):
             include = self.package_tree.set(iid, "include") or "1"
             self.package_tree.item(iid, values=self._package_values(item, include))
         self.status_var.set("CSV初期値を%d件へ反映しました。" % len(targets))
+
+    def _append_current_form_to_image(self) -> None:
+        self._finish_package_cell_edit(save=True)
+        selected = list(self.package_tree.selection())
+        if len(selected) != 1:
+            messagebox.showwarning(
+                "帳票追記", "追記先の画像を出力リストで1件選択してください。", parent=self.root)
+            return
+        if not self.form_fields:
+            messagebox.showwarning(
+                "帳票追記", "Excel定義を読み込んでFORM_IDを選択してください。", parent=self.root)
+            return
+        iid = selected[0]
+        item = self.package_items[iid]
+        form_id = self.form_var.get().strip()
+        try:
+            rows, overrides = self._screen_edits()
+            record = render_form_txt_text(
+                self.loaded_fields, form_id, selected_rows=rows,
+                field_overrides=overrides, output_format="raw")
+            combined = append_form_record(item.front_recognition_text, record)
+        except (LayoutTxtError, LayoutTarError) as exc:
+            messagebox.showerror("帳票追記エラー", str(exc), parent=self.root)
+            return
+        item.front_recognition_text = combined
+        include = self.package_tree.set(iid, "include") or "1"
+        self.package_tree.item(iid, values=self._package_values(item, include))
+        self.status_var.set(
+            "%s にFORM_ID %sを追記しました（TXT内%d帳票）。画像とCSV位置5は元の設定を使用します。"
+            % (item.front_recognition_name, form_id, item.front_form_count))
 
     def _add_current_form_to_package(self) -> None:
         if not self.form_fields:

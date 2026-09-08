@@ -62,10 +62,15 @@ def test_build_script_supports_onedir_and_onefile_modes():
 def test_smoke_test_exercises_excel_txt_tif_and_tar(monkeypatch, tmp_path):
     created_temp = tmp_path / "smoke"
     created_temp.mkdir()
+    original_mkdtemp = layout_txt_exe.tempfile.mkdtemp
+
+    def smoke_temp(prefix, **kwargs):
+        if prefix == "layout_txt_smoke_":
+            return str(created_temp)
+        return original_mkdtemp(prefix=prefix, **kwargs)
 
     monkeypatch.setattr(
-        layout_txt_exe.tempfile, "mkdtemp",
-        lambda prefix: str(created_temp))
+        layout_txt_exe.tempfile, "mkdtemp", smoke_temp)
     monkeypatch.setattr(
         layout_txt_exe, "_cleanup_smoke_directory",
         lambda path: True)

@@ -99,6 +99,33 @@ def matching_recognition_file(image_path: Path) -> Optional[Path]:
     return None
 
 
+def _form_records(text):
+    """Read raw Layout records without splitting quoted OCR values at newlines."""
+    try:
+        rows = list(csv.reader(io.StringIO(str(text or "").lstrip("\ufeff")), strict=True))
+    except csv.Error as exc:
+        raise LayoutTarError("正面TXTのCSV形式を読めません: %s" % exc)
+    records = [row for row in rows if row]
+    for index, row in enumerate(records, 1):
+        if len(row) < 2 or (len(row) - 2) % 4 or not row[0].isdigit():
+            raise LayoutTarError(
+                "正面TXTの%d件目はLayout形式ではありません。"
+                "「1帳票1行（全値ダブルクォート）」形式を使用してください。" % index)
+    return records
+
+
+def append_form_record(existing_text, new_text):
+    """Append one form to the recognition TXT for an existing image."""
+    records = _form_records(existing_text)
+    added = _form_records(new_text)
+    if len(added) != 1:
+        raise LayoutTarError("追記する帳票は1件ずつ指定してください。")
+    stream = io.StringIO()
+    writer = csv.writer(stream, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    writer.writerows(records + added)
+    return stream.getvalue()
+
+
 class PackageItem(object):
     """TARへ入れる1件分の画像（正面必須、背面任意）と対応情報。"""
 
@@ -176,6 +203,13 @@ class PackageItem(object):
     @property
     def has_front_recognition(self) -> bool:
         return self.front_recognition_text is not None
+
+    @property
+    def front_form_count(self):
+        try:
+            return len(_form_records(self.front_recognition_text))
+        except LayoutTarError:
+            return None
 
     @staticmethod
     def _payload(path: Optional[Path], payload: Optional[bytes], label: str) -> bytes:

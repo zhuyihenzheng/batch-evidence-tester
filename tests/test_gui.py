@@ -27,6 +27,7 @@ except ImportError:
 from autotest import gui  # noqa: E402
 from autotest import layout_txt_gui  # noqa: E402
 from autotest.layout_tar import next_numbered_base_name  # noqa: E402
+from autotest.layout_txt import LayoutField  # noqa: E402
 
 
 class GuiSubprocessEncodingCase(unittest.TestCase):
@@ -77,6 +78,32 @@ class GuiCaseSelectionCase(unittest.TestCase):
 
 
 class LayoutPackageFilenameCase(unittest.TestCase):
+    def test_append_current_form_keeps_selected_image_and_screen_edits(self):
+        item = layout_txt_gui.PackageItem(
+            base_name="shared_", form_id="1001", front_image_bytes=b"original image",
+            front_recognition_text='"1001","1","1","A","0","0,0,0,1"\r\n')
+        field = LayoutField("2001", "1", "1", "Item", "文字列", "", 20, "B", 3)
+        holder = types.SimpleNamespace(
+            _finish_package_cell_edit=mock.Mock(), package_tree=mock.Mock(),
+            form_fields={"2001": [field]}, package_items={"image": item},
+            form_var=mock.Mock(), loaded_fields=[field],
+            _screen_edits=mock.Mock(return_value=([3], {3: {"value": "編集値"}})),
+            status_var=mock.Mock(), root=object(),
+            _package_source=layout_txt_gui.LayoutTxtGui._package_source)
+        holder.form_var.get.return_value = "2001"
+        holder.package_tree.selection.return_value = ["image"]
+        holder.package_tree.set.return_value = "1"
+        holder._package_values = lambda value, include: layout_txt_gui.LayoutTxtGui._package_values(
+            holder, value, include)
+        layout_txt_gui.LayoutTxtGui._append_current_form_to_image(holder)
+        self.assertEqual(item.front_form_count, 2)
+        self.assertIn('"2001","1","1","編集値"', item.front_recognition_text)
+        self.assertEqual(item.front_image_bytes, b"original image")
+        self.assertEqual(item.form_id, "1001")
+        displayed = dict(zip(layout_txt_gui.PACKAGE_COLUMNS, holder._package_values(item, "1")))
+        self.assertEqual(displayed["front_form_count"], 2)
+        self.assertEqual(displayed["front_recognition"], "shared_F.txt")
+
     def test_csv_defaults_and_random_template_survive_settings_reload(self):
         expected = {
             "package_scan_batch_id_var": "0123456789001",
