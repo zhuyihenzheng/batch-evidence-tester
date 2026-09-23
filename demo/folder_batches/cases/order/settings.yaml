@@ -1,0 +1,13 @@
+# 真正测试时，将 batch 改成自己的 exe 路径，并将 paths 改成其实际读写目录。
+batch:
+  exe_path: "{python}"
+  working_dir: "."
+  common_args: ["../fake_batch.py", "--root", "sandbox_order"]
+paths:
+  input_dir: sandbox_order/in
+  processed_dir: sandbox_order/processed
+  error_dir: sandbox_order/error
+  output_dir: sandbox_order/out
+  log_dir: sandbox_order/log
+folder_evidence:
+  targets: [input_dir, processed_dir, output_dir]

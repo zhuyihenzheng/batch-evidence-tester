@@ -8,6 +8,7 @@
 
 import os
 import re
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -17,6 +18,61 @@ import yaml
 
 class ConfigError(Exception):
     """設定不備。実行前に検出してメッセージだけ出して終了させる。"""
+
+
+SETTINGS_NAMES = ("settings.yaml", "settings.yml")
+LOCAL_SETTINGS_NAMES = (
+    "settings.local.yaml", "settings.local.yml", "settings_local.yaml",
+    "settings_local.yml", "setting_local.yaml", "setting_local.yml",
+)
+FOLDER_SETTINGS_KEYS = {"batch", "batches", "paths", "log", "folder_evidence", "evidence"}
+
+
+def _settings_file(directory: Path, names) -> Optional[Path]:
+    found = [directory / name for name in names if (directory / name).is_file()]
+    if len(found) > 1:
+        raise ConfigError("同じ階層に設定ファイルが複数あります。1 つに統一してください: %s" % found)
+    return found[0] if found else None
+
+
+def default_config(project_root: Path) -> Path:
+    directory = project_root / "config"
+    return (_settings_file(directory, LOCAL_SETTINGS_NAMES)
+            or _settings_file(directory, SETTINGS_NAMES) or directory / "settings.yaml")
+
+
+def _merge_settings(base, override):
+    """辞書は再帰マージ、リスト・スカラーは置換。元の設定を変更しない。"""
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_settings(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _folder_evidence_options(value, where):
+    """リストの短縮形と詳細設定を同じ形式に正規化する。空リストは撮影無し。"""
+    if isinstance(value, list):
+        value = {"targets": value}
+    if not isinstance(value, dict):
+        raise ConfigError("%s はフォルダ名のリスト、またはマッピングで指定してください" % where)
+    allowed = {"targets", "recursive", "exclude_patterns", "max_entries"}
+    unknown = set(value) - allowed
+    if unknown:
+        raise ConfigError("%s に未知の項目があります: %s" % (where, sorted(unknown)))
+    for key in ("targets", "exclude_patterns"):
+        if key in value and (not isinstance(value[key], list) or
+                             any(not isinstance(item, str) or not item.strip() for item in value[key])):
+            raise ConfigError("%s.%s は空でない文字列のリストで指定してください" % (where, key))
+    if "recursive" in value and not isinstance(value["recursive"], bool):
+        raise ConfigError("%s.recursive は true / false で指定してください" % where)
+    if "max_entries" in value:
+        count = value["max_entries"]
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise ConfigError("%s.max_entries は 1 以上の整数で指定してください" % where)
+    return value
 
 
 # 日付プレースホルダ。batch が日付ごとのフォルダ（Backup/20260803 等）を
@@ -48,8 +104,11 @@ def expand_date_placeholders(text: str, base_date: date) -> str:
 def _load_yaml(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise ConfigError(f"設定ファイルが見つかりません: {path}")
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigError("YAML を読み込めません: %s\n%s" % (path, exc))
     if not isinstance(data, dict):
         raise ConfigError(f"YAML のトップレベルはマッピングである必要があります: {path}")
     return data
@@ -62,10 +121,53 @@ class Settings:
         self.raw = raw
         self.source = source
         self.project_root = project_root
+        self.sources = [source]
+        self._case_source = None
         # パス等の {date} を展開するときの基準日。既定は本日。
         # --date で実行単位に、ケースの execute.date でケース単位に上書きできる。
         # ケースは直列実行されるため、ケースごとの差し替えで競合は起きない。
         self.base_date = date.today()
+
+    def for_case(self, case: "TestCase") -> "Settings":
+        """cases ルートからケースの親までの設定を、親→子の順で重ねる。"""
+        case_source = case.source.resolve()
+        if self._case_source == case_source:
+            return self
+        root = (self.project_root / "cases").resolve()
+        try:
+            case_source.relative_to(root)
+        except ValueError:
+            root = (case.cases_root or case.source.parent).resolve()
+        try:
+            relative = case_source.parent.relative_to(root)
+        except ValueError:
+            raise ConfigError("ケースが設定探索ルートの外にあります: %s" % case.source)
+        directories = [root]
+        for part in relative.parts:
+            directories.append(directories[-1] / part)
+        raw = self.raw
+        sources = list(self.sources)
+        for directory in directories:
+            for names in (SETTINGS_NAMES, LOCAL_SETTINGS_NAMES):
+                path = _settings_file(directory, names)
+                if path is None or path.resolve() == self.source.resolve():
+                    continue
+                override = _load_yaml(path)
+                unknown = set(override) - FOLDER_SETTINGS_KEYS
+                if unknown:
+                    raise ConfigError(
+                        "%s: フォルダ設定で使えない項目: %s。env / database / excel は共通設定に置いてください。"
+                        % (path, sorted(unknown)))
+                raw = _merge_settings(raw, override)
+                sources.append(path)
+        if len(sources) == len(self.sources):
+            return self
+        effective = Settings(raw, self.source, self.project_root)
+        effective.sources = sources
+        effective._case_source = case_source
+        effective.base_date = self.base_date
+        _validate_settings(effective)
+        return effective
 
     def set_base_date(self, value: Union[str, date, None]) -> None:
         """基準日を設定する。文字列は YYYYMMDD または YYYY-MM-DD を受け付ける。"""
@@ -145,6 +247,22 @@ class Settings:
     def folder_evidence(self) -> Dict[str, Any]:
         return self.raw.get("folder_evidence", {})
 
+    def folder_evidence_for(self, case: "TestCase") -> Dict[str, Any]:
+        """撮影・フォルダ準備・preflight が同じ実効設定を使用する。"""
+        cfg = deepcopy(_folder_evidence_options(self.folder_evidence, "folder_evidence"))
+        profile = self.batch_profile(case.execute.get("batch"))
+        if "folder_evidence" in profile:
+            cfg.update(_folder_evidence_options(profile["folder_evidence"], "batch.folder_evidence"))
+        if "folder_evidence" in case.collect:
+            cfg.update(_folder_evidence_options(case.collect["folder_evidence"], "collect.folder_evidence"))
+        targets = cfg.get("targets", [])
+        aliases = self.path_aliases
+        unknown = [alias for alias in targets if alias not in aliases]
+        if unknown:
+            raise ConfigError("%s: folder_evidence に paths 未定義の論理名があります: %s"
+                              % (case.case_id, unknown))
+        return deepcopy(cfg)
+
     @property
     def tester(self) -> str:
         return self.env.get("tester") or os.environ.get("USERNAME") or os.environ.get("USER") or "unknown"
@@ -185,30 +303,40 @@ class Settings:
         return pw
 
 
-def load_settings(path: Union[str, Path], project_root: Union[str, Optional[Path]] = None) -> Settings:
+def load_settings(path: Union[str, Path], project_root: Union[str, Optional[Path]] = None,
+                  require_runtime: bool = True) -> Settings:
     path = Path(path)
     root = Path(project_root) if project_root else path.resolve().parent.parent
     settings = Settings(raw=_load_yaml(path), source=path, project_root=root)
-    _validate_settings(settings)
+    _validate_settings(settings, require_runtime=require_runtime)
     return settings
 
 
-def _validate_settings(s: Settings) -> None:
+def _validate_settings(s: Settings, require_runtime: bool = True) -> None:
+    for key in ("env", "batch", "batches", "database", "paths", "log", "evidence", "excel", "folder_evidence"):
+        if key == "batches" and s.raw.get(key) is None:
+            continue  # 既存の batches:（空値）は未定義として扱う。
+        if key in s.raw and not isinstance(s.raw[key], dict):
+            raise ConfigError("%s: %s はマッピングで指定してください" % (s.sources[-1], key))
     missing: List[str] = []
-    if not s.batch.get("exe_path"):
+    if require_runtime and not s.batch.get("exe_path"):
         missing.append("batch.exe_path")
     if not s.database.get("server"):
         missing.append("database.server")
     if not s.database.get("database"):
         missing.append("database.database")
-    if not s.raw.get("paths"):
+    if require_runtime and not s.raw.get("paths"):
         missing.append("paths")
     if missing:
-        raise ConfigError(f"{s.source} に必須項目がありません: {', '.join(missing)}")
+        raise ConfigError(f"{s.sources[-1]} に必須項目がありません: {', '.join(missing)}")
+
+    if not require_runtime:
+        return
 
     # folder_evidence.targets が paths に存在するか
     aliases = set(s.path_aliases)
-    unknown = [t for t in s.folder_evidence.get("targets", []) if t not in aliases]
+    cfg = _folder_evidence_options(s.folder_evidence, "folder_evidence")
+    unknown = [t for t in cfg.get("targets", []) if t not in aliases]
     if unknown:
         raise ConfigError(
             f"folder_evidence.targets に paths 未定義の論理名があります: {unknown}\n"
@@ -240,10 +368,12 @@ class TestCase:
         assertions: Optional[Dict[str, Any]] = None,
         teardown: Optional[Dict[str, Any]] = None,
         mode: str = "auto",
+        cases_root: Optional[Path] = None,
     ) -> None:
         self.case_id = case_id
         self.name = name
         self.source = source
+        self.cases_root = cases_root
         self.description = description
         self.tags = tags if tags is not None else []
         self.enabled = enabled
@@ -551,6 +681,11 @@ def _validate_case_schema(data: Dict[str, Any], path: Path, case_id: str) -> Lis
     collect = data.get("collect") or {}
     if isinstance(collect, dict):
         problems += _check_unknown_keys(collect, COLLECT_KEYS, "collect", path)
+        if "folder_evidence" in collect:
+            try:
+                _folder_evidence_options(collect["folder_evidence"], "collect.folder_evidence")
+            except ConfigError as exc:
+                problems.append(str(exc))
     else:
         problems.append("collect はマッピングで指定してください")
 
@@ -603,7 +738,8 @@ def find_case_files(cases_dir: Path) -> List[Path]:
     ケース定義ではないので除外する。判定基準は「同名の YAML が兄弟に
     存在するフォルダの配下かどうか」。
     """
-    all_yaml = sorted(list(cases_dir.rglob("*.yaml")) + list(cases_dir.rglob("*.yml")))
+    all_yaml = sorted(p for p in list(cases_dir.rglob("*.yaml")) + list(cases_dir.rglob("*.yml"))
+                      if p.name not in SETTINGS_NAMES + LOCAL_SETTINGS_NAMES)
     # 資材フォルダ = 同名の定義ファイルが隣にあるフォルダ
     material_dirs = {
         p.parent / p.stem
@@ -688,6 +824,7 @@ def _build_case(data: Dict[str, Any], path: Path, case_id: str, cases_dir: Path)
         case_id=case_id,
         name=str(data.get("name") or case_id),
         source=path,
+        cases_root=cases_dir,
         description=str(data.get("description") or ""),
         # サブフォルダ名を暗黙のタグとして足す。機能別にフォルダを切れば
         # そのまま --tag <機能名> で絞り込める（宣言済みのタグは重複させない）

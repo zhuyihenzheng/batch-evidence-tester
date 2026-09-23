@@ -1,0 +1,22 @@
+# 公共配置。exe 和输入输出目录由各 case 文件夹提供。
+env:
+  name: "按文件夹配置 batch 的离线示例"
+  sandbox: true
+database:
+  server: unused
+  database: unused
+  auth: windows
+batch:
+  console_encoding: utf-8
+  timeout_sec: 30
+  log_settle_sec: 0
+log:
+  patterns: ["*.log"]
+  encoding: utf-8
+folder_evidence:
+  targets: [input_dir, processed_dir, error_dir, output_dir]
+evidence:
+  mode: render
+excel:
+  output_dir: output
+  file_name_format: "FolderBatches_{run_id}.xlsx"

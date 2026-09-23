@@ -1,0 +1,23 @@
+id: INVOICE_001
+name: 发票 batch 正常处理
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  input_files:
+    - src: input/invoices.csv
+      dest_dir: input_dir
+execute:
+  args: ["--mode", "monthly"]
+collect:
+  files:
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+assert:
+  exit_code: 0
+  files:
+    - name: 发票输出
+      exists: {dir: output_dir, pattern: "RESULT_*.csv", count: 1}
+    - name: 输入文件已处理
+      exists: {dir: processed_dir, pattern: invoices.csv, count: 1}
+  log:
+    must_contain: ["処理正常終了"]
+    must_not_contain: ["[ERROR]"]

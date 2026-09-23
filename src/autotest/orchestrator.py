@@ -41,6 +41,10 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
     という事故を防ぐため、実行に必要な資材がすべて揃っているかを先に確認する。
     validate コマンドも同じ関数を使う。戻り値は問題の一覧（空なら合格）。
     """
+    try:
+        settings = settings.for_case(case)
+    except ConfigError as exc:
+        return [str(exc)]
     problems: List[str] = []
 
     # --- batch 定義と exe -------------------------------------------------
@@ -204,9 +208,10 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
     for spec in (case.collect or {}).get("files", []):
         if spec.get("dir", "output_dir") not in aliases:
             problems.append("collect.files.dir の論理名が paths に未定義です: %s" % spec.get("dir"))
-    for alias in (case.collect or {}).get("folder_evidence", []):
-        if alias not in aliases:
-            problems.append("collect.folder_evidence の論理名が paths に未定義です: %s" % alias)
+    try:
+        settings.folder_evidence_for(case)
+    except ConfigError as exc:
+        problems.append(str(exc))
 
     # --- 期待値ファイル -------------------------------------------------------
     # manual: true は「人が証跡を見て判定する」ため expected が無くてよい。
@@ -300,6 +305,7 @@ class CaseRunner:
                  dry_run: bool = False, progress=None, default_date=None,
                  keep_env: bool = False):
         self.settings = settings
+        self._base_settings = settings
         self._default_date = default_date
         self.run_dir = run_dir
         self.offline = offline
@@ -317,9 +323,19 @@ class CaseRunner:
     def _step(self, name: str) -> None:
         self._progress(name)
 
+    def _select_case_settings(self, case: TestCase) -> None:
+        self.settings = self._base_settings.for_case(case)
+        self._step("適用設定: " + " -> ".join(str(p) for p in self.settings.sources))
+        self._step("対象exe: %s" % self.settings.batch_profile(case.execute.get("batch")).get("exe_path", ""))
+
     # ------------------------------------------------------------------
     def run(self, case: TestCase) -> CaseResult:
         result = CaseResult(case_id=case.case_id, name=case.name, description=case.description, tags=case.tags)
+        try:
+            self._select_case_settings(case)
+        except ConfigError as exc:
+            result.fatal_error = str(exc)
+            return result
         evidence_dir = self.run_dir / "evidence" / case.case_id
         artifact_dir = self.run_dir / "artifacts" / case.case_id
         renderer = render.Renderer(self.settings.evidence, evidence_dir)
@@ -501,6 +517,7 @@ class CaseRunner:
         """
         from . import manual as manual_mod
 
+        self._select_case_settings(case)
         self.settings.set_base_date(case.execute.get("date") or self._default_date)
 
         problems = preflight_case(self.settings, case)
@@ -563,6 +580,7 @@ class CaseRunner:
         """
         from . import manual as manual_mod
 
+        self._select_case_settings(case)
         # 基準日は session から復元する。当日の日付で展開すると、
         # before と after が日をまたいだときに {date} を含むパターンが
         # 静かに外れて「出力が無い」と誤判定する
@@ -814,7 +832,7 @@ class CaseRunner:
                 used.add(spec["dest_dir"])
         for spec in collect.get("files", []):
             used.add(spec.get("dir", "output_dir"))
-        used.update(collect.get("folder_evidence") or self.settings.folder_evidence.get("targets", []))
+        used.update(self.settings.folder_evidence_for(case).get("targets", []))
         for item in (case.assertions or {}).get("files", []):
             for spec in (item.get("actual"), item.get("exists")):
                 if spec:
@@ -870,16 +888,9 @@ class CaseRunner:
 
     # ------------------------------------------------------------------
     def _capture_folders(self, renderer: render.Renderer, phase: str, case: TestCase) -> List[ImageEvidence]:
-        cfg = self.settings.folder_evidence
-        # ケース側で collect.folder_evidence: [...] を書くと撮影対象を差し替えられる。
-        # batch ごとに入出力フォルダが違う場合に使う。
-        targets = case.collect.get("folder_evidence") or cfg.get("targets", [])
-        unknown = [t for t in targets if t not in self.settings.path_aliases]
-        if unknown:
-            raise ConfigError(
-                "%s の collect.folder_evidence に paths 未定義の論理名があります: %s / 定義済み: %s"
-                % (case.case_id, unknown, sorted(self.settings.path_aliases))
-            )
+        cfg = self.settings.folder_evidence_for(case)
+        targets = cfg.get("targets", [])
+        self._step("フォルダ撮影対象（%s）: %s" % (phase, ", ".join(targets) or "なし"))
 
         images: List[ImageEvidence] = []
         for alias in targets:

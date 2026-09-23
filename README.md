@@ -506,7 +506,121 @@ setup:
 
 ### 多个 batch 怎么组织
 
-`settings.yaml` 里用 `batches:` 定义多个 exe，用例里用 `execute.batch` 选：
+batch 较多时，推荐按文件夹管理：**公共配置只保留共通项，每个 batch 的配置与 case
+放在一起**。工具会逐个 case 切换设置，一次运行仍生成一份 Excel。
+
+```text
+config/
+  settings.local.yaml          # 共通 DB / 编码 / Excel 输出
+cases/
+  order/
+    settings.yaml              # 订单 batch 的默认设置
+    settings.local.yaml        # 可选：本机覆盖（Git 忽略）
+    ORDER_001.yaml
+    ORDER_001/input/...
+  invoice/
+    settings.yaml              # 发票 batch 的默认设置
+    INVOICE_001.yaml
+    INVOICE_001/input/...
+```
+
+公共 `config/settings.local.yaml` 示例（DB 值改成测试环境的实际值）：
+
+```yaml
+env:
+  name: "结合测试环境"
+database:
+  driver: "ODBC Driver 18 for SQL Server"
+  server: "localhost,1433"
+  database: "BATCH_TEST"
+  auth: windows
+batch:
+  console_encoding: cp932
+  timeout_sec: 600
+excel:
+  output_dir: "./output"
+```
+
+`cases/order/settings.yaml`：
+
+```yaml
+batch:
+  exe_path: "C:/app/order/OrderBatch.exe"
+  working_dir: "C:/app/order"
+  common_args: []
+paths:
+  input_dir: "C:/app/order/in"
+  processed_dir: "C:/app/order/processed"
+  error_dir: "C:/app/order/error"
+  output_dir: "C:/app/order/out"
+  log_dir: "C:/app/order/log"
+folder_evidence:
+  targets: [input_dir, processed_dir, error_dir, output_dir]
+```
+
+`cases/invoice/settings.yaml` 使用相同的键名，将 exe 和目录改成 invoice 的路径。
+例如 `cases/order/ORDER_001.yaml` 可以直接写：
+
+```yaml
+id: ORDER_001
+name: 订单正常处理
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  input_files:
+    - src: input/orders.csv
+      dest_dir: input_dir
+execute:
+  args: ["--mode", "daily"]         # 自动使用同文件夹的 batch，无需 execute.batch
+assert:
+  exit_code: 0
+  files:
+    - name: 输出文件存在
+      exists: {dir: output_dir, pattern: "RESULT_*.csv", count: 1}
+```
+
+本机路径不同时，在同目录的 `settings.local.yaml` 覆盖相应字段即可。
+也支持你原先使用的 **`setting_local.yml`**：公共 `config/` 和各 case 目录都能识别。
+
+配置规则：
+
+- 公共配置由 `--config` 指定；未指定时，优先用 `config/settings.local.yaml`，否则用
+  `config/settings.yaml`。公共 local 文件沿用原来的**整份替代**行为，不自动合并公共模板。
+- case 的继承顺序：**所选公共配置 → `cases/` → 各级子目录 → case 所在目录**。
+  每一级先读 `settings.yaml`，再合并该级的 `settings.local.yaml`。子级覆盖父级，包括父级 local。
+- 配置扩展名可用 `.yaml` 或 `.yml`；local 名称可用 `settings.local`、`settings_local`
+  或 `setting_local`。同一目录的普通配置最多一份，local 配置最多一份；重名变体并存会报错。
+- 字典递归合并，列表整体替换。例如 `common_args: []` 清除继承的参数；只改
+  `batch.exe_path` 不会自动清除旧参数，也不会自动更改 `working_dir` 或 `paths`。
+- 目录配置支持 `batch`、`batches`、`paths`、`log`、`folder_evidence`、`evidence`。
+  `database`、`env`、`excel` 保留在公共配置中；不同 DB 环境用 `--config` 分开运行。
+- **配置里的相对路径仍以项目根目录为基准**，不会因为配置移到子目录而改变含义。
+  `input_files.src` 等用例材料路径仍遵循既有的 `case.dir` 规则。
+- 子目录也可继续放设置，例如 `cases/order/error/settings.yaml` 仅覆盖异常用例的超时。
+  使用 `--cases-dir cases/order` 时，仍继承 `cases/` 的设置；项目外的 case 则以指定目录为探索边界。
+- case ID 在一次加载范围内必须唯一，建议 `ORDER_001`、`INVOICE_001`；配置文件的名字为保留名，
+  不作为 case 扫描。自动执行、手动 before/after、GUI 执行和 validate 均应用目录设置。
+  手动 before/after 之间请保持配置不变。
+- 没有目录配置的旧 case 保持原行为。执行日志与 validate 输出会显示实际加载的配置链。
+
+```bat
+run_test.bat --tag order                  :: 只测订单 batch
+run_test.bat --tag invoice                :: 只测发票 batch
+run_test.bat --tag order --tag invoice    :: 两个 batch 汇总到同一份 Excel
+python -m autotest validate --tag order  :: 校验实际使用的目录设置
+```
+
+迁移现有项目时，把每个 batch 的 case 和对应的同名材料目录一起移动到
+`cases/<batch>/`，再把 exe、working_dir、paths 移到该文件夹的设置中。
+公共配置可移除 `batch.exe_path` 和 `paths`，但所有选中的 case 都必须能从目录配置补齐。
+如果旧 case 写了 `execute.batch`，可删除它以使用文件夹默认 batch，或保留并在 `batches:` 中定义该名称。
+
+可直接运行的离线样例见 [`demo/folder_batches/`](demo/folder_batches/README.md)，
+包含两套独立目录与输入文件。
+
+#### 保留方案：集中定义命名 batch
+
+batch 数量少或同一 case 需要调用多个 batch 时，也可以继续在 `settings.yaml`
+里用 `batches:` 定义多个 exe，用例里用 `execute.batch` 选：
 
 ```yaml
 # config/settings.yaml
@@ -562,14 +676,76 @@ collect:
 | **exe** | `batches.<名前>` 是 `batch:` 的**差分**，共通项目（编码、超时）不用重写 |
 | **文件夹** | `paths` 里加一套新的论理名即可，用例用名字引用 |
 | **日志** | `batches.<名前>.log_dir` 指定该 batch 的日志目录，不写则用 `paths.log_dir` |
-| **截图对象** | `collect.folder_evidence` 按用例覆盖，不写则用 `folder_evidence.targets` |
+| **截图对象** | case 的 `collect.folder_evidence` → 所选 batch 的 `folder_evidence` → 目录/公共 `folder_evidence`；`[]` 表示不截图 |
 
 样例见 `cases\TC004_other_batch.yaml`（跑 `run_demo.bat` 能看到它和默认 batch 在同一份
 Excel 里各占一个 sheet）。
 
 > 什么时候该拆成两份 `settings.yaml` 而不是用 `batches:`？
 > **环境不同就拆**（结合测试环境 vs 本番相当环境，DB 连接不同），用 `--config` 切换；
-> **同环境下的不同 batch 就用 `batches:`**，一次执行出一份 Excel。
+> **同环境下的不同 batch 推荐按文件夹配置，也可继续用 `batches:`**，一次执行出一份 Excel。
+
+### 每个 batch / case 拍不同的文件夹
+
+截图目录无需共用一份列表。优先级为：**case → 所选命名 batch → batch 文件夹设置 → 公共设置**。
+指定的列表整体替换下一级；未填写的选项继续继承。
+
+**整个 batch 的默认截图目录**，写在 `cases/order/settings.yaml` 或该目录的 local 文件中：
+
+```yaml
+folder_evidence:
+  targets: [input_dir, processed_dir, output_dir]
+  recursive: false
+  exclude_patterns: ["*.tmp", "Thumbs.db"]
+  max_entries: 40
+```
+
+**某个 case 单独选择截图目录**，直接写在 `ORDER_001.yaml` 中：
+
+```yaml
+collect:
+  folder_evidence: [input_dir, error_dir]  # 本 case 只拍这两个目录，按此顺序
+```
+
+需要同时修改截图选项时，使用详细写法：
+
+```yaml
+collect:
+  folder_evidence:
+    targets: [output_dir, processed_dir]
+    recursive: true                       # 文件夹列表包括子目录内容
+    exclude_patterns: ["*.tmp"]           # 替换继承的排除列表；[] 表示不排除
+    max_entries: 80                        # 图片最多显示的条目数，正整数
+```
+
+**某个 case 不要文件夹截图**：
+
+```yaml
+collect:
+  folder_evidence: []
+```
+
+不写 `collect.folder_evidence` 才继承默认值；`[]` 或 `{targets: []}` 明确关闭。
+空值 `folder_evidence:` / `null` 会报配置错误，避免误把关闭写成继承。
+目录仍可因数据投入、清理、文件断言等步骤而被创建，关闭截图不影响这些步骤。
+
+如果继续使用集中式 `batches:`，也可以按命名 batch 配置：
+
+```yaml
+batches:
+  invoice:
+    exe_path: "C:/app/invoice/InvoiceBatch.exe"
+    folder_evidence:
+      targets: [inv_input_dir, inv_output_dir]
+      max_entries: 60
+```
+
+此配置在 case 指定 `execute.batch: invoice` 时生效；它不会让每个 `setup.batches`
+步骤都额外截图。工具依旧在主 batch **执行前、执行后**各拍一次，手动 before/after 同样适用。
+所有 `targets` 都必须是当前有效 `paths` 中的逻辑名；额外目录先在该 batch 的 `paths` 中定义。
+`validate` 与运行日志会显示每个 case 最终选择的截图目录。
+`recursive`、`exclude_patterns`、`max_entries` 控制 render 模式生成的文件夹列表；
+`screen` 模式直接截取 Explorer 窗口，窗口实际展示内容由 Explorer 决定。
 
 ### 一个用例先跑前置 batch，再跑主 batch
 
@@ -777,7 +953,9 @@ YAML 里 `tags:` 声明的标签会追加在后面，两者都能用来筛选。
 
 ### 不同分组调用不同的 .exe
 
-`settings.local.yaml` 里给每个 .exe 定义一个名字：
+推荐在每个 `cases/<分组>/` 中放 `settings.yaml` 和可选的 `settings.local.yaml`，
+同目录的 case 自动使用该组的 exe 和路径，详见上面的「多个 batch 怎么组织」。
+如果仍使用集中配置，也可以在公共 `settings.local.yaml` 里给每个 .exe 定义一个名字：
 
 ```yaml
 batch:                                    # 既定

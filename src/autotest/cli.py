@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import result_store
-from .config import ConfigError, load_cases, load_settings
+from .config import ConfigError, _validate_settings, default_config, load_cases, load_settings
 from .excel import build_workbook
 from .models import OK, REVIEW, RunResult
 from .orchestrator import CaseRunner
@@ -73,10 +73,7 @@ def _default_config() -> Path:
     済みなので、各自の環境値（実パス・DB 接続先）を書いても git pull で
     衝突しない。settings.yaml はリポジトリ側が更新し続けるテンプレート。
     """
-    local = PROJECT_ROOT / "config" / "settings.local.yaml"
-    if local.exists():
-        return local
-    return PROJECT_ROOT / "config" / "settings.yaml"
+    return default_config(PROJECT_ROOT)
 
 
 def _project_root_for(config_path: Path) -> Path:
@@ -333,56 +330,52 @@ def _validate(settings, cases, args, project_root: Path) -> int:
     print(f"設定ファイル : {args.config or _default_config()}")
     print(f"ケース定義   : {len(cases)} 件")
 
-    # --- paths（run 時に自動作成されるため「未作成」は警告扱い）--------------
-    raw_paths = settings.raw.get("paths") or {}
-    # サンドボックス設定はプロジェクト配下の相対パスを意図的に使うため、
-    # 「相対パス警告」の対象から外す（env.sandbox: true で明示する）
-    is_sandbox = bool(settings.env.get("sandbox", False))
-    for alias, path in settings.path_aliases.items():
-        mark = "存在" if path.is_dir() else "未作成（run 時に自動作成）"
-        if not path.is_dir():
-            warnings.append(f"paths.{alias} は未作成です: {path}")
-        print(f"  paths.{alias:<16} {path}  ({mark})")
-
-        # 相対パスはツール自身のフォルダ配下に解決される。テスト対象 batch の
-        # フォルダを指すつもりで相対で書くと、まったく別の場所を見てしまうため警告する
-        raw = str(raw_paths.get(alias, ""))
-        if not is_sandbox and raw and not Path(raw).is_absolute() and _is_under(path, project_root):
-            warnings.append(
-                f"paths.{alias} が相対パスのため、ツール自身のフォルダ配下に解決されています。\n"
-                f"          設定値: {raw}\n"
-                f"          解決先: {path}\n"
-                f"          テスト対象 batch のフォルダを指すなら、ドライブ文字付きの"
-                f"絶対パス（例 C:/app/batch/in）で書いてください。"
-            )
-
-    # --- 既定 batch ---------------------------------------------------------
-    exe = _resolve_exe(str(settings.batch["exe_path"]), project_root)
-    exe_ok = exe.exists()
-    if not exe_ok:
-        errors.append(f"batch.exe_path が見つかりません: {exe}")
-    print(f"  batch.exe_path   {exe}  ({'存在' if exe_ok else '★見つかりません'})")
-
-    # --- 名前付き batch -------------------------------------------------------
-    for name in settings.batches:
-        profile = settings.batch_profile(name)
-        bexe = _resolve_exe(str(profile.get("exe_path", "")), project_root)
-        bexe_ok = bexe.exists()
-        if not bexe_ok:
-            errors.append(f"batches.{name}.exe_path が見つかりません: {bexe}")
-        print(f"  batches.{name:<12} {bexe}  ({'存在' if bexe_ok else '★見つかりません'})")
-
-    print(f"  database         {settings.database.get('server')} / {settings.database.get('database')}")
-
-    # --- DB パスワード環境変数（offline 運用もあるため警告扱い）--------------
-    env_name = settings.database.get("password_env")
-    if env_name and str(settings.database.get("auth", "sql")).lower() != "windows":
-        if os.environ.get(env_name) is None:
-            warnings.append(f"DB パスワード環境変数 {env_name} が未設定です（--offline のみなら不要）")
-
-    # --- ケースごとの preflight（実行時と同じ検査）---------------------------
-    print()
+    base_settings = settings
     for case in cases:
+        settings = base_settings.for_case(case)
+        settings.set_base_date(case.execute.get("date") or args.date)
+        print("\n  %s 設定: %s" % (case.case_id, " -> ".join(str(p) for p in settings.sources)))
+        # --- paths（run 時に自動作成されるため「未作成」は警告扱い）--------------
+        raw_paths = settings.raw.get("paths") or {}
+        # サンドボックス設定はプロジェクト配下の相対パスを意図的に使うため、
+        # 「相対パス警告」の対象から外す（env.sandbox: true で明示する）
+        is_sandbox = bool(settings.env.get("sandbox", False))
+        for alias, path in settings.path_aliases.items():
+            mark = "存在" if path.is_dir() else "未作成（run 時に自動作成）"
+            if not path.is_dir():
+                warnings.append(f"paths.{alias} は未作成です: {path}")
+            print(f"  paths.{alias:<16} {path}  ({mark})")
+
+            # 相対パスはツール自身のフォルダ配下に解決される。テスト対象 batch の
+            # フォルダを指すつもりで相対で書くと、まったく別の場所を見てしまうため警告する
+            raw = str(raw_paths.get(alias, ""))
+            if not is_sandbox and raw and not Path(raw).is_absolute() and _is_under(path, project_root):
+                warnings.append(
+                    f"paths.{alias} が相対パスのため、ツール自身のフォルダ配下に解決されています。\n"
+                    f"          設定値: {raw}\n"
+                    f"          解決先: {path}\n"
+                    f"          テスト対象 batch のフォルダを指すなら、ドライブ文字付きの"
+                    f"絶対パス（例 C:/app/batch/in）で書いてください。"
+                )
+
+        # 実際に選択された batch を表示。主・前置 batch の存在検査は preflight で行う。
+        profile = settings.batch_profile(case.execute.get("batch"))
+        exe = _resolve_exe(str(profile.get("exe_path", "")), project_root)
+        print(f"  batch.exe_path   {exe}")
+        try:
+            folder_cfg = settings.folder_evidence_for(case)
+            print("  folder_evidence  %s" % (", ".join(folder_cfg.get("targets", [])) or "なし"))
+        except ConfigError:
+            pass  # エラーの詳細は下の共通 preflight で表示する。
+
+        print(f"  database         {settings.database.get('server')} / {settings.database.get('database')}")
+
+        # --- DB パスワード環境変数（offline 運用もあるため警告扱い）--------------
+        env_name = settings.database.get("password_env")
+        if env_name and str(settings.database.get("auth", "sql")).lower() != "windows":
+            if os.environ.get(env_name) is None:
+                warnings.append(f"DB パスワード環境変数 {env_name} が未設定です（--offline のみなら不要）")
+
         problems = preflight_case(settings, case)
         status = "OK" if not problems else "NG"
         print(f"  [{status}] {case.case_id}  {case.name}")
@@ -583,7 +576,7 @@ def _manual(args, settings, cases, out_dir: Path) -> int:
         finished_at=datetime.now(),
         env_name=str(settings.env.get("name", "")),
         tester=settings.tester,
-        exe_path=str(settings.batch.get("exe_path", "")),
+        exe_path=str(runner.settings.batch_profile(case.execute.get("batch")).get("exe_path", "")),
         db_server=str(settings.database.get("server", "")),
         db_name=str(settings.database.get("database", "")),
         filter_description="手動実施: %s" % case_id,
@@ -728,7 +721,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     _prepare_console()
     args = build_parser().parse_args(argv)
 
-    config_path = Path(args.config) if args.config else _default_config()
+    try:
+        config_path = Path(args.config) if args.config else _default_config()
+    except ConfigError as exc:
+        print(f"[設定エラー] {exc}", file=sys.stderr)
+        return 2
     project_root = _project_root_for(config_path)
     cases_dir = Path(args.cases_dir) if args.cases_dir else project_root / "cases"
 
@@ -744,11 +741,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                         cases_dir=cases_dir)
 
     try:
-        settings = load_settings(config_path, project_root=project_root)
+        settings = load_settings(config_path, project_root=project_root, require_runtime=False)
         settings.set_base_date(args.date)   # {date} の既定基準日
         cases = load_cases(cases_dir, only=args.cases, tags=args.tags)
         # 絞り込み前の全件数。証跡に「何件を実行しなかったか」を残すために使う
         total_available = len(load_cases(cases_dir)) if (args.cases or args.tags) else len(cases)
+        if args.command in ("run", "manual", "validate"):
+            for case in cases:
+                effective = settings.for_case(case)
+                _validate_settings(effective)
+                effective.batch_profile(case.execute.get("batch"))
     except ConfigError as exc:
         print(f"[設定エラー] {exc}", file=sys.stderr)
         return 2
@@ -811,7 +813,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         started_at=started,
         env_name=str(settings.env.get("name", "")),
         tester=settings.tester,
-        exe_path=str(settings.batch.get("exe_path", "")),
+        exe_path=" / ".join(sorted({str(settings.for_case(c).batch_profile(c.execute.get("batch")).get("exe_path", ""))
+                                  for c in cases})),
         db_server=str(settings.database.get("server", "")),
         db_name=str(settings.database.get("database", "")),
         filter_description=_filter_description(args),

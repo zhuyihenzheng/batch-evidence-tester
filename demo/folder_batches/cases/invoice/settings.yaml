@@ -1,0 +1,12 @@
+batch:
+  exe_path: "{python}"
+  working_dir: "."
+  common_args: ["../fake_batch.py", "--root", "sandbox_invoice"]
+paths:
+  input_dir: sandbox_invoice/in
+  processed_dir: sandbox_invoice/processed
+  error_dir: sandbox_invoice/error
+  output_dir: sandbox_invoice/out
+  log_dir: sandbox_invoice/log
+folder_evidence:
+  targets: [processed_dir, output_dir]

@@ -24,6 +24,11 @@ desktop.ini
 
 # 認証情報が混入しやすいもの
 *.local.yaml
+*.local.yml
+settings_local.yaml
+settings_local.yml
+setting_local.yaml
+setting_local.yml
 .env
 
 # クリップボード転送用の生成物（必要時に tools/make_transfer_bundle.py で再生成）

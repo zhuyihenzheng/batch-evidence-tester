@@ -35,7 +35,11 @@ batch:
   # 実行時に差し込む環境変数
   env_vars: {}
 
-# 1 回の実行で複数の batch を扱う場合の名前付き定義（任意）。
+# batch が多い場合は cases/<batch>/settings.yaml に batch / paths を分けられる。
+# 同じフォルダの settings.local.yaml（setting_local.yml も可）は本機用の差分。
+# 親から子へ辞書をマージし、リストは置換する。相対パスの基準はプロジェクトルート。
+# DB / env / excel はこの共通設定に残す。動く見本: demo/folder_batches/
+# 以下の名前付き定義も引き続き使用可能（任意）。
 #   上の batch: を土台にした差分として書けるので、共通項目の再掲は不要。
 #   ケース側で  execute.batch: invoice  と書くとこちらの定義で起動する。
 #   環境そのものが違う場合（DB 接続先が違う等）は batches ではなく
@@ -88,6 +92,8 @@ paths:
   # backup_prev:   "D:/Test/TAS/Receive/Backup/{date-1}"   # 前日分
 
 # 証跡としてフォルダ一覧画像を撮る対象と、その表示順
+# cases/<batch>/settings.yaml の同名設定、batches.<name>.folder_evidence、
+# ケースの collect.folder_evidence の順で上書きできる。[] は撮影無し。
 folder_evidence:
   targets: [input_dir, processed_dir, error_dir, output_dir]
   # 一覧に出さない項目（Thumbs.db 等のノイズ除去）。フォルダ名も指定できる。

@@ -1,0 +1,28 @@
+id: ORDER_001
+name: 订单 batch 正常处理
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  input_files:
+    - src: input/orders.csv
+      dest_dir: input_dir
+execute:
+  args: ["--mode", "daily"]
+collect:
+  # 此 case 只拍输入、输出；覆盖订单 batch 默认的三个目录。
+  folder_evidence:
+    targets: [input_dir, output_dir]
+    recursive: false
+    max_entries: 20
+  files:
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+assert:
+  exit_code: 0
+  files:
+    - name: 订单输出
+      exists: {dir: output_dir, pattern: "RESULT_*.csv", count: 1}
+    - name: 输入文件已处理
+      exists: {dir: processed_dir, pattern: orders.csv, count: 1}
+  log:
+    must_contain: ["処理正常終了"]
+    must_not_contain: ["[ERROR]"]

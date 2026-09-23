@@ -34,7 +34,7 @@ except ImportError as exc:  # pragma: no cover - GUI 無し環境
         "画面を開けません（tkinter が見つかりません）: %s\n"
         "  コマンドラインからは通常どおり使えます: python -m autotest run" % exc)
 
-from .config import ConfigError, load_cases, load_settings
+from .config import ConfigError, default_config, load_cases, load_settings
 
 CHECKED = "☑"
 UNCHECKED = "☐"
@@ -246,7 +246,7 @@ class AutotestGui(object):
         """ケース定義を読み直す。読めない場合は理由をそのまま見せる。"""
         try:
             settings_path = self.config_path or _default_config(self.project_root)
-            settings = load_settings(settings_path, project_root=self.project_root)
+            settings = load_settings(settings_path, project_root=self.project_root, require_runtime=False)
             if self.settings is not None and self._db_signature(settings) != self._db_signature(self.settings):
                 # 設定を差し替えたら、前の確認結果は当てにならない
                 self.db_state = "unknown"
@@ -683,8 +683,7 @@ class _NewCaseDialog(object):
 
 
 def _default_config(project_root: Path) -> Path:
-    local = project_root / "config" / "settings.local.yaml"
-    return local if local.exists() else project_root / "config" / "settings.yaml"
+    return default_config(project_root)
 
 
 def main(project_root: Path, config_path: Optional[Path] = None,
