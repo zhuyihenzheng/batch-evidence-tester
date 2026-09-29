@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 
 
 def _prepare_source_path():
@@ -39,7 +39,7 @@ def _functional_smoke_test():
         export_inspection(result, output)
         wb = load_workbook(str(output))
         try:
-            if wb["項目明細"]["I2"].value != "000123":
+            if wb["項目明細"]["F2"].value != "000123":
                 raise RuntimeError("Excel出力で受領値が変わりました。")
         finally:
             wb.close()

@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from openpyxl import load_workbook
 
-from .layout_inspect import DETAIL_HEADERS, SCOPE, export_inspection, inspect_txt
+from .layout_inspect import DETAIL_HEADERS, DETAIL_OUTPUT_COLUMNS, SCOPE, export_inspection, inspect_txt
 
 
 class InspectionWindow(object):
@@ -83,13 +83,12 @@ class InspectionWindow(object):
         notebook = ttk.Notebook(self.window)
         notebook.grid(row=3, column=0, sticky="nsew", padx=10)
         self.record_tree = self._tree(notebook, "レコード一覧", [
-            "ファイル", "レコード", "FORM_ID", "対象有無", "参考情報", "注意点"],
+            "ファイル", "レコード", "FORM_ID", "対象有無", "参考情報", "備考"],
             [240, 75, 85, 75, 85, 580])
-        indexes = [0, 1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 20, 21, 15, 16, 18, 19]
+        indexes = DETAIL_OUTPUT_COLUMNS
         self.detail_indexes = indexes
         self.detail_tree = self._tree(notebook, "項目明細", [DETAIL_HEADERS[i] for i in indexes],
-                                     [200, 70, 90, 80, 80, 170, 240, 70, 80, 80, 140, 85,
-                                      300, 130, 120, 120, 80, 120, 80])
+                                     [200, 70, 90, 80, 170, 240, 70, 80, 80, 140, 300])
         original = ttk.Frame(notebook)
         notebook.add(original, text="選択レコードの原文")
         original.rowconfigure(0, weight=1)

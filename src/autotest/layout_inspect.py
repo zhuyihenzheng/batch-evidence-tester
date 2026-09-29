@@ -26,10 +26,12 @@ SCOPE = ("Excel定義に対応する実値を表示し、項目数・順序・�
 DETAIL_HEADERS = [
     "ファイル", "レコード", "物理開始行", "FORM_ID", "対象有無", "TXT項目順",
     "FieldID", "項目名", "受領OCR値", "文字数", "最大桁数", "属性", "座標",
-    "参考情報", "注意点", "定義シート", "定義行", "LAYOUT_ID", "ELEMENT_ID",
+    "参考情報", "備考", "定義シート", "定義行", "LAYOUT_ID", "ELEMENT_ID",
     "展開番号", "データ型", "IME", "入力属性", "入力規則", "補足", "出力例",
     "確認内容（手入力）", "確認者", "確認メモ",
 ]
+# 対応付け用の定義情報は内部に保持し、表示・成果物は実値と備考に絞る。
+DETAIL_OUTPUT_COLUMNS = (0, 1, 2, 5, 7, 8, 9, 10, 11, 12, 14)
 
 
 def _sha(data):
@@ -257,46 +259,24 @@ def export_inspection(result, output_path, overwrite=False):
     if path.exists() and not overwrite:
         raise LayoutTxtError("同名成果物があります。別名にするか上書きを指定してください。")
     wb = Workbook()
-    summary = wb.active
-    summary.title = "受領確認"
-    _append(summary, ["受領TXT確認", "内容"])
-    for pair in [("解析日時", result.created), ("定義Excel", result.definition),
-                 ("定義SHA-256", result.definition_hash), ("定義シート", result.sheet),
-                 ("見出し行", result.header), ("文字コード", result.encoding),
-                 ("ファイル数", len(result.files)), ("レコード数", len(result.records)),
-                 ("注意点のあるレコード数", sum(bool(r["issues"]) for r in result.records)),
-                 ("TXT項目形式", "座標列あり（空欄可）" if result.block_width == 4 else "座標列なし"),
-                 ("参考情報の範囲", SCOPE),
-                 ("FieldID対応", "各FORM内の展開後連番。カレンダーは46項目。ELEMENT_IDとは別。"),
-                 ("原値の表示", "空白・先頭ゼロを保持。XML禁止制御文字のみ\\uXXXXで表示。"
-                  "原文は10000文字単位で分割。長文は数式バーで全文確認。"),
-                 ("列設定", ", ".join("%s=%s" % (k, v) for k, v in sorted(result.columns.items())))]:
-        _append(summary, pair)
-    for filename, size, digest in result.files:
-        _append(summary, ["受領ファイル", filename])
-        _append(summary, ["バイト数", size])
-        _append(summary, ["SHA-256", digest])
-    _style(summary, [26, 115])
-    summary.auto_filter.ref = None
-    summary.row_dimensions[12].height = 64
+    details = wb.active
+    details.title = "項目明細"
+    _append(details, [DETAIL_HEADERS[index] for index in DETAIL_OUTPUT_COLUMNS])
+    for row in result.details:
+        _append(details, [row[index] for index in DETAIL_OUTPUT_COLUMNS])
+    _style(details, [42, 12, 12, 12, 26, 42, 10, 12, 12, 23, 65])
+    details.freeze_panes = "F2"
+    for row in details.iter_rows(min_row=2, min_col=11, max_col=11):
+        if row[0].value:
+            row[0].fill = PatternFill("solid", fgColor="FFF2CC")
     records = wb.create_sheet("レコード一覧")
     _append(records, ["ファイル", "レコード", "物理開始行", "物理終了行", "FORM_ID", "対象有無",
-                      "定義項目数", "受領項目数", "参考情報", "注意点"])
+                      "定義項目数", "受領項目数", "参考情報", "備考"])
     for record in result.records:
         _append(records, [record[key] for key in (
             "file", "number", "line", "end_line", "form", "presence", "expected",
             "actual", "status", "issues")])
     _style(records, [42, 12, 12, 12, 14, 12, 14, 14, 14, 85], 9)
-    details = wb.create_sheet("項目明細")
-    _append(details, DETAIL_HEADERS)
-    for row in result.details:
-        _append(details, row)
-    _style(details, [42, 12, 12, 14, 12, 12, 12, 26, 42, 10, 12, 12, 23, 14, 65,
-                     20, 10, 14, 16, 12, 20, 18, 18, 32, 32, 24, 22, 18, 36], 14)
-    details.freeze_panes = "I2"
-    for row in details.iter_rows(min_row=2, min_col=27, max_col=29):
-        for cell in row:
-            cell.fill = PatternFill("solid", fgColor="FFF2CC")
     raw = wb.create_sheet("受領原文")
     _append(raw, ["ファイル", "レコード", "物理開始行", "分割番号", "原文（分割順・制御文字は可視化）"])
     for record in result.records:

@@ -70,12 +70,20 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual(wb["項目明細"]["I2"].value, '  "零",\r\n001 ')
-            self.assertEqual(wb["項目明細"]["I3"].value, '=1+1')
-            self.assertEqual(wb["項目明細"]["I3"].data_type, "s")
-            self.assertEqual(wb["項目明細"]["I4"].value, '0000123')
-            self.assertEqual(wb["項目明細"].freeze_panes, "I2")
-            self.assertEqual(wb["項目明細"].auto_filter.ref, "A1:AC5")
+            self.assertEqual(wb.sheetnames, ["項目明細", "レコード一覧", "受領原文"])
+            headers = [cell.value for cell in wb["項目明細"][1]]
+            self.assertEqual(len(headers), 11)
+            self.assertEqual(headers[-1], "備考")
+            for removed in ("FORM_ID", "対象有無", "FieldID", "定義シート", "確認者"):
+                self.assertNotIn(removed, headers)
+            self.assertEqual(wb["レコード一覧"]["E2"].value, "1001")
+            self.assertEqual(wb["レコード一覧"]["F2"].value, "1")
+            self.assertEqual(wb["項目明細"]["F2"].value, '  "零",\r\n001 ')
+            self.assertEqual(wb["項目明細"]["F3"].value, '=1+1')
+            self.assertEqual(wb["項目明細"]["F3"].data_type, "s")
+            self.assertEqual(wb["項目明細"]["F4"].value, '0000123')
+            self.assertEqual(wb["項目明細"].freeze_panes, "F2")
+            self.assertEqual(wb["項目明細"].auto_filter.ref, "A1:K5")
             self.assertEqual(wb["受領原文"]["E2"].value + wb["受領原文"]["E3"].value,
                              self.txt.read_bytes().decode("cp932"))
         finally:
@@ -155,8 +163,8 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertIsNone(wb["項目明細"]["N2"].value)
-            self.assertEqual(wb["項目明細"]["I2"].value, "000123")
+            self.assertIsNone(wb["項目明細"]["K2"].value)
+            self.assertEqual(wb["項目明細"]["F2"].value, "000123")
             self.assertFalse(any("NG" in str(cell.value) for sheet in wb for row in sheet for cell in row))
         finally:
             wb.close()
@@ -199,7 +207,7 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual(wb["項目明細"]["I2"].value, "A\\u0000B")
+            self.assertEqual(wb["項目明細"]["F2"].value, "A\\u0000B")
         finally:
             wb.close()
         result.details[0][8] = "a" * 32768
