@@ -250,14 +250,12 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output, overwrite=True)
 
     def test_invalid_xml_is_visible_and_excel_never_silently_truncates(self):
-        # Python 3.10以前のcsv.writerはNULをescapechar未指定と混同する。
-        self.write_records([self.row(first="A_NUL_B")])
-        self.txt.write_bytes(self.txt.read_bytes().replace(b"_NUL_", b"\x00"))
+        self.write_records([self.row(first="A\x01B")])
         result = self.inspect()
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual(wb["項目明細"]["F2"].value, "A\\u0000B")
+            self.assertEqual(wb["項目明細"]["F2"].value, "A\\u0001B")
         finally:
             wb.close()
         result.details[0][8] = "a" * 32768
@@ -265,6 +263,21 @@ class InspectionCase(unittest.TestCase):
         with self.assertRaises(LayoutTxtError):
             export_inspection(result, self.output, overwrite=True)
         self.assertEqual(self.output.read_bytes(), original)
+
+    def test_nul_is_retained_in_raw_even_when_legacy_csv_rejects_it(self):
+        self.write_records([self.row(first="A_NUL_B")])
+        self.txt.write_bytes(self.txt.read_bytes().replace(b"_NUL_", b"\x00"))
+        result = self.inspect()
+        export_inspection(result, self.output)
+        wb = load_workbook(str(self.output))
+        try:
+            self.assertIn("A\\u0000B", wb["受領原文"]["E2"].value)
+            if sys.version_info < (3, 11):
+                self.assertIn("CSV解析不可", result.records[0]["issues"])
+            else:
+                self.assertEqual(wb["項目明細"]["F2"].value, "A\\u0000B")
+        finally:
+            wb.close()
 
     def test_raw_long_records_are_split_without_loss(self):
         self.write_records([self.row(first="a" * 12000, second="b" * 12000)])
