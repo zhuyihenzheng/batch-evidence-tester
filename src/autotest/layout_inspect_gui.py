@@ -2,6 +2,8 @@
 """受領TXTの確認画面。生成画面の編集値は取り込まない。"""
 
 import os
+import csv
+import io
 import queue
 import subprocess
 import sys
@@ -74,6 +76,8 @@ class InspectionWindow(object):
         ttk.Checkbutton(filters, text="注意点のあるデータのみ", variable=self.issues_only,
                         command=self._render).pack(side="left", padx=6)
         ttk.Button(filters, text="表示更新", command=self._render).pack(side="left")
+        ttk.Button(filters, text="選択行をコピー", command=lambda: self._copy_rows(self.detail_tree)).pack(
+            side="left", padx=6)
         notebook = ttk.Notebook(self.window)
         notebook.grid(row=3, column=0, sticky="nsew", padx=10)
         self.record_tree = self._tree(notebook, "レコード一覧", [
@@ -191,7 +195,7 @@ class InspectionWindow(object):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         columns = [str(i) for i in range(len(headers))]
-        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="extended")
         tree.grid(row=0, column=0, sticky="nsew")
         for col, title, width in zip(columns, headers, widths):
             tree.heading(col, text=title)
@@ -201,7 +205,104 @@ class InspectionWindow(object):
             bar.grid(row=row, column=col, sticky="ns" if axis == "y" else "ew")
             tree.configure(**{axis + "scrollcommand": bar.set})
         tree.tag_configure("注意点あり", background="#fff2cc")
+        tree.bind("<Control-c>", lambda _event: self._copy_rows(tree))
+        tree.bind("<Control-a>", lambda _event: self._select_all_rows(tree))
+        if sys.platform == "darwin":
+            tree.bind("<Command-c>", lambda _event: self._copy_rows(tree))
+            tree.bind("<Command-a>", lambda _event: self._select_all_rows(tree))
+        tree.bind("<Double-1>", self._show_cell)
+        tree.bind("<Button-3>", self._copy_menu)
+        if sys.platform == "darwin":
+            tree.bind("<Button-2>", self._copy_menu)
         return tree
+
+    def _select_all_rows(self, tree):
+        tree.selection_set(tree.get_children())
+        return "break"
+
+    def _copy_rows(self, tree):
+        selected = set(tree.selection())
+        if not selected:
+            self.status.set("コピーする行を選択してください。セルの文字はダブルクリックで選択できます。")
+            return "break"
+        output = io.StringIO(newline="")
+        writer = csv.writer(output, delimiter="\t", lineterminator="\r\n")
+        for iid in tree.get_children():
+            if iid in selected:
+                writer.writerow(tree.item(iid, "values"))
+        self.window.clipboard_clear()
+        self.window.clipboard_append(output.getvalue())
+        self.status.set("%d行をコピーしました。Excelなどへ貼り付けできます。" % len(selected))
+        return "break"
+
+    def _show_cell(self, event):
+        tree = event.widget
+        iid = tree.identify_row(event.y)
+        column = tree.identify_column(event.x)
+        if tree.identify_region(event.x, event.y) != "cell" or not iid or column == "#0":
+            return
+        tree.selection_set(iid)
+        self._cell_text_dialog(tree, iid, column)
+        return "break"
+
+    def _cell_text_dialog(self, tree, iid, column):
+        value = tree.set(iid, column)
+        dialog = tk.Toplevel(self.window)
+        dialog.title("%s — 選択してコピー" % tree.heading(column, "text"))
+        dialog.transient(self.window)
+        dialog.geometry("700x260")
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+        text = tk.Text(dialog, wrap="word", exportselection=False)
+        text.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        bar = ttk.Scrollbar(dialog, orient="vertical", command=text.yview)
+        bar.grid(row=0, column=1, sticky="ns", padx=(0, 8), pady=8)
+        text.configure(yscrollcommand=bar.set)
+        text.insert("1.0", value)
+        text.configure(state="disabled")
+        text.tag_add("sel", "1.0", "end-1c")
+        text.focus_set()
+
+        def select_all(_event):
+            text.tag_add("sel", "1.0", "end-1c")
+            return "break"
+
+        def copy(_event=None):
+            ranges = text.tag_ranges("sel")
+            selected = text.get(*ranges) if ranges else value
+            self.window.clipboard_clear()
+            self.window.clipboard_append(selected)
+            return "break"
+        text.bind("<Control-a>", select_all)
+        text.bind("<Control-c>", copy)
+        if sys.platform == "darwin":
+            text.bind("<Command-a>", select_all)
+            text.bind("<Command-c>", copy)
+        ttk.Button(dialog, text="選択した文字をコピー", command=copy).grid(
+            row=1, column=0, sticky="e", padx=8, pady=(0, 8))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        return dialog, text
+
+    def _copy_menu(self, event):
+        tree = event.widget
+        iid = tree.identify_row(event.y)
+        column = tree.identify_column(event.x)
+        if iid and iid not in tree.selection():
+            tree.selection_set(iid)
+        previous = getattr(tree, "_copy_context_menu", None)
+        if previous is not None:
+            previous.destroy()
+        menu = tk.Menu(tree, tearoff=False)
+        tree._copy_context_menu = menu
+        menu.add_command(label="選択行をコピー", command=lambda: self._copy_rows(tree))
+        menu.add_command(label="全行を選択", command=lambda: self._select_all_rows(tree))
+        if iid and column != "#0" and tree.identify_region(event.x, event.y) == "cell":
+            menu.add_command(label="セルの文字を選択", command=lambda: self._cell_text_dialog(tree, iid, column))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
 
     def _start(self, operation, callback):
         self.busy = True

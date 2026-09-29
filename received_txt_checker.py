@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 
 
 def _prepare_source_path():
