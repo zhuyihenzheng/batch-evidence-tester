@@ -320,7 +320,8 @@ class LayoutField(object):
                  attribute_flag: str = "0", coordinates: str = "0,0,0,1",
                  input_attribute: str = "", input_rule: str = "",
                  notes: str = "", output_example: str = "",
-                 occurrence_index: int = 1, occurrence_count: int = 1) -> None:
+                 occurrence_index: int = 1, occurrence_count: int = 1,
+                 source_element_id: str = "") -> None:
         self.form_id = form_id
         self.layout_id = layout_id
         self.field_id = field_id
@@ -338,6 +339,7 @@ class LayoutField(object):
         self.output_example = output_example
         self.occurrence_index = occurrence_index
         self.occurrence_count = occurrence_count
+        self.source_element_id = source_element_id
 
     @property
     def instance_key(self) -> str:
@@ -665,7 +667,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                     input_attribute=input_attribute, input_rule=input_rule,
                     notes=notes, output_example=output_example,
                     occurrence_index=occurrence_index,
-                    occurrence_count=occurrence_count))
+                    occurrence_count=occurrence_count,
+                    source_element_id=element_id))
                 coordinate_counts[form_id] = coordinate_index + 1
                 if is_date:
                     date_counts[date_key] = date_index + 1
@@ -858,7 +861,8 @@ def _copy_field(field: LayoutField) -> LayoutField:
         input_attribute=field.input_attribute, input_rule=field.input_rule,
         notes=field.notes, output_example=field.output_example,
         occurrence_index=field.occurrence_index,
-        occurrence_count=field.occurrence_count)
+        occurrence_count=field.occurrence_count,
+        source_element_id=field.source_element_id)
 
 
 def _copy_fields(fields: Sequence[LayoutField]) -> List[LayoutField]:

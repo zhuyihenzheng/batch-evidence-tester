@@ -1404,6 +1404,67 @@ DATA002F.png,,1002,0,REF002.dat,error
 | `base_name` | 不含 F/R 和扩展名的基名 |
 | 自定义键 | 每行 `key=value` 中填写的值 |
 
+### 受领实际 TXT → 确认画面 / Excel 成果物
+
+这是独立小程序 **Received TXT Checker**，启动和使用均不需要打开原 TXT/TIF/TAR 生成工具。
+双击 `run_received_txt_checker.bat`，或运行 `python received_txt_checker.py`。
+点击「Excelを選択...」选择之前的定义 Excel，再选择 sheet。
+需要自定义列时点击「見出し行・列設定...」。更改定义设置会清除旧解析结果，避免导出旧数据。
+选择实际 TXT 的文字编码（默认 `cp932`），再点击「受領TXTを選択・解析」。
+可以一次选择多个文件；每个文件内支持多个 FORM、同一 FORM 的多条记录。
+
+源码启动需要 Python 3.6+、tkinter 和 openpyxl，不需要数据库或图片处理包。
+可用 `python received_txt_checker.py --excel definition.xlsx` 预选定义文件。
+Windows 下运行 `build_received_txt_checker.bat --install`，生成独立单文件
+`dist\ReceivedTxtChecker.exe`，可单独交给未安装 Python 的用户。
+已有构建依赖时可省略 `--install`；也支持 `--onedir`，此时需分发整个
+`dist\ReceivedTxtChecker\` 文件夹。可用环境变量 `CHECKER_BUILD_PYTHON` 指定构建解释器。
+Windows CI 会构建并验证该程序。macOS 无法用本机 PyInstaller 直接构建 Windows EXE。
+需要独立源码包时运行 `python tools/package_received_txt_checker.py`，产物为
+`output/ReceivedTxtChecker-source.zip`，解压后不需要完整的 AUTO_TEST_BATCH 项目。
+
+支持的输入是现有 **raw 格式**：`FormID,対象有無,(FieldID,OCR値,属性,座標)...`，
+使用 CSV 引号规则，含逗号、双引号或换行的值必须正确引用。
+当前不支持 labeled、TSV、固定长 TXT 或单字段背面 TXT；这些输入不会被当作正常记录。
+若实际文件采用其他格式，需要按真实样例增加解析规则。
+
+- 「レコード一覧」看每条记录的 FORM、数量、结构异常；「項目明細」看受领值和项目名。
+  选择一条记录或项目后，可在「選択レコードの原文」查看对应原文。
+- 可搜索文件名、FORM、项目名、实际值，并筛选「NG・要確認のみ」。画面每个表最多
+  显示 3000 行，状态栏显示实际匹配数量；**Excel 始终导出全部解析结果**。
+- FieldID 沿用生成工具的定义：各 FORM 内按展开顺序从 1 编号，**不是 ELEMENT_ID**。
+  日历展开为 46 项。明细同时保留原 ELEMENT_ID、LAYOUT_ID、定义行和展开编号。
+- 前导零、空格、空值、引号和换行保留；值始终写成 Excel 文本，`=...` 不作为公式执行。
+  缺项、未知 ID、重复项和损坏记录都会留痕，不会用生成用的既定值补齐。
+- 自动照合包含 FORM / FieldID、数量与顺序、最大字符数、属性和坐标形式。
+  空 OCR、属性 1 / 2、対象有無=0 会提示确认。**「照合済」仅表示这些结构检查无异常**；
+  业务正确性、必填、IME、日期有效性和坐标位置仍需人工确认。最大桁数按字符数检查，非字节数。
+
+「全件をExcel出力」生成独立 `.xlsx`，不修改输入 Excel 或 TXT：
+
+| Sheet | 内容 |
+|---|---|
+| 受領確認 | 定义与 TXT 来源、SHA-256、编码、解析时间、数量及检查范围 |
+| レコード一覧 | 每条记录的物理行号、FORM、数量、照合结果和指摘 |
+| 項目明細 | 实际值、项目定义、来源行、异常及黄色人工确认栏 |
+| 受領原文 | 按记录保留解码后的原文，长记录每 10000 字符分段 |
+
+XML 禁止的控制字符显示为 `\uXXXX`。超出 Excel 单元格 32767 字符或行数上限时
+明确报错，不静默截断。人工确认栏用于记录确认结果，不会反算自动照合结论。
+本功能的 Excel 包含受领原值，未自动脱敏，按原 TXT 的资料权限管理。
+
+命令行也可使用（Windows 先设置 `set PYTHONPATH=src`）：
+
+```bat
+python -m autotest.layout_inspect definition.xlsx received1.txt received2.txt ^
+    --sheet 帳票定義 --encoding cp932 --out output\受領TXT確認.xlsx
+```
+
+可用 `--header-row` 和 `--form-column / --layout-column / --field-column / --item-column /`
+`--data-type-column / --ime-column / --max-digits-column` 调整定义列。
+默认不覆盖已有文件，明确指定 `--overwrite` 才覆盖。退出码：`0`=结构照合无指摘，
+`1`=有 NG（仍输出 Excel），`2`=输入/保存错误，`3`=有要确认。
+
 ### 直接生成 TXT / TIF / TAR
 
 不使用输出列表时，工具也可以按 `FORM_ID` 直接生成：

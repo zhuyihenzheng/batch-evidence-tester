@@ -28,6 +28,52 @@ from autotest import gui  # noqa: E402
 from autotest import layout_txt_gui  # noqa: E402
 from autotest.layout_tar import next_numbered_base_name  # noqa: E402
 from autotest.layout_txt import LayoutField  # noqa: E402
+from autotest import layout_inspect_gui  # noqa: E402
+
+
+class ReceivedTxtGuiCase(unittest.TestCase):
+    def test_failed_new_read_cannot_export_previous_results(self):
+        holder = types.SimpleNamespace(
+            busy=False, result=object(), saved_path=Path("old.xlsx"), window=mock.Mock(),
+            _clear=mock.Mock(), _start=mock.Mock(), encoding=mock.Mock(),
+            _sync_definition=mock.Mock(return_value=True),
+            excel=Path("definition.xlsx"), options={})
+        holder.encoding.get.return_value = "cp932"
+        with mock.patch.object(layout_inspect_gui.filedialog, "askopenfilenames",
+                               return_value=["broken.txt"], create=True):
+            layout_inspect_gui.InspectionWindow._choose(holder)
+        self.assertIsNone(holder.result)
+        self.assertIsNone(holder.saved_path)
+        holder._clear.assert_called_once_with()
+        self.assertEqual(holder._start.call_args[0][0], "read")
+
+    def test_export_uses_entire_inspection_not_screen_filter(self):
+        result = object()
+        holder = types.SimpleNamespace(
+            busy=False, result=result, window=mock.Mock(), output_dir="output",
+            excel=Path("definition.xlsx"), saved_path=None, _start=mock.Mock())
+        with mock.patch.object(layout_inspect_gui.filedialog, "asksaveasfilename",
+                               return_value="check.xlsx", create=True), \
+                mock.patch.object(layout_inspect_gui, "export_inspection") as export:
+            layout_inspect_gui.InspectionWindow._export(holder)
+            holder._start.call_args[0][1]()
+        export.assert_called_once_with(result, "check.xlsx", overwrite=True)
+
+    def test_detail_display_limit_is_explicit_and_does_not_change_result(self):
+        row = [""] * 29
+        row[0], row[1], row[13] = "received.txt", 1, "NG"
+        record = dict(file="received.txt", number=1, form="1001", presence="1", status="NG", issues="異常")
+        result = types.SimpleNamespace(details=[row] * 3001, records=[record], encoding="cp932")
+        holder = types.SimpleNamespace(
+            busy=False, result=result, _clear=mock.Mock(), query=mock.Mock(),
+            issues_only=mock.Mock(), detail_tree=mock.Mock(), record_tree=mock.Mock(),
+            detail_indexes=[0, 1, 13], status=mock.Mock())
+        holder.query.get.return_value = ""
+        holder.issues_only.get.return_value = True
+        layout_inspect_gui.InspectionWindow._render(holder)
+        self.assertEqual(holder.detail_tree.insert.call_count, 3000)
+        self.assertEqual(len(result.details), 3001)
+        self.assertIn("明細3000/3001", holder.status.set.call_args[0][0])
 
 
 class GuiSubprocessEncodingCase(unittest.TestCase):

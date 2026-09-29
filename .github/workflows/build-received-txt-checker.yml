@@ -1,0 +1,49 @@
+name: Build Received TXT Checker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-received-txt-checker.yml"
+      - "received_txt_checker.py"
+      - "received_txt_checker.spec"
+      - "build_received_txt_checker.bat"
+      - "run_received_txt_checker.bat"
+      - "pyinstaller_compat.py"
+      - "requirements-build-*.txt"
+      - "requirements-received-txt-checker.txt"
+      - "src/autotest/layout_inspect*.py"
+      - "src/autotest/layout_txt.py"
+      - "src/autotest/layout_naming.py"
+      - "tests/test_layout_inspect.py"
+      - "tests/test_received_txt_checker.py"
+      - "tests/test_gui.py"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10.11"
+      - name: Install test dependencies
+        run: python -m pip install openpyxl==3.0.10 Pillow==9.5.0 PyYAML==6.0.2 pytest==7.4.4
+      - name: Test
+        run: python -m pytest tests/test_received_txt_checker.py tests/test_layout_inspect.py tests/test_gui.py -q
+      - name: Check Python 3.6 compatibility
+        run: python tools/check_py36_compat.py src/autotest received_txt_checker.py
+      - name: Build standalone EXE and smoke-test
+        shell: cmd
+        run: build_received_txt_checker.bat --install
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReceivedTxtChecker-windows-x64
+          path: dist/ReceivedTxtChecker.exe
+          if-no-files-found: error
+          retention-days: 30
