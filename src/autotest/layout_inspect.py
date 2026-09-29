@@ -21,15 +21,14 @@ from openpyxl.utils import get_column_letter
 from .layout_txt import LayoutTxtError, read_layout_fields
 
 
-SCOPE = ("照合対象: FORM/FieldID・項目数・順序・最大文字数・属性・座標形式。"
-         "業務上の正誤、必須、IME、日付の妥当性、座標の位置は自動判定しません。"
-         "「照合済」は上記の構造チェックのみ。実値と定義を確認してください。")
+SCOPE = ("Excel定義に対応する実値を表示し、項目数・順序・文字数などの注意点を参考情報として記載します。"
+         "座標は任意です。空欄でも注意点にしません。業務内容は実値と定義を見て確認してください。")
 DETAIL_HEADERS = [
     "ファイル", "レコード", "物理開始行", "FORM_ID", "対象有無", "TXT項目順",
     "FieldID", "項目名", "受領OCR値", "文字数", "最大桁数", "属性", "座標",
-    "照合結果", "指摘", "定義シート", "定義行", "LAYOUT_ID", "ELEMENT_ID",
+    "参考情報", "注意点", "定義シート", "定義行", "LAYOUT_ID", "ELEMENT_ID",
     "展開番号", "データ型", "IME", "入力属性", "入力規則", "補足", "出力例",
-    "確認結果（手入力）", "確認者", "確認メモ",
+    "確認内容（手入力）", "確認者", "確認メモ",
 ]
 
 
@@ -52,8 +51,8 @@ class Inspection(object):
 
     @property
     def exit_code(self):
-        statuses = [record["status"] for record in self.records]
-        return 1 if "NG" in statuses else (3 if "要確認" in statuses else 0)
+        # 参考情報の有無は、読込・Excel出力の成功とは別に扱う。
+        return 0
 
 
 def _detail(result, record, position, block, field, issues, status):
@@ -72,7 +71,7 @@ def _detail(result, record, position, block, field, issues, status):
     ]
 
 
-def _inspect_record(result, groups, record, values, parse_error):
+def _inspect_record(result, groups, record, values, parse_error, block_width=4):
     issues = []
     review = []
     record.update(form=values[0] if values else "",
@@ -88,9 +87,7 @@ def _inspect_record(result, groups, record, values, parse_error):
         issues.append("対象有無は0または1が必要")
     elif record["presence"] == "0":
         review.append("対象有無=0。項目の要否を確認")
-    blocks = [values[index:index + 4] for index in range(2, len(values), 4)]
-    if (len(values) - 2) % 4 and len(values) >= 2:
-        issues.append("Fieldブロックが4要素未満（途中欠落）")
+    blocks = [values[index:index + block_width] for index in range(2, len(values), block_width)]
     counts = Counter(block[0] for block in blocks)
     lookup = {field.field_id: field for field in fields or []}
     if fields and len(blocks) != len(fields):
@@ -106,8 +103,8 @@ def _inspect_record(result, groups, record, values, parse_error):
             problems.append("FieldIDが定義外または空")
         if counts[block[0]] > 1:
             problems.append("FieldIDが重複")
-        if len(block) < 4:
-            problems.append("Fieldブロックが4要素未満")
+        if len(block) < 3:
+            problems.append("項目ブロックのOCR値または属性が不足")
         value = block[1] if len(block) > 1 else None
         if value is not None and field and field.max_digits is not None:
             if len(value) > field.max_digits:
@@ -119,30 +116,28 @@ def _inspect_record(result, groups, record, values, parse_error):
                 problems.append("属性が定義外")
             elif block[2] != "0":
                 cautions.append("属性%s（1:個数不正 / 2:認識不可）" % block[2])
-        if len(block) > 3 and not re.fullmatch(r"[0-9]+,[0-9]+,[0-9]+,[0-9]+", block[3]):
-            problems.append("座標は4個の非負整数が必要")
+        if len(block) > 3 and block[3] and not re.fullmatch(r"[0-9]+,[0-9]+,[0-9]+,[0-9]+", block[3]):
+            cautions.append("座標の形式を確認（参考:4個の非負整数）")
         if fields and index <= len(fields) and block[0] != fields[index - 1].field_id:
             problems.append("FieldIDの順序が定義と不一致")
-        status = "NG" if problems else ("要確認" if cautions else "照合済")
+        status = "注意点あり" if problems or cautions else ""
         detail_statuses.append(status)
         result.details.append(_detail(result, record, index, block, field,
                                       problems + cautions, status))
     for field in fields or []:
         if field.field_id not in counts:
             result.details.append(_detail(result, record, None, [field.field_id], field,
-                                          ["TXTに項目なし（定義から補記）"], "NG"))
-            detail_statuses.append("NG")
-    if "NG" in detail_statuses:
-        issues.append("項目明細にNGあり")
-    if "要確認" in detail_statuses:
-        review.append("項目明細に要確認あり")
-    record.update(status="NG" if issues else ("要確認" if review else "照合済"),
+                                          ["TXTに項目なし（定義から補記）"], "注意点あり"))
+            detail_statuses.append("注意点あり")
+    if "注意点あり" in detail_statuses:
+        review.append("項目明細に注意点あり")
+    record.update(status="注意点あり" if issues or review else "",
                   issues=" / ".join(issues + review), expected=len(fields) if fields else None,
                   actual=len(blocks))
     result.records.append(record)
 
 
-def inspect_txt(excel_path, txt_paths, encoding="cp932", **definition_options):
+def inspect_txt(excel_path, txt_paths, encoding="cp932", block_width=4, **definition_options):
     """同一FORMの複数レコードも別々に照合し、実値を補正しない。"""
     definition = Path(excel_path).resolve()
     paths = [Path(path).resolve() for path in txt_paths]
@@ -150,6 +145,8 @@ def inspect_txt(excel_path, txt_paths, encoding="cp932", **definition_options):
         raise LayoutTxtError("受領TXTを1件以上選択してください。")
     if len(set(paths)) != len(paths):
         raise LayoutTxtError("同じ受領TXTが重複選択されています。")
+    if block_width not in (3, 4):
+        raise LayoutTxtError("項目形式は座標列あり（4要素）または座標列なし（3要素）にしてください。")
     # 生成用既定値・画面編集は実データの解釈に混ぜない。
     definition_options.update(default_value_column="none", coordinates_column="none",
                               profile="normal", date_mode="wareki", coverage_form_id="")
@@ -161,6 +158,7 @@ def inspect_txt(excel_path, txt_paths, encoding="cp932", **definition_options):
     except OSError as exc:
         raise LayoutTxtError("定義Excelを読めません: %s" % exc)
     result = Inspection(definition, sheet, header, columns, _sha(before), encoding)
+    result.block_width = block_width
     groups = OrderedDict()
     for field in fields:
         groups.setdefault(field.form_id, []).append(field)
@@ -192,13 +190,13 @@ def inspect_txt(excel_path, txt_paths, encoding="cp932", **definition_options):
             end = len(raw_lines) if error else reader.line_num
             record = dict(file=str(path), number=number, line=previous + 1,
                           end_line=end, raw="".join(raw_lines[previous:end]))
-            _inspect_record(result, groups, record, values, error)
+            _inspect_record(result, groups, record, values, error, block_width=block_width)
             previous = end
             if error:
                 break
         if not number:
             _inspect_record(result, groups, dict(file=str(path), number=1, line=1,
-                                                end_line=1, raw=text), [], "空ファイル")
+                                                end_line=1, raw=text), [], "空ファイル", block_width=block_width)
     return result
 
 
@@ -243,9 +241,8 @@ def _style(ws, widths, status_column=None):
         ws.row_dimensions[row[0].row].height = 45
         if status_column:
             cell = row[status_column - 1]
-            if cell.value in ("NG", "要確認"):
-                cell.fill = PatternFill("solid", fgColor=(
-                    "FCE4D6" if cell.value == "NG" else "FFF2CC"))
+            if cell.value == "注意点あり":
+                cell.fill = PatternFill("solid", fgColor="FFF2CC")
 
 
 def export_inspection(result, output_path, overwrite=False):
@@ -267,9 +264,9 @@ def export_inspection(result, output_path, overwrite=False):
                  ("定義SHA-256", result.definition_hash), ("定義シート", result.sheet),
                  ("見出し行", result.header), ("文字コード", result.encoding),
                  ("ファイル数", len(result.files)), ("レコード数", len(result.records)),
-                 ("NGレコード数", sum(r["status"] == "NG" for r in result.records)),
-                 ("要確認レコード数", sum(r["status"] == "要確認" for r in result.records)),
-                 ("照合範囲", SCOPE),
+                 ("注意点のあるレコード数", sum(bool(r["issues"]) for r in result.records)),
+                 ("TXT項目形式", "座標列あり（空欄可）" if result.block_width == 4 else "座標列なし"),
+                 ("参考情報の範囲", SCOPE),
                  ("FieldID対応", "各FORM内の展開後連番。カレンダーは46項目。ELEMENT_IDとは別。"),
                  ("原値の表示", "空白・先頭ゼロを保持。XML禁止制御文字のみ\\uXXXXで表示。"
                   "原文は10000文字単位で分割。長文は数式バーで全文確認。"),
@@ -284,7 +281,7 @@ def export_inspection(result, output_path, overwrite=False):
     summary.row_dimensions[12].height = 64
     records = wb.create_sheet("レコード一覧")
     _append(records, ["ファイル", "レコード", "物理開始行", "物理終了行", "FORM_ID", "対象有無",
-                      "定義項目数", "受領項目数", "照合結果", "指摘"])
+                      "定義項目数", "受領項目数", "参考情報", "注意点"])
     for record in result.records:
         _append(records, [record[key] for key in (
             "file", "number", "line", "end_line", "form", "presence", "expected",
@@ -358,11 +355,13 @@ def main(argv=None):
                           ("max-digits", "K")):
         parser.add_argument("--%s-column" % role, default=default)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--no-coordinates", action="store_true", help="座標列なしの3要素形式で読む")
     args = parser.parse_args(argv)
     options = {role + "_column": getattr(args, role + "_column") for role in
                ("form", "layout", "field", "item", "data_type", "ime", "max_digits")}
     try:
         result = inspect_txt(args.excel, args.txt, encoding=args.encoding,
+                             block_width=3 if args.no_coordinates else 4,
                              sheet_name=args.sheet, header_row=args.header_row, **options)
         path = export_inspection(result, args.out, overwrite=args.overwrite)
     except (LayoutTxtError, OSError, ValueError) as exc:

@@ -55,7 +55,7 @@ class InspectionCase(unittest.TestCase):
         row = self.row()
         self.write_records([row[:2] + row[6:] + row[2:6]])
         result = self.inspect()
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 0)
         self.assertEqual([r[7] for r in result.details], ["氏名", "受付番号"])
         self.assertEqual([r[18] for r in result.details], ["0100", "0099"])
         self.assertEqual(result.details[1][8], "0000123")
@@ -97,7 +97,7 @@ class InspectionCase(unittest.TestCase):
         self.write_records([["1001", "1", "1", "A", "0", "0,0,1,1",
                              "1", "B", "0", "0,0,1,1", "99", "C"]])
         result = self.inspect()
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 0)
         self.assertEqual(len(result.details), 4)
         self.assertIn("重複", result.details[0][14])
         self.assertIn("定義外", result.details[2][14])
@@ -107,13 +107,13 @@ class InspectionCase(unittest.TestCase):
         self.assertIsNone(result.details[3][8])
         self.assertIn("TXTに項目なし", result.details[3][14])
 
-    def test_unknown_form_target_and_attributes_cannot_pass(self):
+    def test_unknown_form_target_and_attributes_have_notes(self):
         rows = [self.row(), self.row(), self.row()]
         rows[0][0] = "9999"
         rows[1][1] = "9"
         rows[2][4] = "9"
         self.write_records(rows)
-        self.assertEqual([r["status"] for r in self.inspect().records], ["NG"] * 3)
+        self.assertEqual([r["status"] for r in self.inspect().records], ["注意点あり"] * 3)
 
     def test_empty_values_and_recognition_flags_require_review(self):
         row = self.row(first="")
@@ -121,26 +121,52 @@ class InspectionCase(unittest.TestCase):
         row[1] = "0"
         self.write_records([row])
         result = self.inspect()
-        self.assertEqual(result.exit_code, 3)
+        self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.details[0][8], "")
-        self.assertEqual(result.records[0]["status"], "要確認")
+        self.assertEqual(result.records[0]["status"], "注意点あり")
 
     def test_overlong_and_bad_coordinates(self):
         row = self.row(first="あ" * 21)
         row[-1] = "bad"
         self.write_records([row])
         result = self.inspect()
-        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.details[0][8], "あ" * 21)
         self.assertIn("最大桁数超過", result.details[0][14])
         self.assertIn("座標", result.details[1][14])
 
-    def test_blank_lines_empty_file_and_malformed_csv_never_pass(self):
+    def test_blank_and_omitted_final_coordinate_have_no_notes(self):
+        row = self.row()
+        row[5] = ""
+        self.write_records([row[:-1]])
+        result = self.inspect()
+        self.assertEqual(result.records[0]["issues"], "")
+        self.assertEqual([r[14] for r in result.details], ["", ""])
+        self.assertEqual([r[12] for r in result.details], ["", None])
+
+    def test_no_coordinate_columns_preserve_all_field_values(self):
+        row = self.row(first="000123")
+        self.write_records([row[:5] + row[6:9]])
+        result = self.inspect(block_width=3)
+        self.assertEqual(result.records[0]["issues"], "")
+        self.assertEqual(result.records[0]["actual"], 2)
+        self.assertEqual([r[8] for r in result.details], ["000123", "山田 太郎"])
+        self.assertEqual([r[12] for r in result.details], [None, None])
+        export_inspection(result, self.output)
+        wb = load_workbook(str(self.output))
+        try:
+            self.assertIsNone(wb["項目明細"]["N2"].value)
+            self.assertEqual(wb["項目明細"]["I2"].value, "000123")
+            self.assertFalse(any("NG" in str(cell.value) for sheet in wb for row in sheet for cell in row))
+        finally:
+            wb.close()
+
+    def test_blank_lines_empty_file_and_malformed_csv_are_retained_with_notes(self):
         for payload in (b"", b"\r\n", b'"1001","1","unterminated\r\ntrailing data'):
             with self.subTest(payload=payload):
                 self.txt.write_bytes(payload)
                 result = self.inspect()
-                self.assertEqual(result.exit_code, 1)
+                self.assertEqual(result.exit_code, 0)
                 self.assertEqual("".join(r["raw"] for r in result.records), payload.decode("cp932"))
 
     def test_utf8_bom_and_selected_encoding(self):
@@ -199,13 +225,16 @@ class InspectionCase(unittest.TestCase):
             with self.assertRaises(LayoutTxtError):
                 inspect_txt(self.definition, paths)
 
-    def test_cli_outputs_ng_workbook_and_contract_exit_codes(self):
+    def test_cli_exports_notes_without_failure_exit_code(self):
         args = [str(self.definition), str(self.txt), "--out", str(self.output)]
-        for value, expected in (("A", 0), ("a" * 21, 1), ("", 3)):
+        for value, expected in (("A", 0), ("a" * 21, 0), ("", 0)):
             self.write_records([self.row(first=value)])
             self.assertEqual(main(args + ["--overwrite"]), expected)
             self.assertTrue(self.output.is_file())
         self.assertEqual(main(args), 2)
+        row = self.row()
+        self.write_records([row[:5] + row[6:9]])
+        self.assertEqual(main(args + ["--overwrite", "--no-coordinates"]), 0)
 
     def test_native_window_parse_filter_raw_and_export(self):
         try:

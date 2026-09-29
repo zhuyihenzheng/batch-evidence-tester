@@ -35,6 +35,7 @@ class InspectionWindow(object):
         self.status = tk.StringVar(value="受領TXTを選択してください。複数ファイルに対応します。")
         self.query = tk.StringVar(value="")
         self.issues_only = tk.BooleanVar(value=False)
+        self.field_format = tk.StringVar(value="座標列あり（空欄可）")
         self.excel_label = tk.StringVar(value=str(self.excel) or "定義Excelを選択してください。")
         self.sheet = tk.StringVar(value=self.options.get("sheet_name") or "")
         source = ttk.LabelFrame(self.window, text="1. レイアウト定義Excel", padding=8)
@@ -50,6 +51,11 @@ class InspectionWindow(object):
         self.sheet_box.bind("<<ComboboxSelected>>", lambda _event: self._invalidate())
         self.columns_button = ttk.Button(source, text="見出し行・列設定...", command=self._column_settings)
         self.columns_button.grid(row=1, column=2, padx=8, pady=(8, 0))
+        ttk.Label(source, text="TXT項目形式:").grid(row=2, column=0, pady=(8, 0))
+        self.block_format_box = ttk.Combobox(source, textvariable=self.field_format, state="readonly",
+                                             values=("座標列あり（空欄可）", "座標列なし"), width=30)
+        self.block_format_box.grid(row=2, column=1, sticky="w", pady=(8, 0))
+        self.block_format_box.bind("<<ComboboxSelected>>", lambda _event: self._invalidate())
         controls = ttk.Frame(self.window, padding=(10, 0))
         controls.grid(row=1, column=0, sticky="we")
         ttk.Label(controls, text="受領文字コード:").pack(side="left")
@@ -71,13 +77,13 @@ class InspectionWindow(object):
         entry = ttk.Entry(filters, textvariable=self.query, width=28)
         entry.pack(side="left", padx=6)
         entry.bind("<Return>", lambda _event: self._render())
-        ttk.Checkbutton(filters, text="NG・要確認のみ", variable=self.issues_only,
+        ttk.Checkbutton(filters, text="注意点のあるデータのみ", variable=self.issues_only,
                         command=self._render).pack(side="left", padx=6)
         ttk.Button(filters, text="表示更新", command=self._render).pack(side="left")
         notebook = ttk.Notebook(self.window)
         notebook.grid(row=3, column=0, sticky="nsew", padx=10)
         self.record_tree = self._tree(notebook, "レコード一覧", [
-            "ファイル", "レコード", "FORM_ID", "対象有無", "照合結果", "指摘"],
+            "ファイル", "レコード", "FORM_ID", "対象有無", "参考情報", "注意点"],
             [240, 75, 85, 75, 85, 580])
         indexes = [0, 1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 20, 21, 15, 16, 18, 19]
         self.detail_indexes = indexes
@@ -201,14 +207,13 @@ class InspectionWindow(object):
             bar = ttk.Scrollbar(frame, orient=orient, command=getattr(tree, axis + "view"))
             bar.grid(row=row, column=col, sticky="ns" if axis == "y" else "ew")
             tree.configure(**{axis + "scrollcommand": bar.set})
-        tree.tag_configure("NG", background="#fce4d6")
-        tree.tag_configure("要確認", background="#fff2cc")
+        tree.tag_configure("注意点あり", background="#fff2cc")
         return tree
 
     def _start(self, operation, callback):
         self.busy = True
         for widget in (self.read_button, self.export_button, self.open_button, self.encoding_box,
-                       self.excel_button, self.sheet_box, self.columns_button):
+                       self.excel_button, self.sheet_box, self.columns_button, self.block_format_box):
             widget.configure(state="disabled")
         self.status.set("解析中..." if operation == "read" else "Excel保存中...")
 
@@ -232,7 +237,9 @@ class InspectionWindow(object):
         self.saved_path = None
         self._clear()
         encoding = self.encoding.get()
-        self._start("read", lambda: inspect_txt(self.excel, paths, encoding=encoding, **self.options))
+        block_width = 3 if self.field_format.get() == "座標列なし" else 4
+        self._start("read", lambda: inspect_txt(self.excel, paths, encoding=encoding,
+                                                block_width=block_width, **self.options))
 
     def _export(self):
         if self.busy or self.result is None:
@@ -258,6 +265,7 @@ class InspectionWindow(object):
             self.excel_button.configure(state="normal")
             self.sheet_box.configure(state="readonly")
             self.columns_button.configure(state="normal")
+            self.block_format_box.configure(state="readonly")
             if error:
                 self.status.set("処理失敗: %s" % error)
                 messagebox.showerror("受領TXT確認", error, parent=self.window)
@@ -289,7 +297,7 @@ class InspectionWindow(object):
         matched = 0
         shown = 0
         for index, row in enumerate(self.result.details):
-            if only and row[13] == "照合済":
+            if only and not row[14]:
                 continue
             if query and query not in " ".join(str(v) for v in row[:26]).casefold():
                 continue
@@ -303,7 +311,7 @@ class InspectionWindow(object):
         record_shown = 0
         record_matched = 0
         for index, record in enumerate(self.result.records):
-            if only and record["status"] == "照合済":
+            if only and not record["issues"]:
                 continue
             if query and (record["file"], record["number"]) not in visible and query not in (
                     record["file"] + " " + record["form"] + " " + record["issues"]).casefold():
@@ -315,11 +323,10 @@ class InspectionWindow(object):
                                             "file", "number", "form", "presence", "status", "issues")],
                                         tags=(record["status"],))
                 record_shown += 1
-        counts = {status: sum(r["status"] == status for r in self.result.records)
-                  for status in ("照合済", "NG", "要確認")}
-        self.status.set("全%dレコード: 照合済%d / NG%d / 要確認%d。表示: レコード%d/%d・明細%d/%d。"
+        count = sum(bool(r["issues"]) for r in self.result.records)
+        self.status.set("全%dレコード / 注意点のあるレコード%d。表示: レコード%d/%d・明細%d/%d。"
                         "画面は各3000件まで。Excel出力は検索条件に関係なく全件。文字コード: %s" % (
-                            len(self.result.records), counts["照合済"], counts["NG"], counts["要確認"],
+                            len(self.result.records), count,
                             record_shown, record_matched, shown, matched, self.result.encoding))
 
     def _show_raw(self, event):

@@ -36,7 +36,7 @@ class ReceivedTxtGuiCase(unittest.TestCase):
         holder = types.SimpleNamespace(
             busy=False, result=object(), saved_path=Path("old.xlsx"), window=mock.Mock(),
             _clear=mock.Mock(), _start=mock.Mock(), encoding=mock.Mock(),
-            _sync_definition=mock.Mock(return_value=True),
+            _sync_definition=mock.Mock(return_value=True), field_format=mock.Mock(),
             excel=Path("definition.xlsx"), options={})
         holder.encoding.get.return_value = "cp932"
         with mock.patch.object(layout_inspect_gui.filedialog, "askopenfilenames",
@@ -61,8 +61,9 @@ class ReceivedTxtGuiCase(unittest.TestCase):
 
     def test_detail_display_limit_is_explicit_and_does_not_change_result(self):
         row = [""] * 29
-        row[0], row[1], row[13] = "received.txt", 1, "NG"
-        record = dict(file="received.txt", number=1, form="1001", presence="1", status="NG", issues="異常")
+        row[0], row[1], row[13] = "received.txt", 1, "注意点あり"
+        row[14] = "異常"
+        record = dict(file="received.txt", number=1, form="1001", presence="1", status="注意点あり", issues="異常")
         result = types.SimpleNamespace(details=[row] * 3001, records=[record], encoding="cp932")
         holder = types.SimpleNamespace(
             busy=False, result=result, _clear=mock.Mock(), query=mock.Mock(),
