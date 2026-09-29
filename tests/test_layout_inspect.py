@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -100,6 +101,36 @@ class InspectionCase(unittest.TestCase):
         self.assertEqual(calendar[-1][6], "46")
         self.assertEqual(calendar[-1][19], "46/46")
         self.assertEqual(calendar[-1][18], "0200")
+
+    def test_windows_xml_newline_translation_preserves_long_cell_and_marker_text(self):
+        self.write_records([self.row()])
+        result = self.inspect()
+        value = "\U000f0000" + "\rA\nB\r\n" * 4000
+        result.details[0][8] = value
+        original_save = Workbook.save
+
+        def windows_save(workbook, stream):
+            original_save(workbook, stream)
+            stream.seek(0)
+            translated = io.BytesIO()
+            with zipfile.ZipFile(stream) as source, zipfile.ZipFile(translated, "w") as target:
+                for entry in source.infolist():
+                    data = source.read(entry.filename)
+                    if entry.filename.endswith(".xml"):
+                        data = data.replace(b"\n", b"\r\n")
+                    target.writestr(entry, data)
+            stream.seek(0)
+            stream.truncate()
+            stream.write(translated.getvalue())
+
+        with mock.patch.object(Workbook, "save", windows_save):
+            export_inspection(result, self.output)
+        wb = load_workbook(str(self.output))
+        try:
+            self.assertEqual(wb["項目明細"]["F2"].value, value)
+            self.assertEqual(result.details[0][8], value)
+        finally:
+            wb.close()
 
     def test_missing_duplicate_unknown_and_incomplete_blocks_are_retained(self):
         self.write_records([["1001", "1", "1", "A", "0", "0,0,1,1",
@@ -219,7 +250,9 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output, overwrite=True)
 
     def test_invalid_xml_is_visible_and_excel_never_silently_truncates(self):
-        self.write_records([self.row(first="A\x00B")])
+        # Python 3.10以前のcsv.writerはNULをescapechar未指定と混同する。
+        self.write_records([self.row(first="A_NUL_B")])
+        self.txt.write_bytes(self.txt.read_bytes().replace(b"_NUL_", b"\x00"))
         result = self.inspect()
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))

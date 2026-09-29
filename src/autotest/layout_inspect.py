@@ -324,15 +324,39 @@ def export_inspection(result, output_path, overwrite=False):
     os.close(fd)
     try:
         packed = io.BytesIO()
-        wb.save(packed)
+        # Windowsの旧XML writerによる改行変換を避ける。1文字の置換なので
+        # セル上限近くの文字列でもopenpyxlによる切り詰めを起こさない。
+        text_cells = [cell for sheet in wb for row in sheet for cell in row
+                      if isinstance(cell.value, str)]
+        used = set("".join(cell.value for cell in text_cells))
+        markers = []
+        for codepoint in range(0xF0000, 0xFFFFE):
+            character = chr(codepoint)
+            if character not in used:
+                markers.append(character)
+                if len(markers) == 2:
+                    break
+        if len(markers) != 2:
+            raise LayoutTxtError("改行保持用の文字を確保できません。")
+        originals = []
+        try:
+            for cell in text_cells:
+                if "\r" in cell.value or "\n" in cell.value:
+                    originals.append((cell, cell.value))
+                    cell.value = cell.value.replace("\r", markers[0]).replace("\n", markers[1])
+            wb.save(packed)
+        finally:
+            for cell, value in originals:
+                cell.value = value
         packed.seek(0)
-        # ElementTree系のopenpyxlはCRを実文字でXML化する場合がある。
-        # XML読込時の改行正規化で受領値が変わらないよう文字参照にする。
+        # CR/LFを文字参照に戻し、XML読込時の改行正規化も防ぐ。
         with zipfile.ZipFile(packed, "r") as source_zip, zipfile.ZipFile(temp_name, "w") as target_zip:
             for entry in source_zip.infolist():
                 data = source_zip.read(entry.filename)
                 if entry.filename.endswith(".xml"):
-                    data = data.replace(b"\r", b"&#13;")
+                    for marker, reference in zip(markers, (b"&#13;", b"&#10;")):
+                        data = data.replace(marker.encode("utf-8"), reference)
+                        data = data.replace(("&#%d;" % ord(marker)).encode("ascii"), reference)
                 target_zip.writestr(entry, data)
         if overwrite:
             os.replace(temp_name, str(path))
