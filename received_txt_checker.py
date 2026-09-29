@@ -2,11 +2,14 @@
 """受領TXT確認専用アプリの起動・配布用エントリーポイント。"""
 
 import argparse
+import gc
+import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 
 
 def _prepare_source_path():
@@ -16,12 +19,30 @@ def _prepare_source_path():
             sys.path.insert(0, source)
 
 
+def _cleanup_smoke_directory(path, attempts=10, delay=0.1):
+    """Windowsの短時間の共有ロックだけ再試行し、実処理の結果を上書きしない。"""
+    for attempt in range(attempts):
+        gc.collect()
+        try:
+            shutil.rmtree(str(path))
+            return True
+        except OSError as exc:
+            if not Path(path).exists():
+                return True
+            error_code = getattr(exc, "winerror", None) or exc.errno
+            if error_code not in (32, 33):
+                raise
+            if attempt + 1 < attempts:
+                time.sleep(delay)
+    return False
+
+
 def _functional_smoke_test():
     from openpyxl import Workbook, load_workbook
     from autotest.layout_inspect import inspect_txt, export_inspection
 
-    with tempfile.TemporaryDirectory(prefix="received_txt_checker_") as directory:
-        root = Path(directory)
+    root = Path(tempfile.mkdtemp(prefix="received_txt_checker_"))
+    try:
         definition = root / "definition.xlsx"
         txt = root / "received.txt"
         output = root / "check.xlsx"
@@ -37,12 +58,24 @@ def _functional_smoke_test():
         if result.exit_code != 0 or result.details[0][7] != "受付番号":
             raise RuntimeError("定義との照合に失敗しました。")
         export_inspection(result, output)
-        wb = load_workbook(str(output))
+        # 古いopenpyxlでもOSのファイルハンドルを確実に閉じる。
+        with output.open("rb") as stream:
+            wb = load_workbook(stream, read_only=True, data_only=True)
+            try:
+                if wb["項目明細"]["F2"].value != "000123":
+                    raise RuntimeError("Excel出力で受領値が変わりました。")
+            finally:
+                wb.close()
+    finally:
+        processing_error = sys.exc_info()[0] is not None
         try:
-            if wb["項目明細"]["F2"].value != "000123":
-                raise RuntimeError("Excel出力で受領値が変わりました。")
-        finally:
-            wb.close()
+            cleaned = _cleanup_smoke_directory(root)
+        except OSError:
+            if not processing_error:
+                raise
+            cleaned = False
+        if not cleaned and sys.stderr is not None:
+            print("一時ファイルを削除できませんでした: %s" % root, file=sys.stderr)
     return 0
 
 

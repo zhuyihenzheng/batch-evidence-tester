@@ -544,9 +544,14 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
     if path.suffix.lower() not in (".xlsx", ".xlsm"):
         raise LayoutTxtError(".xlsx / .xlsm のみ対応しています: %s" % path.name)
 
+    source = None
     try:
-        wb = load_workbook(str(path), read_only=True, data_only=True)
+        # 旧openpyxlの行イテレータが残っても原本Excelをロックしない。
+        source = io.BytesIO(path.read_bytes())
+        wb = load_workbook(source, read_only=True, data_only=True)
     except Exception as exc:
+        if source is not None:
+            source.close()
         raise LayoutTxtError("Excel を開けません: %s" % exc)
     try:
         if sheet_name:
@@ -684,7 +689,10 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                 columns[key] = value
         return fields, ws.title, actual_header_row, columns
     finally:
-        wb.close()
+        try:
+            wb.close()
+        finally:
+            source.close()
 
 
 def _default_column_for_write(ws, header_row: int, selector: str) -> int:
