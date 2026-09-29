@@ -1424,8 +1424,9 @@ Windows CI 会构建并验证该程序。macOS 无法用本机 PyInstaller 直�
 `output/ReceivedTxtChecker-source.zip`，解压后不需要完整的 AUTO_TEST_BATCH 项目。
 
 支持的输入是现有 **raw 格式**：`FormID,対象有無,(FieldID,OCR値,属性,座標)...`，
-坐标可留空，末项坐标可省略。整份 TXT 都没有坐标列时，在「TXT項目形式」选择
-「座標列なし」，按 `FormID,対象有無,(FieldID,OCR値,属性)...` 读取。
+坐标可留空，末项坐标可省略。没有坐标列的
+`FormID,対象有無,(FieldID,OCR値,属性)...` 也会自动识别，无需选择项目形式。
+无法明确区分字段时在记录備考提示，并保留原文。
 使用 CSV 引号规则，含逗号、双引号或换行的值必须正确引用。
 当前不支持 labeled、TSV、固定长 TXT 或单字段背面 TXT；这些输入不会被当作正常记录。
 若实际文件采用其他格式，需要按真实样例增加解析规则。
@@ -1465,7 +1466,7 @@ python -m autotest.layout_inspect definition.xlsx received1.txt received2.txt ^
 
 可用 `--header-row` 和 `--form-column / --layout-column / --field-column / --item-column /`
 `--data-type-column / --ime-column / --max-digits-column` 调整定义列。
-默认不覆盖已有文件，明确指定 `--overwrite` 才覆盖。无坐标列时指定 `--no-coordinates`。
+默认不覆盖已有文件，明确指定 `--overwrite` 才覆盖。命令行也默认自动识别坐标列有无。
 退出码：`0`=读取并输出成功（即使有注意点），`2`=输入/保存错误。
 
 ### 直接生成 TXT / TIF / TAR

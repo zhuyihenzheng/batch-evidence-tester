@@ -22,7 +22,7 @@ from .layout_txt import LayoutTxtError, read_layout_fields
 
 
 SCOPE = ("Excel定義に対応する実値を表示し、項目数・順序・文字数などの注意点を参考情報として記載します。"
-         "座標は任意です。空欄でも注意点にしません。業務内容は実値と定義を見て確認してください。")
+         "座標は任意です。空欄でも注意点にしません。")
 DETAIL_HEADERS = [
     "ファイル", "レコード", "物理開始行", "FORM_ID", "対象有無", "TXT項目順",
     "FieldID", "項目名", "受領OCR値", "文字数", "最大桁数", "属性", "座標",
@@ -73,7 +73,30 @@ def _detail(result, record, position, block, field, issues, status):
     ]
 
 
-def _inspect_record(result, groups, record, values, parse_error, block_width=4):
+def _detect_block_width(values, fields):
+    if len(values) <= 2:
+        return 4
+    known = {field.field_id for field in fields or []}
+    scores = {}
+    for width in (3, 4):
+        blocks = [values[index:index + width] for index in range(2, len(values), width)]
+        scores[width] = (
+            sum(not block[0].isdigit() for block in blocks),
+            sum(len(block) > 2 and block[2] not in ("0", "1", "2", "1,2") for block in blocks),
+            sum(block[0] not in known for block in blocks) if known else 0,
+            sum(len(block) < 3 for block in blocks),
+            abs(len(blocks) - len(fields)) if fields else 0,
+        )
+    if scores[3] == scores[4]:
+        # 1項目・座標なしでは両方式の読み取り内容が同じなので曖昧さはない。
+        if len(values) <= 5:
+            return 3
+        # OCR値を別項目のIDなどに誤って割り当てるより原文を残す。
+        return None
+    return min(scores, key=scores.get)
+
+
+def _inspect_record(result, groups, record, values, parse_error, block_width=None):
     issues = []
     review = []
     record.update(form=values[0] if values else "",
@@ -89,12 +112,16 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=4):
         issues.append("対象有無は0または1が必要")
     elif record["presence"] == "0":
         review.append("対象有無=0。項目の要否を確認")
-    blocks = [values[index:index + block_width] for index in range(2, len(values), block_width)]
+    width = block_width or _detect_block_width(values, fields)
+    uncertain = width is None
+    if uncertain:
+        issues.append("項目の区切りを特定できません（原文を表示）")
+    blocks = [values[index:index + width] for index in range(2, len(values), width)] if width else []
     counts = Counter(block[0] for block in blocks)
     lookup = {field.field_id: field for field in fields or []}
-    if fields and len(blocks) != len(fields):
+    if fields and not uncertain and len(blocks) != len(fields):
         issues.append("項目数不一致: 定義%d / 受領%d" % (len(fields), len(blocks)))
-    if fields and [block[0] for block in blocks] != [field.field_id for field in fields]:
+    if fields and not uncertain and [block[0] for block in blocks] != [field.field_id for field in fields]:
         issues.append("FieldIDの並びが定義と不一致")
     detail_statuses = []
     for index, block in enumerate(blocks, 1):
@@ -112,7 +139,7 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=4):
             if len(value) > field.max_digits:
                 problems.append("最大桁数超過（文字数基準）")
         if value == "":
-            cautions.append("OCR値が空。原票を確認")
+            cautions.append("OCR値が空")
         if len(block) > 2:
             if block[2] not in ("0", "1", "2", "1,2"):
                 problems.append("属性が定義外")
@@ -126,7 +153,7 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=4):
         detail_statuses.append(status)
         result.details.append(_detail(result, record, index, block, field,
                                       problems + cautions, status))
-    for field in fields or []:
+    for field in (fields or []) if not uncertain else []:
         if field.field_id not in counts:
             result.details.append(_detail(result, record, None, [field.field_id], field,
                                           ["TXTに項目なし（定義から補記）"], "注意点あり"))
@@ -135,11 +162,11 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=4):
         review.append("項目明細に注意点あり")
     record.update(status="注意点あり" if issues or review else "",
                   issues=" / ".join(issues + review), expected=len(fields) if fields else None,
-                  actual=len(blocks))
+                  actual=len(blocks) if not uncertain else None)
     result.records.append(record)
 
 
-def inspect_txt(excel_path, txt_paths, encoding="cp932", block_width=4, **definition_options):
+def inspect_txt(excel_path, txt_paths, encoding="cp932", block_width=None, **definition_options):
     """同一FORMの複数レコードも別々に照合し、実値を補正しない。"""
     definition = Path(excel_path).resolve()
     paths = [Path(path).resolve() for path in txt_paths]
@@ -147,7 +174,7 @@ def inspect_txt(excel_path, txt_paths, encoding="cp932", block_width=4, **defini
         raise LayoutTxtError("受領TXTを1件以上選択してください。")
     if len(set(paths)) != len(paths):
         raise LayoutTxtError("同じ受領TXTが重複選択されています。")
-    if block_width not in (3, 4):
+    if block_width not in (None, 3, 4):
         raise LayoutTxtError("項目形式は座標列あり（4要素）または座標列なし（3要素）にしてください。")
     # 生成用既定値・画面編集は実データの解釈に混ぜない。
     definition_options.update(default_value_column="none", coordinates_column="none",
@@ -341,7 +368,7 @@ def main(argv=None):
                ("form", "layout", "field", "item", "data_type", "ime", "max_digits")}
     try:
         result = inspect_txt(args.excel, args.txt, encoding=args.encoding,
-                             block_width=3 if args.no_coordinates else 4,
+                             block_width=3 if args.no_coordinates else None,
                              sheet_name=args.sheet, header_row=args.header_row, **options)
         path = export_inspection(result, args.out, overwrite=args.overwrite)
     except (LayoutTxtError, OSError, ValueError) as exc:

@@ -20,7 +20,7 @@ macOS / Linux：`python3 received_txt_checker.py`，使用带 tkinter 的 Python
 1. 点击「Excelを選択...」选择布局定义 Excel（xlsx / xlsm），选择 sheet。
 2. 必要时设置「見出し行・列設定...」。默认类型 / IME / 最大桁数在 I / J / K 列。
 3. 选择 TXT 的编码，默认 cp932。点击「受領TXTを選択・解析」，可多选。
-   坐标可留空；TXT 完全没有坐标列时，选择「TXT項目形式」的「座標列なし」。
+   坐标列有无由程序自动识别，坐标也可留空。
 4. 查看项目明细、搜索或筛选异常。选择一行可查看该记录原文。
 5. 点击「全件をExcel出力」。导出包含全部记录，不受画面筛选影响。
 
@@ -28,7 +28,8 @@ macOS / Linux：`python3 received_txt_checker.py`，使用带 tkinter 的 Python
 
 支持既有 raw CSV 格式：`FormID,対象有無,(FieldID,OCR値,属性,座標)...`。
 坐标可为空或省略末项坐标。也支持无坐标列的三项格式：
-`FormID,対象有無,(FieldID,OCR値,属性)...`，需选择「座標列なし」。
+`FormID,対象有無,(FieldID,OCR値,属性)...`，无需选择项目形式。
+无法明确区分字段时，会在记录備考提示，并保留原文供查看。
 字段里的逗号、双引号、换行需符合 CSV 引用规则。FieldID 为各 FORM 展开后的连番，
 日历展开为 46 项。当前不支持固定长 TXT、TSV、labeled 或单字段背面 TXT。
 

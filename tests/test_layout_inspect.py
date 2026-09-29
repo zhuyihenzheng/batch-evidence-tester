@@ -131,6 +131,7 @@ class InspectionCase(unittest.TestCase):
         result = self.inspect()
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.details[0][8], "")
+        self.assertNotIn("原票", result.details[0][14])
         self.assertEqual(result.records[0]["status"], "注意点あり")
 
     def test_overlong_and_bad_coordinates(self):
@@ -155,7 +156,7 @@ class InspectionCase(unittest.TestCase):
     def test_no_coordinate_columns_preserve_all_field_values(self):
         row = self.row(first="000123")
         self.write_records([row[:5] + row[6:9]])
-        result = self.inspect(block_width=3)
+        result = self.inspect()
         self.assertEqual(result.records[0]["issues"], "")
         self.assertEqual(result.records[0]["actual"], 2)
         self.assertEqual([r[8] for r in result.details], ["000123", "山田 太郎"])
@@ -168,6 +169,22 @@ class InspectionCase(unittest.TestCase):
             self.assertFalse(any("NG" in str(cell.value) for sheet in wb for row in sheet for cell in row))
         finally:
             wb.close()
+
+    def test_coordinate_formats_are_detected_per_record(self):
+        row = self.row()
+        self.write_records([row, row[:5] + row[6:9]])
+        result = self.inspect()
+        self.assertEqual([r["issues"] for r in result.records], ["", ""])
+        self.assertEqual([r[8] for r in result.details], ["0000123", "山田 太郎"] * 2)
+        self.assertEqual([r[12] for r in result.details], ["0,0,10,10", "0,0,10,10", None, None])
+
+    def test_ambiguous_blocks_keep_raw_without_guessing_values(self):
+        self.write_records([["9999", "1"] + ["1", "0", "0"] * 4])
+        result = self.inspect()
+        self.assertEqual(result.details, [])
+        self.assertIsNone(result.records[0]["actual"])
+        self.assertIn("区切りを特定できません", result.records[0]["issues"])
+        self.assertEqual(result.records[0]["raw"], self.txt.read_bytes().decode("cp932"))
 
     def test_blank_lines_empty_file_and_malformed_csv_are_retained_with_notes(self):
         for payload in (b"", b"\r\n", b'"1001","1","unterminated\r\ntrailing data'):

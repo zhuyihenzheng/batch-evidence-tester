@@ -35,7 +35,6 @@ class InspectionWindow(object):
         self.status = tk.StringVar(value="受領TXTを選択してください。複数ファイルに対応します。")
         self.query = tk.StringVar(value="")
         self.issues_only = tk.BooleanVar(value=False)
-        self.field_format = tk.StringVar(value="座標列あり（空欄可）")
         self.excel_label = tk.StringVar(value=str(self.excel) or "定義Excelを選択してください。")
         self.sheet = tk.StringVar(value=self.options.get("sheet_name") or "")
         source = ttk.LabelFrame(self.window, text="1. レイアウト定義Excel", padding=8)
@@ -51,11 +50,6 @@ class InspectionWindow(object):
         self.sheet_box.bind("<<ComboboxSelected>>", lambda _event: self._invalidate())
         self.columns_button = ttk.Button(source, text="見出し行・列設定...", command=self._column_settings)
         self.columns_button.grid(row=1, column=2, padx=8, pady=(8, 0))
-        ttk.Label(source, text="TXT項目形式:").grid(row=2, column=0, pady=(8, 0))
-        self.block_format_box = ttk.Combobox(source, textvariable=self.field_format, state="readonly",
-                                             values=("座標列あり（空欄可）", "座標列なし"), width=30)
-        self.block_format_box.grid(row=2, column=1, sticky="w", pady=(8, 0))
-        self.block_format_box.bind("<<ComboboxSelected>>", lambda _event: self._invalidate())
         controls = ttk.Frame(self.window, padding=(10, 0))
         controls.grid(row=1, column=0, sticky="we")
         ttk.Label(controls, text="受領文字コード:").pack(side="left")
@@ -212,7 +206,7 @@ class InspectionWindow(object):
     def _start(self, operation, callback):
         self.busy = True
         for widget in (self.read_button, self.export_button, self.open_button, self.encoding_box,
-                       self.excel_button, self.sheet_box, self.columns_button, self.block_format_box):
+                       self.excel_button, self.sheet_box, self.columns_button):
             widget.configure(state="disabled")
         self.status.set("解析中..." if operation == "read" else "Excel保存中...")
 
@@ -236,9 +230,7 @@ class InspectionWindow(object):
         self.saved_path = None
         self._clear()
         encoding = self.encoding.get()
-        block_width = 3 if self.field_format.get() == "座標列なし" else 4
-        self._start("read", lambda: inspect_txt(self.excel, paths, encoding=encoding,
-                                                block_width=block_width, **self.options))
+        self._start("read", lambda: inspect_txt(self.excel, paths, encoding=encoding, **self.options))
 
     def _export(self):
         if self.busy or self.result is None:
@@ -264,7 +256,6 @@ class InspectionWindow(object):
             self.excel_button.configure(state="normal")
             self.sheet_box.configure(state="readonly")
             self.columns_button.configure(state="normal")
-            self.block_format_box.configure(state="readonly")
             if error:
                 self.status.set("処理失敗: %s" % error)
                 messagebox.showerror("受領TXT確認", error, parent=self.window)

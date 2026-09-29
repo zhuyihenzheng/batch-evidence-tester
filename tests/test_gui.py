@@ -36,7 +36,7 @@ class ReceivedTxtGuiCase(unittest.TestCase):
         holder = types.SimpleNamespace(
             busy=False, result=object(), saved_path=Path("old.xlsx"), window=mock.Mock(),
             _clear=mock.Mock(), _start=mock.Mock(), encoding=mock.Mock(),
-            _sync_definition=mock.Mock(return_value=True), field_format=mock.Mock(),
+            _sync_definition=mock.Mock(return_value=True),
             excel=Path("definition.xlsx"), options={})
         holder.encoding.get.return_value = "cp932"
         with mock.patch.object(layout_inspect_gui.filedialog, "askopenfilenames",
