@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-APP_VERSION = "0.1.6"
+APP_VERSION = "0.1.7"
 
 
 def _prepare_source_path():

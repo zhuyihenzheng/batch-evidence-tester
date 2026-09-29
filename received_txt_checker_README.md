@@ -22,8 +22,9 @@ macOS / Linux：`python3 received_txt_checker.py`，使用带 tkinter 的 Python
 3. 选择 TXT 的编码，默认 cp932。点击「受領TXTを選択・解析」，可多选。
    坐标列有无由程序自动识别，坐标也可留空。
 4. 查看项目明细、搜索或筛选异常。选择一行可查看该记录原文。
-   支持 Shift / Ctrl 选择多行，Ctrl+C 或「選択行をコピー」复制后可直接粘贴到 Excel。
-   双击单元格可选中文字，复制整个值或其中一部分。macOS 使用 Command+C。
+   支持 Shift / Ctrl 选择多行，Ctrl+C 复制后可直接粘贴到 Excel。
+   单元格内可直接拖动选中文字，再按 Ctrl+C 复制，不弹出窗口；Ctrl+A 选择该单元格全文。
+   macOS 使用 Command+C。搜索输入后按 Enter 或点击「検索」应用筛选。
 5. 点击「全件をExcel出力」。导出包含全部记录，不受画面筛选影响。
 
 更换定义或列设置后需要重新选择 TXT 解析。程序不修改输入文件。

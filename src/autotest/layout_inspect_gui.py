@@ -26,6 +26,7 @@ class InspectionWindow(object):
         self.output_dir = output_dir
         self.events = queue.Queue()
         self.busy = False
+        self._cell_text = None
         self.window = tk.Toplevel(parent) if parent is not None else tk.Tk()
         self.window.title("Received TXT Checker — 受領TXT確認")
         width = min(1320, max(600, self.window.winfo_screenwidth() - 60))
@@ -75,9 +76,7 @@ class InspectionWindow(object):
         entry.bind("<Return>", lambda _event: self._render())
         ttk.Checkbutton(filters, text="注意点のあるデータのみ", variable=self.issues_only,
                         command=self._render).pack(side="left", padx=6)
-        ttk.Button(filters, text="表示更新", command=self._render).pack(side="left")
-        ttk.Button(filters, text="選択行をコピー", command=lambda: self._copy_rows(self.detail_tree)).pack(
-            side="left", padx=6)
+        ttk.Button(filters, text="検索", command=self._render).pack(side="left")
         notebook = ttk.Notebook(self.window)
         notebook.grid(row=3, column=0, sticky="nsew", padx=10)
         self.record_tree = self._tree(notebook, "レコード一覧", [
@@ -103,6 +102,7 @@ class InspectionWindow(object):
             row=4, column=0, sticky="we", padx=10, pady=8)
         ttk.Label(self.window, text=SCOPE, wraplength=width - 30).grid(
             row=5, column=0, sticky="we", padx=10, pady=(0, 10))
+        self.window.bind("<Button-1>", self._dismiss_cell, add="+")
         self.window.after(100, self._poll)
         if self.excel:
             self._load_sheets()
@@ -201,7 +201,8 @@ class InspectionWindow(object):
             tree.heading(col, text=title)
             tree.column(col, width=width, stretch=False)
         for orient, axis, row, col in (("vertical", "y", 0, 1), ("horizontal", "x", 1, 0)):
-            bar = ttk.Scrollbar(frame, orient=orient, command=getattr(tree, axis + "view"))
+            bar = ttk.Scrollbar(frame, orient=orient,
+                                command=lambda *args, axis=axis: self._scroll_table(tree, axis, *args))
             bar.grid(row=row, column=col, sticky="ns" if axis == "y" else "ew")
             tree.configure(**{axis + "scrollcommand": bar.set})
         tree.tag_configure("注意点あり", background="#fff2cc")
@@ -210,10 +211,11 @@ class InspectionWindow(object):
         if sys.platform == "darwin":
             tree.bind("<Command-c>", lambda _event: self._copy_rows(tree))
             tree.bind("<Command-a>", lambda _event: self._select_all_rows(tree))
-        tree.bind("<Double-1>", self._show_cell)
-        tree.bind("<Button-3>", self._copy_menu)
-        if sys.platform == "darwin":
-            tree.bind("<Button-2>", self._copy_menu)
+        tree.bind("<Button-1>", self._show_cell)
+        tree.bind("<B1-Motion>", self._drag_cell)
+        tree.bind("<ButtonRelease-1>", self._release_cell)
+        for sequence in ("<Configure>", "<MouseWheel>", "<Button-4>", "<Button-5>"):
+            tree.bind(sequence, lambda _event: self._close_cell())
         return tree
 
     def _select_all_rows(self, tree):
@@ -223,7 +225,7 @@ class InspectionWindow(object):
     def _copy_rows(self, tree):
         selected = set(tree.selection())
         if not selected:
-            self.status.set("コピーする行を選択してください。セルの文字はダブルクリックで選択できます。")
+            self.status.set("コピーする行を選択してください。セル内の文字をドラッグして選択できます。")
             return "break"
         output = io.StringIO(newline="")
         writer = csv.writer(output, delimiter="\t", lineterminator="\r\n")
@@ -235,74 +237,85 @@ class InspectionWindow(object):
         self.status.set("%d行をコピーしました。Excelなどへ貼り付けできます。" % len(selected))
         return "break"
 
+    def _close_cell(self):
+        text = self._cell_text
+        self._cell_text = None
+        if text is not None:
+            text.destroy()
+
+    def _dismiss_cell(self, event):
+        text = self._cell_text
+        if text is not None and event.widget is not text:
+            self._close_cell()
+
+    def _scroll_table(self, tree, axis, *args):
+        self._close_cell()
+        getattr(tree, axis + "view")(*args)
+
     def _show_cell(self, event):
         tree = event.widget
+        self._close_cell()
+        # Shift/Ctrl（macOSはCommand）による複数行選択はTreeviewに任せる。
+        modifiers = 0x0005 | (0x0008 if sys.platform == "darwin" else 0)
+        if event.state & modifiers:
+            return
         iid = tree.identify_row(event.y)
         column = tree.identify_column(event.x)
         if tree.identify_region(event.x, event.y) != "cell" or not iid or column == "#0":
             return
         tree.selection_set(iid)
-        self._cell_text_dialog(tree, iid, column)
+        tree.focus(iid)
+        text = self._select_cell_text(tree, iid, column)
+        if text is not None:
+            x, y, _width, _height = tree.bbox(iid, column)
+            text.event_generate("<Button-1>", x=event.x - x, y=event.y - y)
         return "break"
 
-    def _cell_text_dialog(self, tree, iid, column):
-        value = tree.set(iid, column)
-        dialog = tk.Toplevel(self.window)
-        dialog.title("%s — 選択してコピー" % tree.heading(column, "text"))
-        dialog.transient(self.window)
-        dialog.geometry("700x260")
-        dialog.columnconfigure(0, weight=1)
-        dialog.rowconfigure(0, weight=1)
-        text = tk.Text(dialog, wrap="word", exportselection=False)
-        text.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
-        bar = ttk.Scrollbar(dialog, orient="vertical", command=text.yview)
-        bar.grid(row=0, column=1, sticky="ns", padx=(0, 8), pady=8)
-        text.configure(yscrollcommand=bar.set)
-        text.insert("1.0", value)
+    def _select_cell_text(self, tree, iid, column):
+        self._close_cell()
+        bounds = tree.bbox(iid, column)
+        if not bounds:
+            return None
+        x, y, width, height = bounds
+        background = "#fff2cc" if "注意点あり" in tree.item(iid, "tags") else "white"
+        text = tk.Text(tree, wrap="none", exportselection=False, borderwidth=0,
+                       highlightthickness=1, highlightbackground="#849bb7",
+                       background=background, padx=2, pady=0,
+                       font=ttk.Style(tree).lookup("Treeview", "font") or "TkDefaultFont")
+        text.insert("1.0", tree.set(iid, column))
         text.configure(state="disabled")
-        text.tag_add("sel", "1.0", "end-1c")
-        text.focus_set()
+        text.place(x=x, y=y, width=width, height=height)
+        self._cell_text = text
 
         def select_all(_event):
             text.tag_add("sel", "1.0", "end-1c")
             return "break"
 
-        def copy(_event=None):
-            ranges = text.tag_ranges("sel")
-            selected = text.get(*ranges) if ranges else value
-            self.window.clipboard_clear()
-            self.window.clipboard_append(selected)
+        def close(_event):
+            self._close_cell()
+            tree.focus_set()
             return "break"
+
         text.bind("<Control-a>", select_all)
-        text.bind("<Control-c>", copy)
         if sys.platform == "darwin":
             text.bind("<Command-a>", select_all)
-            text.bind("<Command-c>", copy)
-        ttk.Button(dialog, text="選択した文字をコピー", command=copy).grid(
-            row=1, column=0, sticky="e", padx=8, pady=(0, 8))
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        return dialog, text
+        text.bind("<Escape>", close)
+        text.focus_set()
+        return text
 
-    def _copy_menu(self, event):
-        tree = event.widget
-        iid = tree.identify_row(event.y)
-        column = tree.identify_column(event.x)
-        if iid and iid not in tree.selection():
-            tree.selection_set(iid)
-        previous = getattr(tree, "_copy_context_menu", None)
-        if previous is not None:
-            previous.destroy()
-        menu = tk.Menu(tree, tearoff=False)
-        tree._copy_context_menu = menu
-        menu.add_command(label="選択行をコピー", command=lambda: self._copy_rows(tree))
-        menu.add_command(label="全行を選択", command=lambda: self._select_all_rows(tree))
-        if iid and column != "#0" and tree.identify_region(event.x, event.y) == "cell":
-            menu.add_command(label="セルの文字を選択", command=lambda: self._cell_text_dialog(tree, iid, column))
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-        return "break"
+    def _drag_cell(self, event):
+        text = self._cell_text
+        if text is not None and text.master is event.widget:
+            text.event_generate("<B1-Motion>",
+                                x=event.x - text.winfo_x(), y=event.y - text.winfo_y())
+            return "break"
+
+    def _release_cell(self, event):
+        text = self._cell_text
+        if text is not None and text.master is event.widget:
+            text.event_generate("<ButtonRelease-1>",
+                                x=event.x - text.winfo_x(), y=event.y - text.winfo_y())
+            return "break"
 
     def _start(self, operation, callback):
         self.busy = True
@@ -371,6 +384,7 @@ class InspectionWindow(object):
         self.window.after(100, self._poll)
 
     def _clear(self):
+        self._close_cell()
         for tree in (self.record_tree, self.detail_tree):
             for iid in tree.get_children():
                 tree.delete(iid)
