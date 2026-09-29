@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .layout_txt import LayoutTxtError, read_layout_fields
@@ -256,15 +256,19 @@ def _style(ws, widths, status_column=None):
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
     ws.sheet_view.showGridLines = False
+    line = Side(style="thin", color="B6C2CD")
+    border = Border(left=line, right=line, top=line, bottom=line)
     for index, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(index)].width = width
     for cell in ws[1]:
+        cell.border = border
         cell.fill = PatternFill("solid", fgColor="244660")
         cell.font = Font(name="Meiryo", size=10, color="FFFFFF", bold=True)
         cell.alignment = Alignment(vertical="center", wrap_text=True)
     ws.row_dimensions[1].height = 32
     for row in ws.iter_rows(min_row=2):
         for cell in row:
+            cell.border = border
             cell.font = Font(name="Meiryo", size=10)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
         ws.row_dimensions[row[0].row].height = 45

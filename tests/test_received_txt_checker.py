@@ -35,7 +35,7 @@ class StandaloneCheckerCase(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / "received_txt_checker.py"), "--version"],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "ReceivedTxtChecker 0.1.4")
+        self.assertEqual(result.stdout.strip(), "ReceivedTxtChecker 0.1.5")
 
     def test_smoke_is_independent_of_generator_gui_and_image_packages(self):
         code = ("import sys; "
