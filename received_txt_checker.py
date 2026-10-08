@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-APP_VERSION = "0.1.12"
+APP_VERSION = "0.1.13"
 
 
 def _prepare_source_path():
@@ -62,8 +62,8 @@ def _functional_smoke_test():
         with output.open("rb") as stream:
             wb = load_workbook(stream, read_only=True, data_only=True)
             try:
-                if (wb["項目明細"]["A2"].value != "1" or
-                        wb["項目明細"]["B2"].value != "000123"):
+                if (wb["項目明細"]["E2"].value != "1" or
+                        wb["項目明細"]["G2"].value != "000123"):
                     raise RuntimeError("Excel出力で受領値が変わりました。")
             finally:
                 wb.close()

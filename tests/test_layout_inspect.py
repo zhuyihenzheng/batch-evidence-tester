@@ -77,8 +77,8 @@ class InspectionCase(unittest.TestCase):
         wb = load_workbook(str(self.output))
         try:
             self.assertEqual(wb["項目明細"].max_row, 3)
-            self.assertEqual(wb["項目明細"]["A2"].value, "6001")
-            self.assertEqual(wb["項目明細"]["B2"].value, "3")
+            self.assertEqual(wb["項目明細"]["E2"].value, "6001")
+            self.assertEqual(wb["項目明細"]["G2"].value, "3")
         finally:
             wb.close()
 
@@ -116,8 +116,8 @@ class InspectionCase(unittest.TestCase):
         exported = load_workbook(str(self.output))
         try:
             self.assertEqual(exported["項目明細"].max_row, 36)
-            self.assertEqual(exported["項目明細"]["A36"].value, "6035")
-            self.assertEqual(exported["項目明細"]["B36"].value, "35")
+            self.assertEqual(exported["項目明細"]["E36"].value, "6035")
+            self.assertEqual(exported["項目明細"]["G36"].value, "35")
         finally:
             exported.close()
 
@@ -163,17 +163,18 @@ class InspectionCase(unittest.TestCase):
         try:
             self.assertEqual(wb.sheetnames, ["項目明細", "レコード一覧", "受領原文"])
             headers = [cell.value for cell in wb["項目明細"][1]]
-            self.assertEqual(headers, ["FieldID", "受領OCR値", "属性", "座標"])
-            for removed in ("FORM_ID", "対象有無", "最大桁数", "文字数", "備考", "定義シート", "確認者"):
+            self.assertEqual(headers, ["ファイル", "レコード", "物理開始行", "TXT項目順",
+                                       "FieldID", "項目名", "受領OCR値", "属性", "座標", "備考"])
+            for removed in ("FORM_ID", "対象有無", "最大桁数", "文字数", "定義シート", "確認者"):
                 self.assertNotIn(removed, headers)
             self.assertEqual(wb["レコード一覧"]["E2"].value, "1001")
             self.assertEqual(wb["レコード一覧"]["F2"].value, "1")
-            self.assertEqual(wb["項目明細"]["B2"].value, '  "零",\r\n001 ')
-            self.assertEqual(wb["項目明細"]["B3"].value, '=1+1')
-            self.assertEqual(wb["項目明細"]["B3"].data_type, "s")
-            self.assertEqual(wb["項目明細"]["B4"].value, '0000123')
+            self.assertEqual(wb["項目明細"]["G2"].value, '  "零",\r\n001 ')
+            self.assertEqual(wb["項目明細"]["G3"].value, '=1+1')
+            self.assertEqual(wb["項目明細"]["G3"].data_type, "s")
+            self.assertEqual(wb["項目明細"]["G4"].value, '0000123')
             self.assertEqual(wb["項目明細"].freeze_panes, "B2")
-            self.assertEqual(wb["項目明細"].auto_filter.ref, "A1:D5")
+            self.assertEqual(wb["項目明細"].auto_filter.ref, "A1:J5")
             self.assertEqual(wb["受領原文"]["E2"].value + wb["受領原文"]["E3"].value,
                              self.txt.read_bytes().decode("cp932"))
         finally:
@@ -200,6 +201,33 @@ class InspectionCase(unittest.TestCase):
             wb.close()
         with self.assertRaises(LayoutTxtError):
             export_inspection(result, self.output, overwrite=True, detail_columns=(8, 11, 12))
+
+    def test_layout_definition_columns_can_be_selected_and_note_stays_last(self):
+        wb = load_workbook(str(self.definition))
+        try:
+            sheet = wb.active
+            for column, heading, value in (
+                    (13, "入力属性", "必須"), (14, "入力規則", "英数字のみ"),
+                    (15, "補足", "照合用"), (16, "出力例", "ABC123")):
+                sheet.cell(1, column, heading)
+                sheet.cell(2, column, value)
+            wb.save(str(self.definition))
+        finally:
+            wb.close()
+        self.write_records([self.row()])
+        result = self.inspect()
+        export_inspection(result, self.output,
+                          detail_columns=(6, 8, 11, 12, 20, 21, 22, 23, 24, 25, 14))
+        exported = load_workbook(str(self.output))
+        try:
+            sheet = exported["項目明細"]
+            self.assertEqual([cell.value for cell in sheet[1]],
+                             ["FieldID", "受領OCR値", "属性", "座標", "データ型", "IME",
+                              "入力属性", "入力規則", "補足", "出力例", "備考"])
+            self.assertEqual([sheet.cell(2, col).value for col in range(5, 11)],
+                             ["文字列", "半角英数", "必須", "英数字のみ", "照合用", "ABC123"])
+        finally:
+            exported.close()
 
     def test_generated_multiple_forms_including_calendar_round_trip(self):
         generated = generate_layout_txt(self.definition, self.root / "generated",
@@ -238,7 +266,7 @@ class InspectionCase(unittest.TestCase):
             export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual(wb["項目明細"]["B2"].value, value)
+            self.assertEqual(wb["項目明細"]["G2"].value, value)
             self.assertEqual(result.details[0][8], value)
         finally:
             wb.close()
@@ -280,9 +308,9 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual([wb["項目明細"]["C%d" % row].value for row in range(2, 10)],
+            self.assertEqual([wb["項目明細"]["H%d" % row].value for row in range(2, 10)],
                              ["0", "0", "4", "4", "8", "8", "12", "12"])
-            self.assertEqual(wb["項目明細"].max_column, 4)
+            self.assertEqual(wb["項目明細"].max_column, 10)
         finally:
             wb.close()
 
@@ -347,8 +375,8 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertIsNone(wb["項目明細"]["D2"].value)
-            self.assertEqual(wb["項目明細"]["B2"].value, "000123")
+            self.assertIsNone(wb["項目明細"]["I2"].value)
+            self.assertEqual(wb["項目明細"]["G2"].value, "000123")
             self.assertFalse(any("NG" in str(cell.value) for sheet in wb for row in sheet for cell in row))
         finally:
             wb.close()
@@ -407,7 +435,7 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual(wb["項目明細"]["B2"].value, "A\\u0001B")
+            self.assertEqual(wb["項目明細"]["G2"].value, "A\\u0001B")
         finally:
             wb.close()
         result.details[0][8] = "a" * 32768
@@ -427,7 +455,7 @@ class InspectionCase(unittest.TestCase):
             if sys.version_info < (3, 11):
                 self.assertIn("CSV解析不可", result.records[0]["issues"])
             else:
-                self.assertEqual(wb["項目明細"]["B2"].value, "A\\u0000B")
+                self.assertEqual(wb["項目明細"]["G2"].value, "A\\u0000B")
         finally:
             wb.close()
 

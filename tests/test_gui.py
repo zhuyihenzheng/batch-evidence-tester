@@ -52,14 +52,14 @@ class ReceivedTxtGuiCase(unittest.TestCase):
         holder = types.SimpleNamespace(
             busy=False, result=result, window=mock.Mock(), output_dir="output",
             excel=Path("definition.xlsx"), saved_path=None, _start=mock.Mock(),
-            optional_detail_columns=set())
+            optional_detail_columns={0, 1, 2, 5, 7, 14})
         with mock.patch.object(layout_inspect_gui.filedialog, "asksaveasfilename",
                                return_value="check.xlsx", create=True), \
                 mock.patch.object(layout_inspect_gui, "export_inspection") as export:
             layout_inspect_gui.InspectionWindow._export(holder)
             holder._start.call_args[0][1]()
         export.assert_called_once_with(result, "check.xlsx", overwrite=True,
-                                       detail_columns=(6, 8, 11, 12))
+                                       detail_columns=(6, 8, 11, 12, 0, 1, 2, 5, 7, 14))
 
     def test_export_passes_selected_optional_columns(self):
         result = object()
