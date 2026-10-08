@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-APP_VERSION = "0.1.11"
+APP_VERSION = "0.1.12"
 
 
 def _prepare_source_path():
@@ -62,7 +62,8 @@ def _functional_smoke_test():
         with output.open("rb") as stream:
             wb = load_workbook(stream, read_only=True, data_only=True)
             try:
-                if wb["項目明細"]["F2"].value != "000123":
+                if (wb["項目明細"]["A2"].value != "1" or
+                        wb["項目明細"]["B2"].value != "000123"):
                     raise RuntimeError("Excel出力で受領値が変わりました。")
             finally:
                 wb.close()
@@ -86,9 +87,9 @@ def main(argv=None):
     parser.add_argument("--excel", help="起動時に選択する定義Excel")
     args = parser.parse_args(argv)
     _prepare_source_path()
-    from autotest.layout_inspect_gui import main as gui_main
     if args.smoke_test:
         return _functional_smoke_test()
+    from autotest.layout_inspect_gui import main as gui_main
     return gui_main(initial_excel=Path(args.excel) if args.excel else None)
 
 

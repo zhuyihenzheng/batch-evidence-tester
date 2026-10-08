@@ -30,8 +30,12 @@ DETAIL_HEADERS = [
     "展開番号", "データ型", "IME", "入力属性", "入力規則", "補足", "出力例",
     "確認内容（手入力）", "確認者", "確認メモ",
 ]
-# 対応付け用の定義情報は内部に保持し、表示・成果物は実値と備考に絞る。
-DETAIL_OUTPUT_COLUMNS = (0, 1, 2, 5, 7, 8, 9, 10, 11, 12, 14)
+# 定義との対応付けは位置で行う。FieldIDは受領値としてのみ出力する。
+DETAIL_OUTPUT_COLUMNS = (6, 8, 11, 12)
+DETAIL_OPTIONAL_COLUMNS = (0, 1, 2, 5, 7, 9, 10, 14)
+DETAIL_COLUMN_ORDER = (0, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 14)
+DETAIL_COLUMN_WIDTHS = {0: 42, 1: 12, 2: 12, 5: 12, 6: 14, 7: 26,
+                        8: 42, 9: 10, 10: 12, 11: 12, 12: 23, 14: 65}
 RECEIVED_ATTRIBUTE_VALUES = ("0", "4", "8", "12")
 
 
@@ -265,8 +269,13 @@ def _style(ws, widths, status_column=None):
                 cell.fill = PatternFill("solid", fgColor="FFF2CC")
 
 
-def export_inspection(result, output_path, overwrite=False):
+def export_inspection(result, output_path, overwrite=False, detail_columns=None):
     """原本を保護し、保存失敗時にも既存成果物を壊さない。"""
+    selected = set(DETAIL_OUTPUT_COLUMNS if detail_columns is None else detail_columns)
+    allowed = set(DETAIL_COLUMN_ORDER)
+    if not set(DETAIL_OUTPUT_COLUMNS) <= selected or not selected <= allowed:
+        raise LayoutTxtError("項目明細の出力列が不正です。")
+    columns = tuple(index for index in DETAIL_COLUMN_ORDER if index in selected)
     path = Path(output_path).resolve()
     sources = [Path(result.definition)] + [Path(item[0]) for item in result.files]
     if path in sources or (path.exists() and any(os.path.samefile(str(path), str(p))
@@ -279,14 +288,16 @@ def export_inspection(result, output_path, overwrite=False):
     wb = Workbook()
     details = wb.active
     details.title = "項目明細"
-    _append(details, [DETAIL_HEADERS[index] for index in DETAIL_OUTPUT_COLUMNS])
+    _append(details, [DETAIL_HEADERS[index] for index in columns])
     for row in result.details:
-        _append(details, [row[index] for index in DETAIL_OUTPUT_COLUMNS])
-    _style(details, [42, 12, 12, 12, 26, 42, 10, 12, 12, 23, 65])
-    details.freeze_panes = "F2"
-    for row in details.iter_rows(min_row=2, min_col=11, max_col=11):
-        if row[0].value:
-            row[0].fill = PatternFill("solid", fgColor="FFF2CC")
+        _append(details, [row[index] for index in columns])
+    _style(details, [DETAIL_COLUMN_WIDTHS[index] for index in columns])
+    details.freeze_panes = "B2"
+    if 14 in columns:
+        note_column = columns.index(14) + 1
+        for row in details.iter_rows(min_row=2, min_col=note_column, max_col=note_column):
+            if row[0].value:
+                row[0].fill = PatternFill("solid", fgColor="FFF2CC")
     records = wb.create_sheet("レコード一覧")
     _append(records, ["ファイル", "レコード", "物理開始行", "物理終了行", "FORM_ID", "対象有無",
                       "定義項目数", "受領項目数", "参考情報", "備考"])

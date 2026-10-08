@@ -14,7 +14,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from openpyxl import load_workbook
 
-from .layout_inspect import DETAIL_HEADERS, DETAIL_OUTPUT_COLUMNS, SCOPE, export_inspection, inspect_txt
+from .layout_inspect import (DETAIL_HEADERS, DETAIL_OPTIONAL_COLUMNS, DETAIL_OUTPUT_COLUMNS,
+                             SCOPE, export_inspection, inspect_txt)
+
+
+DETAIL_PREVIEW_COLUMNS = (0, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 14)
 
 
 class InspectionWindow(object):
@@ -26,6 +30,7 @@ class InspectionWindow(object):
         self.output_dir = output_dir
         self.events = queue.Queue()
         self.busy = False
+        self.optional_detail_columns = set()
         self._cell_text = None
         self.window = tk.Toplevel(parent) if parent is not None else tk.Tk()
         self.window.title("Received TXT Checker — 受領TXT確認")
@@ -65,6 +70,9 @@ class InspectionWindow(object):
         self.export_button = ttk.Button(controls, text="全件をExcel出力", command=self._export,
                                         state="disabled")
         self.export_button.pack(side="left", padx=6)
+        self.export_columns_button = ttk.Button(controls, text="Excel出力項目...",
+                                                 command=self._export_column_settings)
+        self.export_columns_button.pack(side="left", padx=6)
         self.open_button = ttk.Button(controls, text="出力Excelを開く", command=self._open,
                                       state="disabled")
         self.open_button.pack(side="left", padx=6)
@@ -82,10 +90,10 @@ class InspectionWindow(object):
         self.record_tree = self._tree(notebook, "レコード一覧", [
             "ファイル", "レコード", "FORM_ID", "対象有無", "参考情報", "備考"],
             [240, 75, 85, 75, 85, 580])
-        indexes = DETAIL_OUTPUT_COLUMNS
+        indexes = DETAIL_PREVIEW_COLUMNS
         self.detail_indexes = indexes
         self.detail_tree = self._tree(notebook, "項目明細", [DETAIL_HEADERS[i] for i in indexes],
-                                     [200, 70, 90, 80, 170, 240, 70, 80, 80, 140, 300])
+                                     [200, 70, 90, 80, 90, 170, 240, 70, 80, 80, 140, 300])
         original = ttk.Frame(notebook)
         notebook.add(original, text="選択レコードの原文")
         original.rowconfigure(0, weight=1)
@@ -188,6 +196,32 @@ class InspectionWindow(object):
             self._invalidate()
             dialog.destroy()
         ttk.Button(dialog, text="適用", command=save).grid(row=len(roles) + 1, column=1, pady=10)
+
+    def _export_column_settings(self):
+        if self.busy:
+            return
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Excel項目明細の出力列")
+        dialog.transient(self.window)
+        dialog.grab_set()
+        ttk.Label(dialog, text="標準: FieldID・受領OCR値・属性・座標", padding=10).grid(
+            row=0, column=0, sticky="w")
+        ttk.Label(dialog, text="追加する列を選択してください。", padding=(10, 0)).grid(
+            row=1, column=0, sticky="w")
+        variables = {}
+        for row, index in enumerate(DETAIL_OPTIONAL_COLUMNS, 2):
+            variable = tk.BooleanVar(value=index in self.optional_detail_columns)
+            variables[index] = variable
+            ttk.Checkbutton(dialog, text=DETAIL_HEADERS[index], variable=variable).grid(
+                row=row, column=0, sticky="w", padx=14, pady=3)
+
+        def save():
+            self.optional_detail_columns = {index for index, variable in variables.items()
+                                            if variable.get()}
+            dialog.destroy()
+
+        ttk.Button(dialog, text="適用", command=save).grid(
+            row=len(DETAIL_OPTIONAL_COLUMNS) + 2, column=0, sticky="e", padx=10, pady=10)
 
     def _tree(self, notebook, title, headers, widths):
         frame = ttk.Frame(notebook)
@@ -320,7 +354,8 @@ class InspectionWindow(object):
     def _start(self, operation, callback):
         self.busy = True
         for widget in (self.read_button, self.export_button, self.open_button, self.encoding_box,
-                       self.excel_button, self.sheet_box, self.columns_button):
+                       self.excel_button, self.sheet_box, self.columns_button,
+                       self.export_columns_button):
             widget.configure(state="disabled")
         self.status.set("解析中..." if operation == "read" else "Excel保存中...")
 
@@ -356,7 +391,9 @@ class InspectionWindow(object):
         if filename:
             # 同名ファイルの確認はネイティブ保存ダイアログが担当する。
             self.saved_path = None
-            self._start("export", lambda: export_inspection(self.result, filename, overwrite=True))
+            columns = DETAIL_OUTPUT_COLUMNS + tuple(sorted(self.optional_detail_columns))
+            self._start("export", lambda: export_inspection(
+                self.result, filename, overwrite=True, detail_columns=columns))
 
     def _poll(self):
         try:
@@ -370,6 +407,7 @@ class InspectionWindow(object):
             self.excel_button.configure(state="normal")
             self.sheet_box.configure(state="readonly")
             self.columns_button.configure(state="normal")
+            self.export_columns_button.configure(state="normal")
             if error:
                 self.status.set("処理失敗: %s" % error)
                 messagebox.showerror("受領TXT確認", error, parent=self.window)

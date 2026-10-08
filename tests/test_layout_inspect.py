@@ -77,7 +77,8 @@ class InspectionCase(unittest.TestCase):
         wb = load_workbook(str(self.output))
         try:
             self.assertEqual(wb["項目明細"].max_row, 3)
-            self.assertEqual(wb["項目明細"]["F2"].value, "3")
+            self.assertEqual(wb["項目明細"]["A2"].value, "6001")
+            self.assertEqual(wb["項目明細"]["B2"].value, "3")
         finally:
             wb.close()
 
@@ -115,7 +116,8 @@ class InspectionCase(unittest.TestCase):
         exported = load_workbook(str(self.output))
         try:
             self.assertEqual(exported["項目明細"].max_row, 36)
-            self.assertEqual(exported["項目明細"]["F36"].value, "35")
+            self.assertEqual(exported["項目明細"]["A36"].value, "6035")
+            self.assertEqual(exported["項目明細"]["B36"].value, "35")
         finally:
             exported.close()
 
@@ -161,22 +163,43 @@ class InspectionCase(unittest.TestCase):
         try:
             self.assertEqual(wb.sheetnames, ["項目明細", "レコード一覧", "受領原文"])
             headers = [cell.value for cell in wb["項目明細"][1]]
-            self.assertEqual(len(headers), 11)
-            self.assertEqual(headers[-1], "備考")
-            for removed in ("FORM_ID", "対象有無", "FieldID", "定義シート", "確認者"):
+            self.assertEqual(headers, ["FieldID", "受領OCR値", "属性", "座標"])
+            for removed in ("FORM_ID", "対象有無", "最大桁数", "文字数", "備考", "定義シート", "確認者"):
                 self.assertNotIn(removed, headers)
             self.assertEqual(wb["レコード一覧"]["E2"].value, "1001")
             self.assertEqual(wb["レコード一覧"]["F2"].value, "1")
-            self.assertEqual(wb["項目明細"]["F2"].value, '  "零",\r\n001 ')
-            self.assertEqual(wb["項目明細"]["F3"].value, '=1+1')
-            self.assertEqual(wb["項目明細"]["F3"].data_type, "s")
-            self.assertEqual(wb["項目明細"]["F4"].value, '0000123')
-            self.assertEqual(wb["項目明細"].freeze_panes, "F2")
-            self.assertEqual(wb["項目明細"].auto_filter.ref, "A1:K5")
+            self.assertEqual(wb["項目明細"]["B2"].value, '  "零",\r\n001 ')
+            self.assertEqual(wb["項目明細"]["B3"].value, '=1+1')
+            self.assertEqual(wb["項目明細"]["B3"].data_type, "s")
+            self.assertEqual(wb["項目明細"]["B4"].value, '0000123')
+            self.assertEqual(wb["項目明細"].freeze_panes, "B2")
+            self.assertEqual(wb["項目明細"].auto_filter.ref, "A1:D5")
             self.assertEqual(wb["受領原文"]["E2"].value + wb["受領原文"]["E3"].value,
                              self.txt.read_bytes().decode("cp932"))
         finally:
             wb.close()
+
+    def test_optional_detail_columns_are_exported_only_when_selected(self):
+        row = self.row(first="123456789012345678901")
+        row[2] = "6001"
+        self.write_records([row])
+        result = self.inspect()
+        export_inspection(result, self.output, detail_columns=(6, 8, 11, 12, 7, 9, 10, 14))
+        wb = load_workbook(str(self.output))
+        try:
+            sheet = wb["項目明細"]
+            headers = [cell.value for cell in sheet[1]]
+            self.assertEqual(headers, ["FieldID", "項目名", "受領OCR値", "文字数",
+                                       "最大桁数", "属性", "座標", "備考"])
+            self.assertEqual(sheet["A2"].value, "6001")
+            self.assertEqual(sheet["D2"].value, 21)
+            self.assertEqual(sheet["E2"].value, 20)
+            self.assertIn("最大桁数超過", sheet["H2"].value)
+            self.assertEqual(sheet["H2"].fill.fgColor.rgb[-6:], "FFF2CC")
+        finally:
+            wb.close()
+        with self.assertRaises(LayoutTxtError):
+            export_inspection(result, self.output, overwrite=True, detail_columns=(8, 11, 12))
 
     def test_generated_multiple_forms_including_calendar_round_trip(self):
         generated = generate_layout_txt(self.definition, self.root / "generated",
@@ -215,7 +238,7 @@ class InspectionCase(unittest.TestCase):
             export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual(wb["項目明細"]["F2"].value, value)
+            self.assertEqual(wb["項目明細"]["B2"].value, value)
             self.assertEqual(result.details[0][8], value)
         finally:
             wb.close()
@@ -257,10 +280,9 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual([wb["項目明細"]["I%d" % row].value for row in range(2, 10)],
+            self.assertEqual([wb["項目明細"]["C%d" % row].value for row in range(2, 10)],
                              ["0", "0", "4", "4", "8", "8", "12", "12"])
-            self.assertTrue(all(wb["項目明細"]["K%d" % row].value is None
-                                for row in range(2, 10)))
+            self.assertEqual(wb["項目明細"].max_column, 4)
         finally:
             wb.close()
 
@@ -325,8 +347,8 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertIsNone(wb["項目明細"]["K2"].value)
-            self.assertEqual(wb["項目明細"]["F2"].value, "000123")
+            self.assertIsNone(wb["項目明細"]["D2"].value)
+            self.assertEqual(wb["項目明細"]["B2"].value, "000123")
             self.assertFalse(any("NG" in str(cell.value) for sheet in wb for row in sheet for cell in row))
         finally:
             wb.close()
@@ -385,7 +407,7 @@ class InspectionCase(unittest.TestCase):
         export_inspection(result, self.output)
         wb = load_workbook(str(self.output))
         try:
-            self.assertEqual(wb["項目明細"]["F2"].value, "A\\u0001B")
+            self.assertEqual(wb["項目明細"]["B2"].value, "A\\u0001B")
         finally:
             wb.close()
         result.details[0][8] = "a" * 32768
@@ -405,7 +427,7 @@ class InspectionCase(unittest.TestCase):
             if sys.version_info < (3, 11):
                 self.assertIn("CSV解析不可", result.records[0]["issues"])
             else:
-                self.assertEqual(wb["項目明細"]["F2"].value, "A\\u0000B")
+                self.assertEqual(wb["項目明細"]["B2"].value, "A\\u0000B")
         finally:
             wb.close()
 
@@ -474,12 +496,12 @@ class InspectionCase(unittest.TestCase):
             window.detail_tree.selection_set("d1", "d0")
             window._copy_rows(window.detail_tree)
             copied = list(csv.reader(io.StringIO(root.clipboard_get()), delimiter="\t"))
-            self.assertEqual([row[5] for row in copied], ["0000123", "山田 太郎"])
+            self.assertEqual([row[6] for row in copied], ["0000123", "山田 太郎"])
             root.deiconify()
             window.detail_tree.master.master.select(window.detail_tree.master)
             root.update()
             tree = window.detail_tree
-            x, y, width, height = tree.bbox("d0", "#6")
+            x, y, width, height = tree.bbox("d0", "#7")
             # 最初のクリックとドラッグだけでセル内選択でき、別窓は作らない。
             tree.event_generate("<Button-1>", x=x + 12, y=y + 4)
             root.update()
@@ -503,9 +525,9 @@ class InspectionCase(unittest.TestCase):
             root.update()
             self.assertEqual(root.clipboard_get(), selected_text)
             cell_text.insert("1.0", "changed")
-            self.assertEqual(tree.set("d0", "#6"), "0000123")
+            self.assertEqual(tree.set("d0", "#7"), "0000123")
             self.assertEqual(cell_text.get("1.0", "end-1c"), "0000123")
-            x2, y2, _width, _height = tree.bbox("d1", "#6")
+            x2, y2, _width, _height = tree.bbox("d1", "#7")
             toggle_modifier = 0x0008 if sys.platform == "darwin" else 0x0004
             tree.event_generate("<Button-1>", x=x2 + 12, y=y2 + 4, state=toggle_modifier)
             root.update()
@@ -513,8 +535,8 @@ class InspectionCase(unittest.TestCase):
             self.assertEqual(set(tree.selection()), {"d0", "d1"})
             window._copy_rows(tree)
             copied = list(csv.reader(io.StringIO(root.clipboard_get()), delimiter="\t"))
-            self.assertEqual([row[5] for row in copied], ["0000123", "山田 太郎"])
-            window._select_cell_text(tree, "d0", "#6")
+            self.assertEqual([row[6] for row in copied], ["0000123", "山田 太郎"])
+            window._select_cell_text(tree, "d0", "#7")
             window._scroll_table(tree, "x", "moveto", 0)
             self.assertIsNone(window._cell_text)
             root.withdraw()
