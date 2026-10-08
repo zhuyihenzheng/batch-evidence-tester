@@ -252,11 +252,17 @@ class InspectionCase(unittest.TestCase):
         result = self.inspect()
         self.assertEqual([record["actual"] for record in result.records], [2] * 4)
         self.assertEqual([row[11] for row in result.details[::2]], ["0", "4", "8", "12"])
-        self.assertFalse(any("属性が定義外" in row[14] for row in result.details))
-        self.assertEqual(result.details[0][14], "")
-        self.assertIn("属性4", result.details[2][14])
-        self.assertIn("属性8", result.details[4][14])
-        self.assertIn("属性12", result.details[6][14])
+        self.assertEqual([row[14] for row in result.details], [""] * 8)
+        self.assertEqual([record["issues"] for record in result.records], [""] * 4)
+        export_inspection(result, self.output)
+        wb = load_workbook(str(self.output))
+        try:
+            self.assertEqual([wb["項目明細"]["I%d" % row].value for row in range(2, 10)],
+                             ["0", "0", "4", "4", "8", "8", "12", "12"])
+            self.assertTrue(all(wb["項目明細"]["K%d" % row].value is None
+                                for row in range(2, 10)))
+        finally:
+            wb.close()
 
     def test_received_attribute_12_without_coordinates_keeps_three_field_format(self):
         row = self.row()
@@ -267,6 +273,7 @@ class InspectionCase(unittest.TestCase):
         self.assertEqual([detail[8] for detail in result.details], ["0000123", "山田 太郎"])
         self.assertEqual([detail[11] for detail in result.details], ["12", "12"])
         self.assertEqual([detail[12] for detail in result.details], [None, None])
+        self.assertEqual(result.records[0]["issues"], "")
 
     def test_old_attribute_values_are_not_accepted_as_received_format(self):
         row = self.row()

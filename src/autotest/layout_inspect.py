@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 from .layout_txt import LayoutTxtError, read_layout_fields
 
 
-SCOPE = ("Excel定義に対応する実値を表示し、項目数・順序・文字数などの注意点を参考情報として記載します。"
+SCOPE = ("Excel定義に対応する実値を表示し、項目数・文字数などの注意点を参考情報として記載します。"
          "座標は任意です。空欄でも注意点にしません。")
 DETAIL_HEADERS = [
     "ファイル", "レコード", "物理開始行", "FORM_ID", "対象有無", "TXT項目順",
@@ -135,8 +135,6 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=Non
         if len(block) > 2:
             if block[2] not in RECEIVED_ATTRIBUTE_VALUES:
                 problems.append("属性が定義外")
-            elif block[2] != "0":
-                cautions.append("属性%s（要確認）" % block[2])
         if len(block) > 3 and block[3] and not re.fullmatch(r"[0-9]+,[0-9]+,[0-9]+,[0-9]+", block[3]):
             cautions.append("座標の形式を確認（参考:4個の非負整数）")
         status = "注意点あり" if problems or cautions else ""
