@@ -36,7 +36,7 @@ class StandaloneCheckerCase(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / "received_txt_checker.py"), "--version"],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "ReceivedTxtChecker 0.1.9")
+        self.assertEqual(result.stdout.strip(), "ReceivedTxtChecker 0.1.10")
 
     def test_cleanup_retries_transient_windows_sharing_violation(self):
         with tempfile.TemporaryDirectory() as directory:

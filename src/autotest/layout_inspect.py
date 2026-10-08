@@ -32,6 +32,7 @@ DETAIL_HEADERS = [
 ]
 # 対応付け用の定義情報は内部に保持し、表示・成果物は実値と備考に絞る。
 DETAIL_OUTPUT_COLUMNS = (0, 1, 2, 5, 7, 8, 9, 10, 11, 12, 14)
+RECEIVED_ATTRIBUTE_VALUES = ("0", "4", "8", "12")
 
 
 def _sha(data):
@@ -80,7 +81,7 @@ def _detect_block_width(values, fields):
     for width in (3, 4):
         blocks = [values[index:index + width] for index in range(2, len(values), width)]
         scores[width] = (
-            sum(len(block) > 2 and block[2] not in ("0", "1", "2", "1,2") for block in blocks),
+            sum(len(block) > 2 and block[2] not in RECEIVED_ATTRIBUTE_VALUES for block in blocks),
             sum(len(block) < 3 for block in blocks),
             abs(len(blocks) - len(fields)) if fields else 0,
         )
@@ -132,10 +133,10 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=Non
         if value == "":
             cautions.append("OCR値が空")
         if len(block) > 2:
-            if block[2] not in ("0", "1", "2", "1,2"):
+            if block[2] not in RECEIVED_ATTRIBUTE_VALUES:
                 problems.append("属性が定義外")
             elif block[2] != "0":
-                cautions.append("属性%s（1:個数不正 / 2:認識不可）" % block[2])
+                cautions.append("属性%s（要確認）" % block[2])
         if len(block) > 3 and block[3] and not re.fullmatch(r"[0-9]+,[0-9]+,[0-9]+,[0-9]+", block[3]):
             cautions.append("座標の形式を確認（参考:4個の非負整数）")
         status = "注意点あり" if problems or cautions else ""

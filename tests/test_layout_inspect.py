@@ -242,7 +242,41 @@ class InspectionCase(unittest.TestCase):
         self.write_records(rows)
         self.assertEqual([r["status"] for r in self.inspect().records], ["注意点あり"] * 3)
 
-    def test_empty_values_and_recognition_flags_require_review(self):
+    def test_received_attribute_values_0_4_8_12_are_valid(self):
+        rows = []
+        for attribute in ("0", "4", "8", "12"):
+            row = self.row()
+            row[4] = row[8] = attribute
+            rows.append(row)
+        self.write_records(rows)
+        result = self.inspect()
+        self.assertEqual([record["actual"] for record in result.records], [2] * 4)
+        self.assertEqual([row[11] for row in result.details[::2]], ["0", "4", "8", "12"])
+        self.assertFalse(any("属性が定義外" in row[14] for row in result.details))
+        self.assertEqual(result.details[0][14], "")
+        self.assertIn("属性4", result.details[2][14])
+        self.assertIn("属性8", result.details[4][14])
+        self.assertIn("属性12", result.details[6][14])
+
+    def test_received_attribute_12_without_coordinates_keeps_three_field_format(self):
+        row = self.row()
+        row[4] = row[8] = "12"
+        self.write_records([row[:5] + row[6:9]])
+        result = self.inspect()
+        self.assertEqual(result.records[0]["actual"], 2)
+        self.assertEqual([detail[8] for detail in result.details], ["0000123", "山田 太郎"])
+        self.assertEqual([detail[11] for detail in result.details], ["12", "12"])
+        self.assertEqual([detail[12] for detail in result.details], [None, None])
+
+    def test_old_attribute_values_are_not_accepted_as_received_format(self):
+        row = self.row()
+        row[4], row[8] = "1", "2"
+        self.write_records([row])
+        result = self.inspect()
+        self.assertEqual(result.records[0]["actual"], 2)
+        self.assertTrue(all("属性が定義外" in detail[14] for detail in result.details))
+
+    def test_empty_values_and_invalid_attributes_require_review(self):
         row = self.row(first="")
         row[4] = "1,2"
         row[1] = "0"
@@ -250,6 +284,7 @@ class InspectionCase(unittest.TestCase):
         result = self.inspect()
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.details[0][8], "")
+        self.assertIn("属性が定義外", result.details[0][14])
         self.assertNotIn("原票", result.details[0][14])
         self.assertEqual(result.records[0]["status"], "注意点あり")
 
@@ -298,7 +333,7 @@ class InspectionCase(unittest.TestCase):
         self.assertEqual([r[12] for r in result.details], ["0,0,10,10", "0,0,10,10", None, None])
 
     def test_ambiguous_blocks_keep_raw_without_guessing_values(self):
-        self.write_records([["9999", "1"] + ["1", "0", "0"] * 4])
+        self.write_records([["9999", "1"] + ["0"] * 12])
         result = self.inspect()
         self.assertEqual(result.details, [])
         self.assertIsNone(result.records[0]["actual"])
