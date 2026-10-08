@@ -588,6 +588,7 @@ class InspectionCase(unittest.TestCase):
                 self.assertEqual(wb["項目明細"].max_row, 5)
             finally:
                 wb.close()
+            window.issues_only.set(False)
             window.optional_detail_columns = {20, 21}
             window._refresh_detail_columns()
             self.assertEqual(window.detail_indexes, (6, 8, 11, 12, 20, 21))
