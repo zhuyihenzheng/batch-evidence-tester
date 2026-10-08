@@ -52,14 +52,15 @@ class InspectionCase(unittest.TestCase):
     def inspect(self, **kwargs):
         return inspect_txt(self.definition, [self.txt], **kwargs)
 
-    def test_actuals_mapped_by_field_id_not_element_id_or_position(self):
+    def test_actuals_follow_txt_position_even_when_field_ids_are_reversed(self):
         row = self.row()
         self.write_records([row[:2] + row[6:] + row[2:6]])
         result = self.inspect()
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual([r[7] for r in result.details], ["氏名", "受付番号"])
-        self.assertEqual([r[18] for r in result.details], ["0100", "0099"])
-        self.assertEqual(result.details[1][8], "0000123")
+        self.assertEqual([r[7] for r in result.details], ["受付番号", "氏名"])
+        self.assertEqual([r[18] for r in result.details], ["0099", "0100"])
+        self.assertEqual([r[8] for r in result.details], ["山田 太郎", "0000123"])
+        self.assertEqual(result.records[0]["issues"], "")
 
     def test_received_field_ids_starting_at_6001_use_one_set_of_detail_rows(self):
         row = self.row(first="3", second="手続き値")
@@ -80,12 +81,13 @@ class InspectionCase(unittest.TestCase):
         finally:
             wb.close()
 
-    def test_received_field_ids_starting_at_6002_keep_missing_first_item_visible(self):
+    def test_one_received_field_starting_at_6002_fills_first_position(self):
         self.write_records([["1001", "1", "6002", "手続き値", "0", "0,0,0,0"]])
         result = self.inspect()
         self.assertEqual(len(result.details), 2)
-        self.assertEqual(result.details[0][7:9], ["氏名", "手続き値"])
-        self.assertEqual(result.details[1][7], "受付番号")
+        self.assertEqual(result.details[0][7:9], ["受付番号", "手続き値"])
+        self.assertEqual(result.details[1][7], "氏名")
+        self.assertIsNone(result.details[1][6])
         self.assertIsNone(result.details[1][8])
         self.assertIn("TXTに項目なし", result.details[1][14])
 
@@ -117,9 +119,9 @@ class InspectionCase(unittest.TestCase):
         finally:
             exported.close()
 
-    def test_unique_source_element_ids_can_match_received_fields(self):
+    def test_repeated_nonnumeric_field_ids_do_not_affect_mapping(self):
         row = self.row()
-        row[2], row[6] = "0099", "0100"
+        row[2], row[6] = "X", "X"
         self.write_records([row])
         result = self.inspect()
         self.assertEqual(len(result.details), 2)
@@ -137,14 +139,14 @@ class InspectionCase(unittest.TestCase):
         self.assertEqual(len(result.details), 46)
         self.assertEqual(result.details[-1][19], "46/46")
 
-    def test_mixed_thousand_series_is_not_guessed(self):
+    def test_mixed_thousand_series_still_uses_txt_position(self):
         row = self.row()
         row[2], row[6] = "6001", "7002"
         self.write_records([row])
         result = self.inspect()
-        self.assertIn("FieldIDの並び", result.records[0]["issues"])
+        self.assertEqual(result.records[0]["issues"], "")
         self.assertEqual([detail[6] for detail in result.details[:2]], ["6001", "7002"])
-        self.assertEqual([detail[7] for detail in result.details[:2]], ["", ""])
+        self.assertEqual([detail[7] for detail in result.details[:2]], ["受付番号", "氏名"])
         self.assertEqual(result.records[0]["raw"], self.txt.read_bytes().decode("cp932"))
 
     def test_multiline_quotes_spaces_leading_zero_and_formula_are_preserved(self):
@@ -218,19 +220,19 @@ class InspectionCase(unittest.TestCase):
         finally:
             wb.close()
 
-    def test_missing_duplicate_unknown_and_incomplete_blocks_are_retained(self):
+    def test_extra_incomplete_block_is_retained_without_id_matching(self):
         self.write_records([["1001", "1", "1", "A", "0", "0,0,1,1",
                              "1", "B", "0", "0,0,1,1", "99", "C"]])
         result = self.inspect()
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual(len(result.details), 4)
-        self.assertIn("重複", result.details[0][14])
-        self.assertIn("定義外", result.details[2][14])
+        self.assertEqual(len(result.details), 3)
+        self.assertEqual([row[7] for row in result.details], ["受付番号", "氏名", ""])
+        self.assertEqual(result.details[0][14], "")
+        self.assertEqual(result.details[1][14], "")
+        self.assertIn("余剰項目", result.details[2][14])
+        self.assertIn("不足", result.details[2][14])
         self.assertEqual(result.details[2][8], "C")
         self.assertIsNone(result.details[2][11])
-        self.assertEqual(result.details[3][6], "2")
-        self.assertIsNone(result.details[3][8])
-        self.assertIn("TXTに項目なし", result.details[3][14])
 
     def test_unknown_form_target_and_attributes_have_notes(self):
         rows = [self.row(), self.row(), self.row()]

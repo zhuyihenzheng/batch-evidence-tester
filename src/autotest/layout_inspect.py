@@ -10,7 +10,7 @@ import re
 import sys
 import tempfile
 import zipfile
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
@@ -73,43 +73,14 @@ def _detail(result, record, position, block, field, issues, status):
     ]
 
 
-def _matched_field_ids(blocks, fields):
-    """照合時だけ受領IDを定義側の連番へ対応付け、原文のIDは保持する。"""
-    received = [block[0] for block in blocks]
-    if not fields or not received:
-        return received
-    known = {field.field_id for field in fields}
-    candidates = [received]
-
-    # Excelに記載されたELEMENT_IDが一意なら、その番号も照合に使える。
-    source_counts = Counter(field.source_element_id for field in fields)
-    source_ids = {field.source_element_id: field.field_id for field in fields
-                  if field.source_element_id and source_counts[field.source_element_id] == 1}
-    if source_ids and all(value in source_ids for value in received):
-        candidates.append([source_ids[value] for value in received])
-
-    # 実データの6001,6002,...は定義の1,2,...に対応することがある。
-    # 同じ千番台だけを対象にし、混在した番号を推測して結び付けない。
-    if all(re.fullmatch(r"[0-9]{4,}", value) for value in received):
-        bases = {value[:-3].lstrip("0") for value in received}
-        if len(bases) == 1 and "" not in bases:
-            candidates.append([str(int(value[-3:])) for value in received])
-
-    return max(candidates, key=lambda ids: sum(value in known for value in ids))
-
-
 def _detect_block_width(values, fields):
     if len(values) <= 2:
         return 4
-    known = {field.field_id for field in fields or []}
     scores = {}
     for width in (3, 4):
         blocks = [values[index:index + width] for index in range(2, len(values), width)]
-        matched_ids = _matched_field_ids(blocks, fields)
         scores[width] = (
-            sum(not block[0].isdigit() for block in blocks),
             sum(len(block) > 2 and block[2] not in ("0", "1", "2", "1,2") for block in blocks),
-            sum(value not in known for value in matched_ids) if known else 0,
             sum(len(block) < 3 for block in blocks),
             abs(len(blocks) - len(fields)) if fields else 0,
         )
@@ -143,23 +114,15 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=Non
     if uncertain:
         issues.append("項目の区切りを特定できません（原文を表示）")
     blocks = [values[index:index + width] for index in range(2, len(values), width)] if width else []
-    matched_ids = _matched_field_ids(blocks, fields)
-    counts = Counter(matched_ids)
-    lookup = {field.field_id: field for field in fields or []}
     if fields and not uncertain and len(blocks) != len(fields):
         issues.append("項目数不一致: 定義%d / 受領%d" % (len(fields), len(blocks)))
-    if fields and not uncertain and matched_ids != [field.field_id for field in fields]:
-        issues.append("FieldIDの並びが定義と不一致")
     detail_statuses = []
     for index, block in enumerate(blocks, 1):
-        matched_id = matched_ids[index - 1]
-        field = lookup.get(matched_id)
+        field = fields[index - 1] if fields and index <= len(fields) else None
         problems = []
         cautions = []
-        if field is None:
-            problems.append("FieldIDが定義外または空")
-        if counts[matched_id] > 1:
-            problems.append("FieldIDが重複")
+        if fields and field is None:
+            problems.append("定義に対応項目なし（受領の余剰項目）")
         if len(block) < 3:
             problems.append("項目ブロックのOCR値または属性が不足")
         value = block[1] if len(block) > 1 else None
@@ -175,17 +138,14 @@ def _inspect_record(result, groups, record, values, parse_error, block_width=Non
                 cautions.append("属性%s（1:個数不正 / 2:認識不可）" % block[2])
         if len(block) > 3 and block[3] and not re.fullmatch(r"[0-9]+,[0-9]+,[0-9]+,[0-9]+", block[3]):
             cautions.append("座標の形式を確認（参考:4個の非負整数）")
-        if fields and index <= len(fields) and matched_id != fields[index - 1].field_id:
-            problems.append("FieldIDの順序が定義と不一致")
         status = "注意点あり" if problems or cautions else ""
         detail_statuses.append(status)
         result.details.append(_detail(result, record, index, block, field,
                                       problems + cautions, status))
-    for field in (fields or []) if not uncertain else []:
-        if field.field_id not in counts:
-            result.details.append(_detail(result, record, None, [field.field_id], field,
-                                          ["TXTに項目なし（定義から補記）"], "注意点あり"))
-            detail_statuses.append("注意点あり")
+    for field in (fields[len(blocks):] if fields and not uncertain else []):
+        result.details.append(_detail(result, record, None, [None], field,
+                                      ["TXTに項目なし（定義から補記）"], "注意点あり"))
+        detail_statuses.append("注意点あり")
     if "注意点あり" in detail_statuses:
         review.append("項目明細に注意点あり")
     record.update(status="注意点あり" if issues or review else "",
