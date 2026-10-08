@@ -33,15 +33,15 @@ DETAIL_HEADERS = [
 # 定義との対応付けは位置で行う。FieldIDは受領値としてのみ出力する。
 DETAIL_REQUIRED_COLUMNS = (6, 8, 11, 12)
 DETAIL_DEFAULT_OPTIONAL_COLUMNS = (0, 1, 2, 5, 7, 14)
-DETAIL_OPTIONAL_COLUMNS = (0, 1, 2, 5, 7, 9, 10, 14, 20, 21, 22, 23, 24, 25)
+DETAIL_OPTIONAL_COLUMNS = (0, 1, 2, 5, 7, 9, 10, 14, 20, 21, 22, 23)
 # 備考は選択時も末尾に置く。
 DETAIL_COLUMN_ORDER = (0, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12,
-                       20, 21, 22, 23, 24, 25, 14)
+                       20, 21, 22, 23, 14)
 DETAIL_OUTPUT_COLUMNS = tuple(index for index in DETAIL_COLUMN_ORDER
                               if index in DETAIL_REQUIRED_COLUMNS + DETAIL_DEFAULT_OPTIONAL_COLUMNS)
 DETAIL_COLUMN_WIDTHS = {0: 42, 1: 12, 2: 12, 5: 12, 6: 14, 7: 26,
                         8: 42, 9: 10, 10: 12, 11: 12, 12: 23, 14: 65,
-                        20: 20, 21: 20, 22: 24, 23: 30, 24: 42, 25: 42}
+                        20: 20, 21: 20, 22: 24, 23: 30}
 RECEIVED_ATTRIBUTE_VALUES = ("0", "4", "8", "12")
 
 

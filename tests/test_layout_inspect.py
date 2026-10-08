@@ -217,17 +217,20 @@ class InspectionCase(unittest.TestCase):
         self.write_records([self.row()])
         result = self.inspect()
         export_inspection(result, self.output,
-                          detail_columns=(6, 8, 11, 12, 20, 21, 22, 23, 24, 25, 14))
+                          detail_columns=(6, 8, 11, 12, 20, 21, 22, 23, 14))
         exported = load_workbook(str(self.output))
         try:
             sheet = exported["項目明細"]
             self.assertEqual([cell.value for cell in sheet[1]],
                              ["FieldID", "受領OCR値", "属性", "座標", "データ型", "IME",
-                              "入力属性", "入力規則", "補足", "出力例", "備考"])
-            self.assertEqual([sheet.cell(2, col).value for col in range(5, 11)],
-                             ["文字列", "半角英数", "必須", "英数字のみ", "照合用", "ABC123"])
+                              "入力属性", "入力規則", "備考"])
+            self.assertEqual([sheet.cell(2, col).value for col in range(5, 9)],
+                             ["文字列", "半角英数", "必須", "英数字のみ"])
         finally:
             exported.close()
+        with self.assertRaises(LayoutTxtError):
+            export_inspection(result, self.output, overwrite=True,
+                              detail_columns=(6, 8, 11, 12, 24))
 
     def test_generated_multiple_forms_including_calendar_round_trip(self):
         generated = generate_layout_txt(self.definition, self.root / "generated",
