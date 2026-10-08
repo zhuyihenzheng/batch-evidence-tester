@@ -588,6 +588,22 @@ class InspectionCase(unittest.TestCase):
                 self.assertEqual(wb["項目明細"].max_row, 5)
             finally:
                 wb.close()
+            window.optional_detail_columns = {20, 21}
+            window._refresh_detail_columns()
+            self.assertEqual(window.detail_indexes, (6, 8, 11, 12, 20, 21))
+            self.assertEqual(tree.heading("4")["text"], "データ型")
+            self.assertEqual(tree.set("d0", "1"), "0000123")
+            self.assertEqual(len(tree.get_children()), 4)
+            with mock.patch.object(layout_inspect_gui.filedialog, "asksaveasfilename",
+                                   return_value=str(self.output)):
+                window._export()
+            wait_for_worker()
+            wb = load_workbook(str(self.output))
+            try:
+                self.assertEqual([cell.value for cell in wb["項目明細"][1]],
+                                 ["FieldID", "受領OCR値", "属性", "座標", "データ型", "IME"])
+            finally:
+                wb.close()
             window._invalidate()
             self.assertIsNone(window.result)
             self.assertEqual(len(window.detail_tree.get_children()), 0)

@@ -14,12 +14,19 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from openpyxl import load_workbook
 
-from .layout_inspect import (DETAIL_DEFAULT_OPTIONAL_COLUMNS, DETAIL_HEADERS,
+from .layout_inspect import (DETAIL_COLUMN_ORDER, DETAIL_DEFAULT_OPTIONAL_COLUMNS, DETAIL_HEADERS,
                              DETAIL_OPTIONAL_COLUMNS, DETAIL_REQUIRED_COLUMNS,
                              SCOPE, export_inspection, inspect_txt)
 
 
-DETAIL_PREVIEW_COLUMNS = (0, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 14)
+DETAIL_PREVIEW_WIDTHS = {0: 200, 1: 70, 2: 90, 5: 80, 6: 90, 7: 170,
+                         8: 240, 9: 70, 10: 80, 11: 80, 12: 140,
+                         14: 300, 20: 140, 21: 140, 22: 160, 23: 180}
+
+
+def selected_detail_columns(optional_columns):
+    selected = set(DETAIL_REQUIRED_COLUMNS) | set(optional_columns)
+    return tuple(index for index in DETAIL_COLUMN_ORDER if index in selected)
 
 
 class InspectionWindow(object):
@@ -71,7 +78,7 @@ class InspectionWindow(object):
         self.export_button = ttk.Button(controls, text="全件をExcel出力", command=self._export,
                                         state="disabled")
         self.export_button.pack(side="left", padx=6)
-        self.export_columns_button = ttk.Button(controls, text="Excel出力項目...",
+        self.export_columns_button = ttk.Button(controls, text="明細表示・出力項目...",
                                                  command=self._export_column_settings)
         self.export_columns_button.pack(side="left", padx=6)
         self.open_button = ttk.Button(controls, text="出力Excelを開く", command=self._open,
@@ -91,10 +98,10 @@ class InspectionWindow(object):
         self.record_tree = self._tree(notebook, "レコード一覧", [
             "ファイル", "レコード", "FORM_ID", "対象有無", "参考情報", "備考"],
             [240, 75, 85, 75, 85, 580])
-        indexes = DETAIL_PREVIEW_COLUMNS
+        indexes = selected_detail_columns(self.optional_detail_columns)
         self.detail_indexes = indexes
         self.detail_tree = self._tree(notebook, "項目明細", [DETAIL_HEADERS[i] for i in indexes],
-                                     [200, 70, 90, 80, 90, 170, 240, 70, 80, 80, 140, 300])
+                                     [DETAIL_PREVIEW_WIDTHS[i] for i in indexes])
         original = ttk.Frame(notebook)
         notebook.add(original, text="選択レコードの原文")
         original.rowconfigure(0, weight=1)
@@ -202,7 +209,7 @@ class InspectionWindow(object):
         if self.busy:
             return
         dialog = tk.Toplevel(self.window)
-        dialog.title("Excel項目明細の出力列")
+        dialog.title("項目明細の表示・出力列")
         dialog.transient(self.window)
         dialog.grab_set()
         ttk.Label(dialog, text="必須: FieldID・受領OCR値・属性・座標", padding=10).grid(
@@ -221,9 +228,20 @@ class InspectionWindow(object):
             self.optional_detail_columns = {index for index, variable in variables.items()
                                             if variable.get()}
             dialog.destroy()
+            self._refresh_detail_columns()
 
         ttk.Button(dialog, text="適用", command=save).grid(
             row=10, column=1, sticky="e", padx=10, pady=10)
+
+    def _refresh_detail_columns(self):
+        indexes = selected_detail_columns(self.optional_detail_columns)
+        self.detail_indexes = indexes
+        columns = [str(index) for index in range(len(indexes))]
+        self.detail_tree.configure(columns=columns)
+        for column, index in zip(columns, indexes):
+            self.detail_tree.heading(column, text=DETAIL_HEADERS[index])
+            self.detail_tree.column(column, width=DETAIL_PREVIEW_WIDTHS[index], stretch=False)
+        self._render()
 
     def _tree(self, notebook, title, headers, widths):
         frame = ttk.Frame(notebook)
@@ -393,7 +411,7 @@ class InspectionWindow(object):
         if filename:
             # 同名ファイルの確認はネイティブ保存ダイアログが担当する。
             self.saved_path = None
-            columns = DETAIL_REQUIRED_COLUMNS + tuple(sorted(self.optional_detail_columns))
+            columns = selected_detail_columns(self.optional_detail_columns)
             self._start("export", lambda: export_inspection(
                 self.result, filename, overwrite=True, detail_columns=columns))
 

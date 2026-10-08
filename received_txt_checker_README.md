@@ -25,8 +25,9 @@ macOS / Linux：`python3 received_txt_checker.py`，使用带 tkinter 的 Python
    支持 Shift / Ctrl 选择多行，Ctrl+C 复制后可直接粘贴到 Excel。
    单元格内可直接拖动选中文字，再按 Ctrl+C 复制，不弹出窗口；Ctrl+A 选择该单元格全文。
    macOS 使用 Command+C。搜索输入后按 Enter 或点击「検索」应用筛选。
-5. 点击「全件をExcel出力」。导出包含全部记录，不受画面筛选影响。
-   如需调整明细列，先点「Excel出力項目...」勾选。
+5. 点击「明細表示・出力項目...」勾选列；「項目明細」画面会立即按所选列更新，
+   无需重新解析 TXT。点击「全件をExcel出力」时使用相同列，且包含全部记录，
+   不受画面筛选影响。
 
 更换定义或列设置后需要重新选择 TXT 解析。程序不修改输入文件。
 

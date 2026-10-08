@@ -59,7 +59,7 @@ class ReceivedTxtGuiCase(unittest.TestCase):
             layout_inspect_gui.InspectionWindow._export(holder)
             holder._start.call_args[0][1]()
         export.assert_called_once_with(result, "check.xlsx", overwrite=True,
-                                       detail_columns=(6, 8, 11, 12, 0, 1, 2, 5, 7, 14))
+                                       detail_columns=(0, 1, 2, 5, 6, 7, 8, 11, 12, 14))
 
     def test_export_passes_selected_optional_columns(self):
         result = object()
@@ -73,7 +73,22 @@ class ReceivedTxtGuiCase(unittest.TestCase):
             layout_inspect_gui.InspectionWindow._export(holder)
             holder._start.call_args[0][1]()
         export.assert_called_once_with(result, "check.xlsx", overwrite=True,
-                                       detail_columns=(6, 8, 11, 12, 7, 10, 14))
+                                       detail_columns=(6, 7, 8, 10, 11, 12, 14))
+
+    def test_selected_columns_update_detail_view_and_export_order(self):
+        holder = types.SimpleNamespace(optional_detail_columns={7, 20, 21},
+                                       detail_tree=mock.Mock(), _render=mock.Mock())
+        layout_inspect_gui.InspectionWindow._refresh_detail_columns(holder)
+        self.assertEqual(holder.detail_indexes, (6, 7, 8, 11, 12, 20, 21))
+        holder.detail_tree.configure.assert_called_once_with(
+            columns=["0", "1", "2", "3", "4", "5", "6"])
+        self.assertEqual(holder.detail_tree.heading.call_args_list[5].args,
+                         ("5",))
+        self.assertEqual(holder.detail_tree.heading.call_args_list[5].kwargs,
+                         {"text": "データ型"})
+        holder._render.assert_called_once_with()
+        self.assertEqual(layout_inspect_gui.selected_detail_columns({7, 20, 21}),
+                         holder.detail_indexes)
 
     def test_detail_display_limit_is_explicit_and_does_not_change_result(self):
         row = [""] * 29
