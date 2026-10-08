@@ -61,6 +61,92 @@ class InspectionCase(unittest.TestCase):
         self.assertEqual([r[18] for r in result.details], ["0100", "0099"])
         self.assertEqual(result.details[1][8], "0000123")
 
+    def test_received_field_ids_starting_at_6001_use_one_set_of_detail_rows(self):
+        row = self.row(first="3", second="手続き値")
+        row[2], row[6] = "6001", "6002"
+        self.write_records([row])
+        result = self.inspect()
+        self.assertEqual(result.records[0]["issues"], "")
+        self.assertEqual(result.records[0]["actual"], 2)
+        self.assertEqual(len(result.details), 2)
+        self.assertEqual([detail[7] for detail in result.details], ["受付番号", "氏名"])
+        self.assertEqual([detail[8] for detail in result.details], ["3", "手続き値"])
+        self.assertEqual([detail[6] for detail in result.details], ["6001", "6002"])
+        export_inspection(result, self.output)
+        wb = load_workbook(str(self.output))
+        try:
+            self.assertEqual(wb["項目明細"].max_row, 3)
+            self.assertEqual(wb["項目明細"]["F2"].value, "3")
+        finally:
+            wb.close()
+
+    def test_received_field_ids_starting_at_6002_keep_missing_first_item_visible(self):
+        self.write_records([["1001", "1", "6002", "手続き値", "0", "0,0,0,0"]])
+        result = self.inspect()
+        self.assertEqual(len(result.details), 2)
+        self.assertEqual(result.details[0][7:9], ["氏名", "手続き値"])
+        self.assertEqual(result.details[1][7], "受付番号")
+        self.assertIsNone(result.details[1][8])
+        self.assertIn("TXTに項目なし", result.details[1][14])
+
+    def test_35_items_starting_at_6001_do_not_form_two_sections(self):
+        wb = load_workbook(str(self.definition))
+        try:
+            for number in range(1, 36):
+                wb.active.append(["5003", "01", "", "", "", "", "",
+                                  "手続%d" % number, "文字列", "全タイプ", 20,
+                                  str(8000 + number)])
+            wb.save(str(self.definition))
+        finally:
+            wb.close()
+        values = ["5003", "1"]
+        for number in range(1, 36):
+            values.extend([str(6000 + number), str(number), "0", "0,0,0,0"])
+        self.write_records([values])
+        result = self.inspect()
+        self.assertEqual(result.records[0]["issues"], "")
+        self.assertEqual(result.records[0]["actual"], 35)
+        self.assertEqual(len(result.details), 35)
+        self.assertEqual([row[7] for row in result.details],
+                         ["手続%d" % number for number in range(1, 36)])
+        export_inspection(result, self.output)
+        exported = load_workbook(str(self.output))
+        try:
+            self.assertEqual(exported["項目明細"].max_row, 36)
+            self.assertEqual(exported["項目明細"]["F36"].value, "35")
+        finally:
+            exported.close()
+
+    def test_unique_source_element_ids_can_match_received_fields(self):
+        row = self.row()
+        row[2], row[6] = "0099", "0100"
+        self.write_records([row])
+        result = self.inspect()
+        self.assertEqual(len(result.details), 2)
+        self.assertEqual(result.records[0]["issues"], "")
+        self.assertEqual([detail[7] for detail in result.details], ["受付番号", "氏名"])
+
+    def test_calendar_expansion_can_use_6001_series(self):
+        values = ["2001", "1"]
+        for number in range(1, 47):
+            values.extend([str(6000 + number), "5/8/6/1", "0", "0,0,0,0"])
+        self.write_records([values])
+        result = self.inspect()
+        self.assertEqual(result.records[0]["issues"], "")
+        self.assertEqual(result.records[0]["actual"], 46)
+        self.assertEqual(len(result.details), 46)
+        self.assertEqual(result.details[-1][19], "46/46")
+
+    def test_mixed_thousand_series_is_not_guessed(self):
+        row = self.row()
+        row[2], row[6] = "6001", "7002"
+        self.write_records([row])
+        result = self.inspect()
+        self.assertIn("FieldIDの並び", result.records[0]["issues"])
+        self.assertEqual([detail[6] for detail in result.details[:2]], ["6001", "7002"])
+        self.assertEqual([detail[7] for detail in result.details[:2]], ["", ""])
+        self.assertEqual(result.records[0]["raw"], self.txt.read_bytes().decode("cp932"))
+
     def test_multiline_quotes_spaces_leading_zero_and_formula_are_preserved(self):
         self.write_records([self.row('  "零",\r\n001 ', '=1+1'), self.row()])
         result = self.inspect()
