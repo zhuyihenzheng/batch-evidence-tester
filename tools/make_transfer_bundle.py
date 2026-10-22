@@ -29,9 +29,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # --minimal のときに含めるもの。テスト・サンプル・fixtures を落とすと半分以下になる。
-# templates/ は autotest new が、AI 向けの手順書（AGENTS.md / docs/ai / skills / Copilot 設定）は
-# 転送先で AI にケースを作らせるときに要る。どちらも小さいので最小構成にも入れる
-MINIMAL_PREFIXES = ("src/", "config/", "tools/", "templates/", "docs/ai/",
+# templates/ は autotest new が、AI 向けの手順書（AGENTS.md / docs/ai / skills / Copilot 設定）と
+# 人向けの操作手順（docs/guide）は転送先で AI にケースを作らせるときに要る。どれも小さいので最小構成にも入れる
+MINIMAL_PREFIXES = ("src/", "config/", "tools/", "templates/", "docs/ai/", "docs/guide/",
                     ".claude/skills/", ".agents/skills/", ".github/instructions/")
 MINIMAL_FILES = ("check_env.py", "requirements.txt", "pyproject.toml",
                  "run_test.bat", "setup_windows.bat", "README.md",

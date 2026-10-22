@@ -1069,6 +1069,11 @@ A0004,田中電機,-500
 
 可以离线跑通的完整样例在 `demo/md_workflow/`（式样书 → 测试用例 md → 生成物，含 Spring Boot 用例）。
 
+### 实例：给新的 Spring Boot batch 做用例
+
+准备（式样书・settings・和开发确认的事项）→ 给 Copilot 的提示词模板 → 审核清单 → 执行 → 常见问题，
+整理在单独的手册：**`docs/guide/spring-boot-testcases.md`**。
+
 ### 选择要跑哪些用例
 
 ```cmd
@@ -1315,6 +1320,7 @@ AUTO_TEST_BATCH\
 ├─ AGENTS.md              AI 代理（Codex / Copilot / Claude Code）共用的项目说明
 ├─ CLAUDE.md              Claude Code 入口（导入 AGENTS.md）
 ├─ docs\ai\               AI 代理按需读的文档（测试用例 md 格式・设计指南・YAML 速查・开发指南）
+├─ docs\guide\            给人看的操作手册（Spring Boot 用例生成 + Copilot 提示词模板）
 ├─ .claude\skills\  .agents\skills\   AI 用的 skill（式样书→用例 / md→YAML）
 ├─ templates\             新建用例的模板（normal / error / env_missing / manual）
 ├─ config\
