@@ -1,0 +1,58 @@
+# =============================================================================
+# 式样書 md → テストケース md → ケース YAML の流れを試すための離線サンドボックス。
+#   このフォルダ（demo/md_workflow/）がプロジェクトルートになる。
+#   既定 batch は demo/fake_batch.py（.exe の代役）、batches.spring は
+#   demo/fake_spring_batch.py（Spring Boot jar の代役）。
+# =============================================================================
+env:
+  name: "md ワークフロー見本（サンドボックス）"
+  sandbox: true
+
+batch:
+  exe_path: "{python}"
+  working_dir: "."
+  common_args: ["../fake_batch.py", "--root", "sandbox"]
+  console_encoding: "utf-8"
+  timeout_sec: 60
+  log_settle_sec: 0
+
+batches:
+  spring:
+    type: java
+    java: "{python}"                       # 実環境: JDK の java.exe（省略時は JAVA_HOME）
+    jvm_args: ["../fake_spring_batch.py"]  # 実環境: ["-Dfile.encoding=UTF-8", "-Dspring.profiles.active=it"]
+    jar: "../fake_spring_batch.py"         # 実環境: "C:/app/order-batch/order-batch.jar"
+    common_args: ["--spring.batch.job.name=orderImportJob", "--fake.root=sandbox_spring",
+                  "--logging.file.name=sandbox_spring/log/order-batch.log"]
+    log_dir: spring_log_dir
+
+paths:
+  input_dir: "sandbox/in"
+  processed_dir: "sandbox/processed"
+  error_dir: "sandbox/error"
+  output_dir: "sandbox/out"
+  log_dir: "sandbox/log"
+  spring_input_dir: "sandbox_spring/in"
+  spring_processed_dir: "sandbox_spring/processed"
+  spring_error_dir: "sandbox_spring/error"
+  spring_output_dir: "sandbox_spring/out"
+  spring_log_dir: "sandbox_spring/log"
+
+folder_evidence:
+  targets: [input_dir, processed_dir, error_dir, output_dir]
+
+database:
+  server: unused
+  database: unused
+  auth: windows
+
+log:
+  patterns: ["*.log"]
+  encoding: "utf-8"
+
+evidence:
+  mode: render
+
+excel:
+  output_dir: output
+  file_name_format: "MdWorkflow_{run_id}.xlsx"

@@ -60,7 +60,7 @@ setup:
 # --- 実行 ---------------------------------------------------------------------
 execute:
   args: ["--mode", "daily"]
-  # batch: batch_b                    # 既定以外の .exe を使うとき（settings.batches の名前）
+  # batch: batch_b                    # 既定以外の batch（.exe / Java jar）を使うとき（settings.batches の名前）
 
 # --- 回収 ---------------------------------------------------------------------
 collect:
@@ -81,6 +81,8 @@ review:
 # --- 自動判定（必要な場合だけ使用）---------------------------------------------
 # assert:
 #   exit_code: 0
+#   job_status: COMPLETED            # Java（Spring Boot）batch は終了コードと必ず併用する
+#                                    # （作りによってはジョブが FAILED でも 0 で終わるため）
 #   db:
 #     - table: T_SAMPLE
 #       expected: "expected/{case_id}/db_T_SAMPLE.csv"

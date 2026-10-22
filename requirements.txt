@@ -13,6 +13,7 @@ Pillow>=5.1.0        # 証跡画像の描画（5.x は textsize、8.0+ は textl
 PyYAML>=3.12         # 設定・ケース定義
 
 # --- SQL Server 接続（Windows テスト機で必須 / --offline 検証時は不要）---
+#   PostgreSQL は標準ライブラリだけで接続する（src/autotest/pgwire.py）ため追加は不要
 pyodbc>=4.0 ; platform_system == "Windows"
 
 # --- 実画面キャプチャを使う場合のみ（evidence.mode = screen / both）---

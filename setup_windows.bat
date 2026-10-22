@@ -58,10 +58,10 @@ echo  次の手順:
 echo    1. config\settings.yaml を編集
 echo         batch.exe_path  … 被テスト .exe のパス
 echo         paths.*         … 入出力フォルダのパス
-echo         database.*      … SQL Server 接続先
+echo         database.*      … DB 接続先（SQL Server / PostgreSQL）
 echo    2. DB パスワードを環境変数に設定（設定後コンソールを開き直す）
 echo         setx AUTOTEST_DB_PASSWORD "パスワード"
-echo    3. Microsoft ODBC Driver 18 for SQL Server をインストール
+echo    3. SQL Server の場合のみ: Microsoft ODBC Driver 18 for SQL Server をインストール（PostgreSQL は不要）
 echo         https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server
 echo    4. run_test.bat を実行
 echo.

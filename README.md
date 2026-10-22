@@ -1,8 +1,12 @@
-# AUTO_TEST_BATCH — batch(.exe) 自动测试工具
+# AUTO_TEST_BATCH — batch(.exe / Java Spring Boot) 自动测试工具
 
-C# 制 batch（无界面 .exe）的自动化测试工具。运行环境：**Windows + SQL Server**。
+C# 制 batch（无界面 .exe）和 **Java Spring Boot batch（可执行 jar）** 的自动化测试工具。运行环境：**Windows + SQL Server / PostgreSQL**。
 
-一条命令完成：**准备输入 → 跑 exe → 采集 DB/日志/文件 → 与期待值自动比对 → 生成 Excel 证据簿（エビデンス）**。
+一条命令完成：**准备输入 → 跑 batch → 采集 DB/日志/文件 → 与期待值自动比对 → 生成 Excel 证据簿（エビデンス）**。
+
+> **用 AI 写测试用例**：把式样书（md）交给 Claude Code / GitHub Copilot / Codex，它们写出测试用例 md
+> （含测试数据・期待值），`python -m autotest gen` 再把 md 确定性地转换成用例 YAML（见 6 节「从式样书生成用例」）。
+> AI 代理的入口是 `AGENTS.md`（Claude Code 经 `CLAUDE.md` 读同一份），详细文档在 `docs/ai/`。
 
 ---
 
@@ -158,9 +162,10 @@ python -m pip install -r requirements.txt
 
 ### 步骤 5：连真实 DB 还需要两件事
 
-只跑 `--offline` 沙箱验证的话可以跳过。
+只跑 `--offline` 沙箱验证的话可以跳过。**PostgreSQL 不需要第 1 步**（内置的标准库客户端直接连，
+不用装 psycopg2 或 ODBC 驱动），只做第 2 步，然后看「3. 配置」里的 PostgreSQL 写法。
 
-1. **ODBC 驱动**：装 [Microsoft ODBC Driver for SQL Server](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server)。
+1. **ODBC 驱动**（SQL Server）：装 [Microsoft ODBC Driver for SQL Server](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server)。
    pyodbc 只是个壳，真正连 SQL Server 靠这个驱动。装的版本要和 `settings.yaml` 的
    `database.driver` 对上（老机器上常见的是 `ODBC Driver 17 for SQL Server`）。
    查本机已装的驱动：
@@ -262,6 +267,66 @@ database:
 
 文件夹要增删，只改 `paths` 和 `folder_evidence.targets` 两处即可，用例不用动。
 
+### PostgreSQL
+
+`database.type: postgresql` 即可。用内置客户端（只用标准库实现的 PostgreSQL 协议）连接，
+**不需要装 psycopg2 / psqlODBC**——能经剪贴板带进闭域网的只有文本，这是为此做的选择。
+
+```yaml
+database:
+  type: postgresql
+  server: "pg01:5432"          # host / host:port（端口也可写 port: 5432；默认 5432）
+  database: "batch_db"         # 区分大小写
+  user: "batch_app"            # 必须
+  password_env: "AUTOTEST_DB_PASSWORD"
+  sslmode: prefer              # disable | prefer（默认）| require | verify-ca | verify-full
+  # sslrootcert: "certs/global-bundle.pem"   # verify-ca / verify-full 用（AWS RDS 的 CA 套件等）
+  # timezone: "Asia/Tokyo"     # 会话时区。batch 以别的时区写 timestamp 列时对齐（{batch_start} 用）
+  # search_path: "app, public"
+```
+
+- 认证方式由服务器的 `pg_hba.conf` 决定，支持 trust / password / md5 / **scram-sha-256**（PostgreSQL 14+ 的默认）。
+  GSSAPI / SSPI（Windows 统合认证）不支持。
+- SQL Server 专用的键（`driver` / `auth` / `encrypt` / `trust_server_certificate`）写了会报错——例如 `encrypt: true`
+  在 PostgreSQL 下不会加密，与其静默忽略不如直接告诉你用 `sslmode`。
+- 快照里的值 = 服务器的文字表现（与 psql 的显示相同）：boolean `t`/`f`、timestamp 小数秒去尾零（`.12`）、
+  timestamptz 带 `+09`。期待值照这个写。
+- `gen` 生成的 `seed.sql` 自动换成 PostgreSQL 写法（`"列名"`、`'值'`、identity 的 `OVERRIDING SYSTEM VALUE`、
+  投入后推进序列）。列名区分大小写，测试用例 md 的 CSV 表头照 DDL 写（通常小写）。
+- `db_lock` 写 PostgreSQL 语法：`LOCK TABLE t_order IN ACCESS EXCLUSIVE MODE`（工具先 BEGIN，不要写 COMMIT）。
+- 先跑 `python -m autotest dbcheck` 确认连到的是哪台服务器、哪个库、用的什么认证和时区。
+
+### Java（Spring Boot）batch
+
+被测对象是 Spring Boot 的可执行 jar 时，batch 定义写 `type: java`。工具组装并启动
+`java [jvm_args] -jar <jar> [common_args] [execute.args]`：
+
+```yaml
+batches:
+  order_job:
+    type: java
+    java: "C:/Program Files/Eclipse Adoptium/jdk-17/bin/java.exe"   # 省略时: env_vars.JAVA_HOME → 环境变量 JAVA_HOME → PATH
+    jar: "C:/app/order-batch/order-batch.jar"
+    jvm_args: ["-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dspring.profiles.active=it"]
+    common_args: ["--spring.batch.job.name=orderImportJob"]          # Spring Boot 2 系是 spring.batch.job.names
+    console_encoding: utf-8
+    log_dir: order_job_log_dir        # logging.file.name 的输出目录（论理名）
+```
+
+用例里 `execute.batch: order_job`，`execute.args` 写作业参数（`["targetDate={date}"]`）。
+`validate` 会显示实际解析到的 java 和 jar；java 交给 PATH 决定时不同机器可能用到不同的 JDK，实环境建议写死。
+
+**Spring Boot 不能只看退出码**：`main` 没有 `System.exit(SpringApplication.exit(...))`，或经 `.bat` 启动却不回传
+`ERRORLEVEL` 时，作业 FAILED 也会以 0 结束。所以要同时写 `assert.job_status`（见 4 节），它读 Spring Batch
+启动器输出的完成行 `Job: [...] completed ... and the following status: [COMPLETED]`。
+对「java batch 只断言了退出码」的用例，`validate` 会给出推荐警告。
+
+> 同一组识别参数完成过的作业，再执行会被 Spring Batch 拒绝（`JobInstanceAlreadyCompleteException`，作业根本不启动）。
+> 每次用不同的作业参数，或让作业使用 `RunIdIncrementer`。这种情况下 `job_status` 找不到完成行，判为 NG 并给出提示。
+
+离线样例：`config/settings.demo.yaml` 的 `batches.spring` + `cases/TC011_spring_normal.yaml` / `TC012_spring_job_failed.yaml`
+（用 `demo/fake_spring_batch.py` 代替 jar，模拟 Spring Boot 的日志和退出码）。
+
 改完确认：
 
 ```cmd
@@ -297,8 +362,7 @@ snapshot:                                 # ② ⑦ DB 快照（执行前后各�
   tables:
     - name: T_SAMPLE
       sql: "SELECT RECORD_ID, VALUE_A, VALUE_B, STATUS, UPDATED_AT FROM T_SAMPLE ORDER BY RECORD_ID"
-      format: {decimal_places: {VALUE_B: 0}}
-      mask: [PRIVATE_VALUE]               # 非公开列 → ***MASKED***
+      mask: [PRIVATE_VALUE]               # 非公开列 → ***MASKED***（只在写 Excel 时；比较用原值）
 
 execute:                                  # ④ 执行
   args: ["--mode", "daily", "--date", "20260803"]
@@ -331,9 +395,43 @@ assert:                                   # ⑨ 判定
     must_not_contain: ["[ERROR]", "Exception", "異常終了"]
 ```
 
-**期待值文件怎么来**：第一次跑通后，从 `output\<run_id>\artifacts\` 取实际输出、
+**比较是严格的**：DB 的单元格、文件的每一行都**连前后空白一起**比较（只容许 CRLF / LF 的差）。
+CHAR(n) 列会带填充空格返回——期待值写满宽度，或在快照 SQL 里 `RTRIM(列) AS 列`。只差空白的 NG 会在
+判定说明里注明「前後の空白だけが違う」。（以前的版本比较时去掉了前后空白，空白 1 个之差的缺陷会被判成 OK，已修正。）
+
+**期待值文件怎么来**：两种做法。① 从式样书推导（AI 写进测试用例 md 的数据块，`gen` 生成到 `expected\`，
+见 6 节）；② 第一次跑通后，从 `output\<run_id>\artifacts\` 取实际输出、
 从 Excel 的「実行後」DB 表复制成 CSV，人工确认无误后放进 `expected\` 当基线。
 之后每次回归就是全自动的。
+
+**拼错就报错**：顶层和下位的键（`snapshot.tables[]`、`setup.input_files[]`、`collect.files[]`、`teardown`、
+SQL 项……）都按许可清单校验，`mask` 写成 `masks`、`preview` 写成 `preveiw` 会在 `validate` 阶段停下，
+而不是静默失效（全部键见 `docs/ai/case-schema.md`）。另外：
+
+- `execute.expected_exit_code` 从未被判定使用，现在会报错并引导你写 `assert.exit_code`。
+  （`setup.batches[].expected_exit_code` 照常有效，它是前置 batch 的成功条件。）
+- `assert.log` 里 `must_contain` / `must_not_contain` 都为空时报错——那样的判定「必須 0 件すべて検出」永远 OK。
+  只想目视确认日志就写 `manual: true`。
+
+### Spring Batch 的作业状态：`job_status`
+
+```yaml
+assert:
+  exit_code: 0
+  job_status: COMPLETED                          # 或 {expected: FAILED, job: orderImportJob, manual: true}
+```
+
+从 stdout / stderr / 本次日志切片里找 Spring Batch 的完成行，比较其中的 `BatchStatus`
+（`COMPLETED` / `FAILED` / `STOPPED` / `ABANDONED` …）：
+
+| 情况 | 判定 |
+|---|---|
+| 完成行的状态与期待一致 | OK（`manual: true` 时为要確認） |
+| 状态不同 / 指定的 `job` 没有完成行 | NG |
+| 完全没有完成行（作业没启动、日志级别低于 INFO、`JobInstanceAlreadyCompleteException`） | NG（附原因提示） |
+| 没指定 `job`，却检测到多个作业 | 要確認（Boot 2 漏写 `spring.batch.job.names` 会跑全部作业） |
+| 起动行（launched）没有对应的完成行（按作业名 + 参数配对）：对象作业 | NG（中途停下的执行不能被另一次完成掩盖） |
+| 同上，但是对象以外的作业 | 要確認 |
 
 ### 以证据采集 + 人工确认为主：`review`
 
@@ -908,6 +1006,69 @@ expected\TC010_input_0\           ← 期待值放这里
 > ID 会做检查：重复、含路径分隔符、超过 31 字（Excel sheet 名上限）都会当场报错，
 > 不会生成半成品。既有文件绝不覆盖。
 
+### 从式样书生成用例：测试用例 md → `autotest gen`
+
+用例多的时候，不必一个个写 YAML。分工如下：
+
+```
+式样书 md ──(AI: Claude Code / Copilot / Codex)──▶ 测试用例 md ──(autotest gen: 确定性转换)──▶ cases/**/*.yaml
+                     观点・测试数据・期待值                    日文、人可审阅                投入文件 / seed.sql / expected / fixtures
+```
+
+- **AI 负责设计**：读式样书，按 `docs/ai/testcase-format.md` 的格式写测试用例 md。测试数据（DB 初期数据、投入文件）
+  和期待值（DB 后状态、输出文件）写成 md 里的 CSV 代码块。
+- **`gen` 负责转换**：不调用 LLM，同一个 md 永远生成同一份 YAML，生成后立即按与手写 YAML 相同的规则校验。
+  md 里写的数据原样进生成物（制表符、空白都不改）；会悄悄丢掉或改掉内容的写法（第一个 `##` 之前的数据块、
+  注释后面接着写的内容、CSV 的 `, ` 空格）一律报错。写入是全有或全无，失败会回滚。
+  DB 初期数据（CSV）会变成 `DELETE` + `INSERT` 的 `seed.sql`，DB 期待值会自动补上对应的快照 SELECT。
+
+在 Claude Code 里：`/spec-to-testcases docs/specs/xxx.md`（或 `/testcases-to-yaml docs/testcases/xxx.md`）。
+Codex / Copilot 读 `AGENTS.md` 和 `.agents/skills/` 里同名的 skill；直接说「按 docs/ai/testcase-workflow.md
+从 docs/specs/xxx.md 生成测试用例」也可以。手动执行：
+
+```cmd
+python -m autotest gen --md docs\testcases\order_import.md --dry-run   :: 只检查格式（错误带行号）
+python -m autotest gen --md docs\testcases\order_import.md             :: 生成
+python -m autotest gen --md docs\testcases\order_import.md --check     :: md 与生成物是否一致（不写；CI 用，不一致 = 1）
+:: gen 本身的退出码也是 0 = 全部反映 / 1 = 有没反映 md 的用例（差分あり・手改，列在 [未反映]）/ 2 = 格式错误
+python -m autotest gen --md docs\testcases\order_import.md --json      :: 结果输出成 1 行 JSON（给 AI 代理读）
+python -m autotest validate --include-disabled                         :: 对未启用的草稿也跑 preflight
+python -m autotest list --include-disabled
+```
+
+测试用例 md 的一个用例长这样（完整规格和示例见 `docs/ai/testcase-format.md`）：
+
+````markdown
+## OI_002 異常系：金額が負の明細を含む
+- 種別: 異常系
+- 目的: 金額不正の明細があるとファイルがエラーフォルダへ退避され、終了コード 1 で終わること
+- 引数: `--mode daily --date 20260804`
+- 終了コード: 1
+- ログ必須: `明細エラー A0004`, `処理異常終了`
+- ファイル:
+  - `error_dir/ORDER_*.csv` = 1
+- 確認:
+  - 実行前後の DB を比較し、正常な明細だけが完了になっていること
+
+```csv input=input_dir/ORDER_20260804.csv
+ORDER_NO,CUSTOMER,AMOUNT
+A0003,佐藤工業,12000
+A0004,田中電機,-500
+```
+````
+
+几条规则：
+
+| 规则 | 理由 |
+|---|---|
+| 不认识的标签、散文行、标签与 ```yaml 块重复指定 → 报错，一个文件都不写 | md 里写的确认不能在 YAML 里静默消失 |
+| 生成物一律 `enabled: false`，由人审阅 md 和生成物后改成 `true` | AI 写的检证内容未经审阅不进正式执行 |
+| 没有任何检证项的用例拒绝生成 | 什么都不确认的用例不能当合格的根据 |
+| YAML 第 1 行记录内容哈希；手改过的 YAML / 数据文件 `--overwrite` 也不覆盖 | 不把人修正过的内容悄悄改回去 |
+| md 改了用 `gen --overwrite` 更新；只把 `enabled` 改成 `true` 不算手改 | 改了内容会退回 `false`，需要再审阅 |
+
+可以离线跑通的完整样例在 `demo/md_workflow/`（式样书 → 测试用例 md → 生成物，含 Spring Boot 用例）。
+
 ### 选择要跑哪些用例
 
 ```cmd
@@ -1008,7 +1169,7 @@ excel:
 
 ```cmd
 :: --- 接真实环境前的确认 ---
-python -m autotest dbcheck            :: SQL Server 能不能连上 + 实际连到的是不是那个库
+python -m autotest dbcheck            :: DB 能不能连上 + 实际连到的是不是那个库
 python -m autotest validate           :: 配置和用例的完整性（有问题退出码 1）
 python -m autotest run --dry-run      :: 不碰 DB、不启动 exe，只验流程
 
@@ -1151,6 +1312,10 @@ AUTO_TEST_BATCH\
 ├─ run_gui.bat            操作画面（一览 / 执行 / 建用例 / 手动采集）
 ├─ run_test.bat           正式执行
 ├─ run_demo.bat           沙箱空跑
+├─ AGENTS.md              AI 代理（Codex / Copilot / Claude Code）共用的项目说明
+├─ CLAUDE.md              Claude Code 入口（导入 AGENTS.md）
+├─ docs\ai\               AI 代理按需读的文档（测试用例 md 格式・设计指南・YAML 速查・开发指南）
+├─ .claude\skills\  .agents\skills\   AI 用的 skill（式样书→用例 / md→YAML）
 ├─ templates\             新建用例的模板（normal / error / env_missing / manual）
 ├─ config\
 │   ├─ settings.yaml      ★ 全局设定
@@ -1161,19 +1326,23 @@ AUTO_TEST_BATCH\
 ├─ expected\<case_id>\    期待值
 ├─ fixtures\<case_id>\    offline 模式下代替 DB 的 CSV
 ├─ sql\                   setup SQL（支持 GO 分隔）
-├─ demo\fake_batch.py     模拟 batch
+├─ demo\fake_batch.py     模拟 batch（.exe 的替身）
+├─ demo\fake_spring_batch.py  模拟 Spring Boot batch（jar 的替身）
+├─ demo\md_workflow\      式样书 → 测试用例 md → gen 的离线样例
 ├─ src\autotest\          工具本体
 └─ output\                成果物
 ```
 
 | 模块 | 职责 |
 |---|---|
-| `cli.py` | 命令行入口（`run` / `validate` / `list` / `new` / `copy` / `manual` / `report` / `finalize` / `gui`） |
+| `cli.py` | 命令行入口（`run` / `validate` / `list` / `new` / `copy` / `gen` / `manual` / `report` / `finalize` / `gui`） |
 | `config.py` | 读取校验 settings 与用例；文件夹论理名 → 物理路径解析 |
-| `orchestrator.py` | 单个用例的生命周期编排（上图 ①〜⑨） |
-| `db.py` | SQL Server 连接、快照取得、值格式化；offline 模式的 CSV 替身 |
+| `orchestrator.py` | 单个用例的生命周期编排（上图 ①〜⑨）；`job_status` 判定 |
+| `db.py` | DB 连接（SQL Server = pyodbc / PostgreSQL = 内置客户端）、快照取得、值格式化；offline 模式的 CSV 替身 |
+| `pgwire.py` | PostgreSQL 协议 v3 的最小客户端（标准库only：SCRAM / md5 认证、SSL、Simple Query；值不做类型转换） |
 | `fsops.py` | 文件夹清空 / 投入 / 回收 / 一览取得 |
-| `runner.py` | 启动 .exe，取 exit code、stdout/stderr、耗时 |
+| `runner.py` | 组装并启动 batch（`type: exe` / `type: java`），取 exit code、stdout/stderr、耗时 |
+| `casegen.py` | 测试用例 md → 用例 YAML・投入文件・seed.sql・期待值（`gen`） |
 | `logs.py` | 日志增量切出、行分类、关键字断言 |
 | `compare.py` | 期待值比对，生成差分表 |
 | `render.py` | 证据图渲染 |

@@ -31,6 +31,21 @@ batches:
     # この batch のログ出力先（paths の論理名で指定）。
     # 未指定なら paths.log_dir を見る。batch ごとにログ先が違う場合はここで指定する。
     log_dir: inv_log_dir
+  # Java（Spring Boot）batch の見本。type: java は
+  #   java [jvm_args] -jar <jar> [common_args] [execute.args]
+  # を組み立てて起動する。ここでは検証用に java の代わりに Python、jar の代わりに
+  # demo/fake_spring_batch.py を渡している（-jar とその引数はダミー側で読み捨てる）。
+  # 実環境の書き方は config/settings.yaml のコメントを参照。
+  spring:
+    type: java
+    java: "{python}"
+    jvm_args: ["demo/fake_spring_batch.py"]
+    jar: "demo/fake_spring_batch.py"
+    common_args: ["--spring.batch.job.name=orderImportJob", "--fake.root=./sandbox_spring",
+                  "--logging.file.name=./sandbox_spring/log/order-batch.log"]
+    console_encoding: "utf-8"
+    timeout_sec: 60
+    log_dir: spring_log_dir
 
 paths:
   # 既定 batch の入出力フォルダ
@@ -45,6 +60,12 @@ paths:
   inv_error_dir:     "./sandbox_invoice/error"
   inv_output_dir:    "./sandbox_invoice/out"
   inv_log_dir:       "./sandbox_invoice/log"
+  # spring batch（Java）の入出力フォルダ
+  spring_input_dir:     "./sandbox_spring/in"
+  spring_processed_dir: "./sandbox_spring/processed"
+  spring_error_dir:     "./sandbox_spring/error"
+  spring_output_dir:    "./sandbox_spring/out"
+  spring_log_dir:       "./sandbox_spring/log"
 
 folder_evidence:
   targets: [input_dir, processed_dir, error_dir, output_dir]

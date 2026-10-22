@@ -1,0 +1,44 @@
+# generated-by: autotest gen sha256=63633df545feef35de8e0881737995e91868896610dcc90130f01caeb0ff8404 md=docs/testcases/order_import.md
+# =============================================================================
+# SB_001 正常系：Spring Boot ジョブが COMPLETED で終わる
+#   生成元 : docs/testcases/order_import.md:158
+#   仕様 : 2 / 6（Java 版）
+#
+# この YAML は上の md から生成した。内容を変えるときは md を直して
+#   python -m autotest gen --md docs/testcases/order_import.md --overwrite
+# を実行する（YAML やデータファイルを直接直すと、以後 gen はこのケースを上書きしない）。
+# 生成直後の enabled は未レビューの印（false）。md と生成物を確認してから true にすること。
+# =============================================================================
+# generated-file: sha256=75a9d01f6c25dadedd4699db39b6c93ff55ac810725602d9bc7e8eb07da8f623 path=cases/order_import/SB_001/input/ORDER_20260803.csv
+# generated-file: sha256=ccde23a02d4bda24d9756427084888a63bf83ea03c627f8d8e8587c7fd3bbc44 path=expected/SB_001/RESULT_20260803.csv
+id: SB_001
+name: "正常系：Spring Boot ジョブが COMPLETED で終わる"
+description: "orderImportJob が COMPLETED・終了コード 0 で終わり、結果ファイルが出力されること（仕様: 2 / 6（Java 版））"
+tags: [正常系]
+enabled: false
+setup:
+  clean_dirs: [spring_input_dir, spring_processed_dir, spring_error_dir, spring_output_dir]
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: spring_input_dir
+execute:
+  batch: spring
+  args: ["targetDate={date}"]
+  date: "20260803"
+collect:
+  files:
+    - dir: spring_output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+  folder_evidence: [spring_input_dir, spring_processed_dir, spring_output_dir]
+assert:
+  exit_code: 0
+  job_status: {expected: COMPLETED, job: orderImportJob}
+  files:
+    - name: "spring_processed_dir/ORDER_*.csv が 1 件"
+      exists: {dir: spring_processed_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "spring_output_dir/RESULT_*.csv の内容"
+      actual: {dir: spring_output_dir, pattern: "RESULT_*.csv"}
+      expected: "expected/SB_001/RESULT_20260803.csv"
+  log:
+    must_contain: ["取込件数=2"]

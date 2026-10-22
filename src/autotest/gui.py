@@ -274,8 +274,8 @@ class AutotestGui(object):
     def _db_signature(settings) -> tuple:
         """接続先が変わったかを見るための識別子。"""
         db = settings.database
-        return (str(db.get("server", "")), str(db.get("database", "")),
-                str(db.get("auth", "")), str(db.get("user", "")))
+        return (settings.db_type, str(db.get("server", "")), str(db.get("port", "")),
+                str(db.get("database", "")), str(db.get("auth", "")), str(db.get("user", "")))
 
     def _render_db_bar(self) -> None:
         """接続先 DB と、その確認状態を表示する。
@@ -293,11 +293,19 @@ class AutotestGui(object):
 
         env_name = str(self.settings.env.get("name", "")) or "（環境名なし）"
         db = self.settings.database
-        auth = "Windows認証" if str(db.get("auth", "sql")).lower() == "windows" \
-            else "SQL Server認証: %s" % db.get("user", "")
+        if self.settings.db_type == "postgresql":
+            auth = "ユーザー: %s" % db.get("user", "")   # 種類は接続先の表記（db_label）に出る
+        elif str(db.get("auth", "sql")).lower() == "windows":
+            auth = "Windows認証"
+        else:
+            auth = "SQL Server認証: %s" % db.get("user", "")
         self.db_env.config(text="環境: %s" % env_name)
+        try:
+            server = self.settings.db_label()
+        except ConfigError:
+            server = str(db.get("server", ""))
         self.db_target.config(
-            text="接続先: %s / %s   （%s）" % (db.get("server", ""), db.get("database", ""), auth),
+            text="接続先: %s / %s   （%s）" % (server, db.get("database", ""), auth),
             fg="#333")
 
         if self.offline_var.get():
@@ -323,7 +331,7 @@ class AutotestGui(object):
         self.db_status.config(text=status_text, fg=status_fg, background=bg)
 
     def dbcheck(self) -> None:
-        """SQL Server へ実際に接続して、繋がる先を確認する。"""
+        """DB へ実際に接続して、繋がる先を確認する。"""
         self._start(self._base_args() + ["dbcheck"] + self._config_only(), "DB接続確認",
                     kind="dbcheck")
 

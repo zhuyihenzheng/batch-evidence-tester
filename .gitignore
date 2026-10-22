@@ -19,8 +19,10 @@ desktop.ini
 .vscode/
 .idea/
 
-# ローカル環境固有の設定（絶対パスを含むため公開しない）
-.claude/
+# ローカル環境固有の設定（絶対パスを含むため公開しない）。
+# ただし skills/ は全員で使う Claude Code 用の手順書なので管理対象にする
+.claude/*
+!.claude/skills/
 
 # 認証情報が混入しやすいもの
 *.local.yaml

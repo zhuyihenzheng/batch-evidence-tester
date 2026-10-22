@@ -25,7 +25,7 @@ REQUIRED_PACKAGES = [
     ("yaml", "PyYAML", (3, 12), "設定・ケース定義の読み込み"),
 ]
 OPTIONAL_PACKAGES = [
-    ("pyodbc", "pyodbc", (4, 0), "SQL Server 接続（--offline のみで使うなら不要）"),
+    ("pyodbc", "pyodbc", (4, 0), "SQL Server 接続（PostgreSQL / --offline のみで使うなら不要）"),
     ("mss", "mss", (6, 0), "実画面キャプチャ（evidence.mode = screen / both のときのみ）"),
 ]
 

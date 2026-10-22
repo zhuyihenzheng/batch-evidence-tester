@@ -54,3 +54,4 @@ review:
 # assert は機械判定も併用したい場合だけ追加する。
 # assert:
 #   exit_code: 1
+#   job_status: FAILED               # Java（Spring Boot）batch の場合。完了行が無ければ NG になる

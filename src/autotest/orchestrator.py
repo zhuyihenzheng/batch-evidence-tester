@@ -13,13 +13,13 @@ import re
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import compare, db as db_mod, fsops, logs, render, screenshot
 from .config import ConfigError, Settings, TestCase
 from .models import (NG, OK, REVIEW, SKIP, CaseResult, CheckResult, ExecutionInfo,
                      ImageEvidence, Table)
-from .runner import _resolve_exe, run_batch
+from .runner import batch_preflight, run_batch
 
 # {batch_start} / {batch_start:%Y%m%d} の両方を受ける
 _BATCH_START_PLACEHOLDER = re.compile(r"\{batch_start(?::(?P<fmt>[^}]+))?\}")
@@ -47,7 +47,7 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
         return [str(exc)]
     problems: List[str] = []
 
-    # --- batch 定義と exe -------------------------------------------------
+    # --- batch 定義と exe / jar ---------------------------------------------
     batch_name = case.execute.get("batch")
     try:
         batch = settings.batch_profile(batch_name)
@@ -56,20 +56,7 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
         batch = None
 
     if batch is not None:
-        exe_raw = batch.get("exe_path")
-        if not exe_raw:
-            problems.append("batch の exe_path が未設定です（batch 名: %s）" % (batch_name or "既定"))
-        else:
-            exe = _resolve_exe(str(exe_raw), settings.project_root)
-            if not exe.exists():
-                problems.append("実行ファイルが見つかりません: %s" % exe)
-        working_dir = batch.get("working_dir")
-        if working_dir:
-            wd = Path(str(working_dir))
-            if not wd.is_absolute():
-                wd = (settings.project_root / wd).resolve()
-            if not wd.is_dir():
-                problems.append("working_dir が存在しません: %s" % wd)
+        problems += batch_preflight(settings, batch, "batch（%s）" % (batch_name or "既定"))
 
     # setup.batches も、フォルダ削除や SQL 実行より前に全件確認する。
     # 2 件目の exe 不備を 1 件目の前置 batch 実行後に発見すると、環境だけが
@@ -82,22 +69,7 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
         except ConfigError as exc:
             problems.append("%s: %s" % (label, exc))
             continue
-
-        exe_raw = setup_batch.get("exe_path")
-        if not exe_raw:
-            problems.append("%s: exe_path が未設定です" % label)
-        else:
-            exe = _resolve_exe(str(exe_raw), settings.project_root)
-            if not exe.exists():
-                problems.append("%s: 実行ファイルが見つかりません: %s" % (label, exe))
-
-        working_dir = setup_batch.get("working_dir")
-        if working_dir:
-            wd = Path(str(working_dir))
-            if not wd.is_absolute():
-                wd = (settings.project_root / wd).resolve()
-            if not wd.is_dir():
-                problems.append("%s: working_dir が存在しません: %s" % (label, wd))
+        problems += batch_preflight(settings, setup_batch, label)
 
     aliases = settings.path_aliases
 
@@ -270,7 +242,142 @@ def preflight_case(settings: Settings, case: TestCase) -> List[str]:
                     "collect.files に同じ dir / pattern と preview: true を指定してください。"
                     % (actual_dir, actual_pattern))
 
-    return problems
+    # 同じ原因（未定義の batch 名など）は複数の検査から重ねて報告されるため、順序を保って畳む
+    unique = []  # type: List[str]
+    for problem in problems:
+        if problem not in unique:
+            unique.append(problem)
+    return unique
+
+
+# Spring Batch のジョブランチャ（SimpleJobLauncher / TaskExecutorJobLauncher）が
+# INFO で出す完了行。3.x〜5.x で書式は共通（5.x は末尾に " in 123ms" が付く）:
+#   Job: [SimpleJob: [name=orderJob]] completed with the following parameters:
+#   [{...}] and the following status: [COMPLETED]
+_JOB_COMPLETED = re.compile(
+    r"Job: \[(?P<job>.*?)\] completed with the following parameters: \[(?P<params>.*)\]"
+    r" and the following status: \[(?P<status>[A-Z_]+)\]")
+_JOB_LAUNCHED = re.compile(r"Job: \[(?P<job>.*?)\] launched with the following parameters: \[(?P<params>.*)\]")
+_JOB_NAME = re.compile(r"name=([^\],\s]+)")
+# 同じ識別パラメータで完了済みのジョブを再実行したときの例外文言。
+# ジョブ自体が起動しないので、終了コードの扱い次第では「何もせず正常終了」に見える
+_JOB_ALREADY_COMPLETE = "A job instance already exists and is complete"
+
+
+def _job_name(described: str) -> str:
+    """'SimpleJob: [name=orderJob]' からジョブ名を取り出す。取れなければ表記そのまま。"""
+    m = _JOB_NAME.search(described)
+    return m.group(1) if m else described.strip()
+
+
+def _job_executions(texts: List[str]):
+    """ログからジョブの起動・完了を (ジョブ名, パラメータ) ごとに数える。
+
+    コンソールとログファイルの両方に同じ行が出る構成があるため、出力元ごとに数えて
+    最大値を取る（足し合わせると 1 回の実行が 2 回に見える）。
+    戻り値: ({キー: 起動回数}, {キー: [完了 status, ...]})
+    """
+    launched = {}  # type: Dict[Tuple[str, str], int]
+    finished = {}  # type: Dict[Tuple[str, str], List[str]]
+    for text in texts:
+        local_launched = {}  # type: Dict[Tuple[str, str], int]
+        local_finished = {}  # type: Dict[Tuple[str, str], List[str]]
+        for m in _JOB_LAUNCHED.finditer(text):
+            key = (_job_name(m.group("job")), m.group("params"))
+            local_launched[key] = local_launched.get(key, 0) + 1
+        for m in _JOB_COMPLETED.finditer(text):
+            key = (_job_name(m.group("job")), m.group("params"))
+            local_finished.setdefault(key, []).append(m.group("status"))
+        for key, count in local_launched.items():
+            launched[key] = max(launched.get(key, 0), count)
+        for key, statuses in local_finished.items():
+            if len(statuses) > len(finished.get(key, [])):
+                finished[key] = statuses
+    return launched, finished
+
+
+def _describe_runs(runs) -> str:
+    # 表示用の打ち切り。判定には使わない
+    return ", ".join("%s（パラメータ %s%s）" % (name, params[:80] + ("…" if len(params) > 80 else ""),
+                                          "、%d 回" % count if count > 1 else "")
+                     for name, params, count in runs)
+
+
+def _assert_job_status(spec, execution: ExecutionInfo, log_slices) -> CheckResult:
+    """Spring Batch のジョブ状態（BatchStatus）をログから判定する。
+
+    Spring Boot の batch は、main が System.exit(SpringApplication.exit(...)) を
+    呼んでいない・.bat 経由で ERRORLEVEL を返していない、といった作りだと
+    ジョブが FAILED でも終了コード 0 で終わる。終了コードだけで合否を決めると
+    偽 OK になるため、ジョブランチャ自身が出す完了行の status を読む。
+    完了行が無いことは「成功の証拠が無い」なので NG（ログレベル不足でも NG に倒す）。
+    """
+    if isinstance(spec, dict):
+        expected = str(spec.get("expected"))
+        job = spec.get("job")
+        manual = spec.get("manual") is True
+    else:
+        expected, job, manual = str(spec), None, False
+    check_name = "ジョブ状態確認" + ("（%s）" % job if job else "")
+
+    texts = [execution.stdout or "", execution.stderr or ""] + [s.text for s in log_slices]
+    combined = "\n".join(texts)
+    launched, finished = _job_executions(texts)
+    found = [(name, status, params) for (name, params), statuses in finished.items() for status in statuses]
+    # 起動したのに完了行の無い実行。同じジョブの別の実行が完了していても、これを見逃すと
+    # 途中で止まった実行を合格にしてしまう（完了行だけを集めていた頃の偽 OK）
+    unfinished = [(name, params, count - len(finished.get((name, params), [])))
+                  for (name, params), count in sorted(launched.items())
+                  if count > len(finished.get((name, params), []))]
+    if job:
+        others = sorted({name for name, _s, _p in found if name != job})
+        other_unfinished = [run for run in unfinished if run[0] != job]
+        found = [entry for entry in found if entry[0] == job]
+        unfinished = [run for run in unfinished if run[0] == job]
+    else:
+        others = []
+        other_unfinished = []
+
+    if not found:
+        hints = []
+        if _JOB_ALREADY_COMPLETE in combined:
+            hints.append("「%s」を検出しました。同じ識別パラメータで完了済みのため、ジョブは起動していません"
+                         "（RunIdIncrementer を使うか、引数に一意なジョブパラメータを加えてください）"
+                         % _JOB_ALREADY_COMPLETE)
+        elif unfinished:
+            hints.append("起動行（launched）はありますが完了行がありません。異常終了・強制終了の可能性があります")
+        else:
+            hints.append("ジョブが起動していないか、org.springframework.batch のログが INFO 未満に"
+                         "絞られている可能性があります")
+        if others:
+            hints.append("検出した他のジョブ: %s" % ", ".join(others))
+        target = "ジョブ %s の" % job if job else "ジョブの"
+        return CheckResult(check_name, "job_status", NG,
+                           "%s完了ログ（Job: [...] completed ... status: [...]）が見つかりません。%s"
+                           % (target, " / ".join(hints)))
+
+    summary = ", ".join("%s=%s" % (name, status) for name, status, _p in found)
+    wrong = [(name, status) for name, status, _p in found if status != expected]
+    if wrong:
+        return CheckResult(check_name, "job_status", NG,
+                           "期待 %s に対し実績: %s" % (expected, summary))
+    if unfinished:
+        return CheckResult(check_name, "job_status", NG,
+                           "完了行の無い実行があります: %s。途中で止まった可能性があります（完了した実行: %s）"
+                           % (_describe_runs(unfinished), summary))
+    names = sorted({name for name, _s, _p in found})
+    if not job and len(names) > 1:
+        # 対象ジョブを指定せずに複数のジョブが動いた。Spring Boot 2 系で
+        # spring.batch.job.names を付け忘れると全ジョブが走る —— 全部 COMPLETED でも
+        # 意図した実行とは限らないので、自動では合格にしない
+        return CheckResult(check_name, "job_status", REVIEW,
+                           "複数のジョブを検出しました（%s）。意図した実行か確認してください"
+                           "（job: で対象ジョブを指定すると自動判定になります）" % summary)
+    if other_unfinished:
+        return CheckResult(check_name, "job_status", REVIEW,
+                           "対象ジョブは %s ですが、他のジョブに完了行の無い実行があります: %s。"
+                           "意図した実行か確認してください" % (summary, _describe_runs(other_unfinished)))
+    return _apply_manual(CheckResult(check_name, "job_status", OK, summary), manual)
 
 
 def _force_review(check: CheckResult) -> CheckResult:
@@ -985,7 +1092,8 @@ class CaseRunner:
 
         {batch_start}            … batch 起動直前に DB サーバから取得した時刻。
                                    ISO 8601（T 区切り）で埋め込む。datetime 列と
-                                   比較する場合はこれをそのまま使う。
+                                   比較する場合はこれをそのまま使う（SQL Server は
+                                   ミリ秒まで、PostgreSQL はマイクロ秒まで）。
         {batch_start:%Y%m%d}     … 書式指定。日付が char/varchar 列に
                                    'yyyyMMdd' 等で入っている場合に合わせる。
         {date} 系                 … 基準日（paths や引数と同じ規則）
@@ -1000,9 +1108,11 @@ class CaseRunner:
             # 時計ずれの影響を受けるため、実 DB では server_now を優先している。
             mark = datetime.now()
 
+        db_type = self.settings.db_type
+
         def replace(m):
             fmt = m.group("fmt")
-            return mark.strftime(fmt) if fmt else db_mod.format_sql_datetime(mark)
+            return mark.strftime(fmt) if fmt else db_mod.format_sql_datetime(mark, db_type)
 
         return _BATCH_START_PLACEHOLDER.sub(replace, sql)
 
@@ -1123,6 +1233,8 @@ class CaseRunner:
         # SKIP 行を混ぜず、YAML に書いた人工確認観点だけを Excel に並べる。
         if "exit_code" in spec:
             checks.append(self._assert_exit_code(spec, result))
+        if "job_status" in spec:
+            checks.append(_assert_job_status(spec["job_status"], result.execution, log_slices))
         if "db" in spec:
             checks.extend(self._assert_db(spec, result))
         if "files" in spec:

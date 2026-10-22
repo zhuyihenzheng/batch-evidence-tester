@@ -1,9 +1,14 @@
-"""SQL Server アクセスと、取得値の文字列化。
+"""DB（SQL Server / PostgreSQL）アクセスと、取得値の文字列化。
 
 DB 値は画像化せず Excel のネイティブセルとして書き出す。値は整形せず、
 情報を落とさずに文字列化するだけ（DB にあるものをそのまま出す）。
 丸めや桁の省略は「表示のための加工」であり、判定より前に適用すると
 値が違うのに一致とみなされるため行わない。
+
+DB の種類（settings の database.type）:
+  sqlserver  … pyodbc + Microsoft ODBC Driver（PyodbcClient）
+  postgresql … 標準ライブラリだけの内蔵クライアント（PostgresClient / pgwire.py）。
+               値はサーバの文字表現のまま受け取る（psql で見える値と同じ）
 
 offline モード:
   pyodbc / SQL Server が無い環境（macOS での動作確認など）で
@@ -18,7 +23,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .config import ConfigError, Settings
+from . import pgwire
+from .config import ConfigError, Settings, pg_host_port
 from .models import Table
 
 
@@ -76,6 +82,9 @@ def to_text(value: Any) -> str:
 
 
 class DbClient(ABC):
+    # DB サーバの現在時刻を取る SQL（上から順に試す）。server_now が使う
+    NOW_QUERIES = ("SELECT SYSDATETIME()", "SELECT GETDATE()")
+
     @abstractmethod
     def query(self, sql: str, params: Optional[List[Any]] = None) -> Tuple[List[str], List[List[Any]]]:
         """SELECT を実行し (列名, 行) を返す。"""
@@ -198,6 +207,102 @@ class PyodbcClient(DbClient):
             pass
 
 
+def postgres_target(settings: Settings) -> Dict[str, Any]:
+    """PostgreSQL の接続パラメータ（パスワード以外）。接続と画面表示で同じものを使う。"""
+    db = settings.database
+    host, port = pg_host_port(db)
+    rootcert = db.get("sslrootcert")
+    if rootcert and not Path(str(rootcert)).is_absolute():
+        rootcert = str(settings.project_root / str(rootcert))
+    return {"host": host, "port": port, "database": str(db.get("database", "")),
+            "user": str(db.get("user", "")), "sslmode": str(db.get("sslmode", "prefer")),
+            "sslrootcert": rootcert or None}
+
+
+def describe_postgres(settings: Settings) -> str:
+    t = postgres_target(settings)
+    text = "host=%s port=%d dbname=%s user=%s sslmode=%s" % (
+        t["host"], t["port"], t["database"], t["user"], t["sslmode"])
+    return text + (" sslrootcert=%s" % t["sslrootcert"] if t["sslrootcert"] else "")
+
+
+def connect_postgres(settings: Settings, extra_params: Tuple[Tuple[str, str], ...] = (),
+                     connect_timeout: Optional[float] = None) -> pgwire.Connection:
+    """PostgreSQL へ接続する。通常の問い合わせ・ロック保持・dbcheck のすべてがここを通る。"""
+    db = settings.database
+    target = postgres_target(settings)
+    query_timeout = float(db.get("query_timeout_sec", 60))
+    params = [("application_name", "autotest"),
+              # 0 は無制限。SQL Server 側（pyodbc の conn.timeout）と同じ意味にそろえる
+              ("statement_timeout", str(int(query_timeout * 1000)))]
+    if db.get("timezone"):
+        params.append(("TimeZone", str(db["timezone"])))
+    if db.get("search_path"):
+        params.append(("search_path", str(db["search_path"])))
+    params.extend(extra_params)
+    password = settings.db_password() if db.get("password_env") else None
+    try:
+        return pgwire.Connection(
+            target["host"], target["port"], target["user"], password, target["database"],
+            sslmode=target["sslmode"], sslrootcert=target["sslrootcert"],
+            connect_timeout=float(connect_timeout if connect_timeout is not None
+                                  else db.get("login_timeout_sec", 15)),
+            # サーバ側の statement_timeout が先に効くよう、通信の待ち時間には余裕を持たせる
+            io_timeout=(query_timeout + 30) if query_timeout > 0 else None,
+            params=params)
+    except pgwire.PgError as exc:
+        raise DbError(_with_hints("PostgreSQL への接続に失敗しました: %s\n  接続先: %s"
+                                  % (exc, describe_postgres(settings)), exc)) from exc
+
+
+class PostgresClient(DbClient):
+    """PostgreSQL 用。値は型変換せず、サーバの文字表現のまま返す（NULL だけ None）。
+
+    to_text は str をそのまま通すので、証跡と比較に載る値は psql で見えるものと同じになる。
+    """
+
+    # clock_timestamp() は呼んだ瞬間の時刻。now() はトランザクション開始時刻で止まっている
+    NOW_QUERIES = ("SELECT CAST(clock_timestamp() AS timestamp)",)
+
+    def __init__(self, settings: Settings):
+        self.conn = connect_postgres(settings)
+
+    def query(self, sql: str, params: Optional[List[Any]] = None) -> Tuple[List[str], List[List[Any]]]:
+        if params:
+            raise DbError("PostgreSQL ではパラメータ付きのクエリに対応していません")
+        try:
+            results = self.conn.execute(sql)
+        except pgwire.PgError as exc:
+            raise DbError(_with_hints("クエリ実行に失敗しました: %s\n  SQL: %s" % (exc, sql), exc)) from exc
+        # 最初の結果セットを返す（pyodbc の cursor.description と同じ選び方）
+        for result in results:
+            if result.columns is not None:
+                return list(result.columns), [list(r) for r in result.rows]
+        return [], []
+
+    def execute_script(self, sql: str) -> None:
+        """1 回の問い合わせとして送る。サーバが 1 つのトランザクションで実行するので、
+        途中で失敗すれば全体が取り消される（SQL Server 側の commit / rollback と同じ結果）。"""
+        try:
+            self.conn.execute(sql)
+            if self.conn.transaction_status == "T":
+                # BEGIN だけで終わる SQL でも、SQL Server 側（最後に commit）と同じく確定させる
+                self.conn.execute("COMMIT")
+        except pgwire.PgError as exc:
+            self._rollback_quietly()
+            raise DbError(_with_hints("SQL スクリプトの実行に失敗しました: %s" % exc, exc)) from exc
+
+    def _rollback_quietly(self) -> None:
+        try:
+            if self.conn.transaction_status in ("T", "E"):
+                self.conn.execute("ROLLBACK")
+        except pgwire.PgError:
+            pass
+
+    def close(self) -> None:
+        self.conn.close()
+
+
 class LockHolder:
     """batch の実行中だけ別接続でロックを保持する。
 
@@ -214,8 +319,11 @@ class LockHolder:
         self.settings = settings
         self.sql = sql
         self.conn = None
+        self._postgres = settings.db_type == "postgresql"
 
     def __enter__(self) -> "LockHolder":
+        if self._postgres:
+            return self._enter_postgres()
         import pyodbc  # noqa: PLC0415
 
         conn_str, _shown = build_connection_string(self.settings)
@@ -229,8 +337,35 @@ class LockHolder:
             cur.close()
         return self
 
+    def _enter_postgres(self) -> "LockHolder":
+        # サーバ側の idle_in_transaction_session_timeout で batch の実行中に接続を切られると、
+        # ロックが黙って外れて「更新失敗の再現」にならない。このセッションだけ無効にする
+        conn = connect_postgres(self.settings, (("idle_in_transaction_session_timeout", "0"),))
+        self.conn = conn
+        try:
+            conn.execute("BEGIN")
+            conn.execute(self.sql)
+        except pgwire.PgError as exc:
+            self.__exit__(None, None, None)
+            raise DbError(_with_hints("db_lock の SQL が失敗しました: %s" % exc, exc)) from exc
+        # pyodbc は autocommit が既定で無効なのでトランザクションが残るが、ここでは状態を確かめる。
+        # SQL に COMMIT が含まれているとロックは即座に外れ、ロック無しで batch が動いてしまう
+        if conn.transaction_status != "T":
+            self.__exit__(None, None, None)
+            raise DbError("db_lock の SQL を実行した後にトランザクションが残っていません。"
+                          "COMMIT / ROLLBACK を含めないでください（ロックを保持できないため実行しません）")
+        return self
+
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.conn is None:
+            return
+        if self._postgres:
+            try:
+                self.conn.execute("ROLLBACK")
+            except pgwire.PgError:
+                pass
+            self.conn.close()
+            self.conn = None
             return
         try:
             self.conn.rollback()
@@ -301,9 +436,10 @@ def server_now(client: "DbClient") -> Optional[dt.datetime]:
 
     テスト機の時計ではなく DB の時計を使う。両者にずれがあると、
     batch が更新した行を取りこぼす（＝異常の見逃し）ため。
-    SYSDATETIME() が使えない環境向けに GETDATE() へフォールバックする。
+    問い合わせる SQL は DB の種類ごとに client.NOW_QUERIES が持つ
+    （SQL Server は SYSDATETIME() が使えない環境向けに GETDATE() へフォールバックする）。
     """
-    for sql in ("SELECT SYSDATETIME()", "SELECT GETDATE()"):
+    for sql in getattr(client, "NOW_QUERIES", DbClient.NOW_QUERIES):
         try:
             _columns, rows = client.query(sql)
         except Exception:
@@ -321,16 +457,19 @@ def server_now(client: "DbClient") -> Optional[dt.datetime]:
     return None
 
 
-def format_sql_datetime(value: dt.datetime) -> str:
-    """SQL Server のリテラルとして埋め込める形式にする（ミリ秒まで）。
+def format_sql_datetime(value: dt.datetime, db_type: str = "sqlserver") -> str:
+    """SQL のリテラルとして埋め込める形式にする（SQL Server はミリ秒まで）。
 
     ISO 8601 の T 区切り（yyyy-mm-ddThh:mi:ss.mmm）を使う。
     空白区切りの 'yyyy-mm-dd hh:mi:ss' は datetime 型では
     SET LANGUAGE / DATEFORMAT の影響を受け、環境によっては
     「文字列から日付への変換に失敗（SQLSTATE 22007 / エラー 241）」になる。
     T 区切りは言語設定に依存しない。
+    ミリ秒で切るのは SQL Server の datetime 型が 4 桁以上の小数秒を受け付けないため。
+    PostgreSQL の timestamp はマイクロ秒まで持つので切らない。
     """
-    return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+    text = value.strftime("%Y-%m-%dT%H:%M:%S.%f")
+    return text if db_type == "postgresql" else text[:-3]
 
 
 def list_installed_drivers() -> List[str]:
@@ -497,6 +636,58 @@ def diagnose_connection_error(exc: Exception) -> List[str]:
     return hints
 
 
+def diagnose_pg_error(exc: Exception) -> List[str]:
+    """PostgreSQL のエラーから、次に何を確認すべきかの助言を組み立てる。
+
+    サーバのエラー文はサーバの言語設定（lc_messages）で変わるため、SQLSTATE で見分ける。
+    SQLSTATE の無いもの（接続・通信の失敗）だけ、このクライアントが出す文言で見分ける。
+    """
+    state = getattr(exc, "sqlstate", "")
+    text = str(exc)
+    hints = {
+        "28P01": ["パスワードが違います（database.password_env の環境変数の値）。"],
+        "28000": ["ユーザー名、またはサーバの pg_hba.conf（接続元アドレス・ユーザー・SSL の有無の組み合わせ）"
+                  "を確認してください。"],
+        "3D000": ["データベースがありません。database.database の綴りを確認してください（大文字小文字も区別されます）。"],
+        "53300": ["サーバの接続数が上限に達しています。"],
+        "57P03": ["サーバが起動中・停止中・リカバリ中で、まだ接続を受け付けていません。"],
+        "42P01": ["表が見つかりません。スキーマ（database.search_path）と表名を確認してください"
+                  "（引用符で囲まない名前は小文字として扱われます）。"],
+        "42703": ["列名は DB の定義どおりに書いてください。gen は列名を \"…\" で囲んで出力するため"
+                  "大文字小文字が区別されます（PostgreSQL の列名は通常は小文字）。"],
+        "428C9": ["GENERATED ALWAYS の採番列に値を入れるには、テストケース md の seed に identity=on を付けてください。"],
+        "23505": ["一意制約の重複です。seed の key= / delete= の指定、または採番列（serial / identity）の"
+                  "現在値を確認してください。"],
+        "22P02": ["列の型に合わない値です。seed の空欄は空文字として入ります。"
+                  "数値・日付の列で値が無いなら (NULL) と書いてください。"],
+        "22007": ["日付時刻の書式を変換できませんでした。文字列の列と比べているなら"
+                  " {batch_start:%Y%m%d} のように書式を合わせてください。"],
+        "22008": ["日付時刻の値が範囲外です。"],
+        "42804": ["列の型と値の型が合いません。SQL Server 用の N'…' を PostgreSQL で実行していないか"
+                  "確認してください。"],
+        "57014": ["statement_timeout（database.query_timeout_sec）を超えたため取り消されました。"],
+        "55P03": ["ロックを取得できませんでした（lock_timeout）。"],
+        "40P01": ["デッドロックを検出しました。"],
+        "42501": ["権限がありません。接続ユーザーへの GRANT を確認してください。"],
+    }.get(state, [])
+    if state == "42601" and any(token in text for token in ('"["', '"GO"', '"]"')):
+        hints.append("SQL Server 用の SQL（[列名] / GO）です。gen で作った seed.sql なら、settings の"
+                     " database.type を確認して gen --overwrite で作り直してください。")
+    if not state:
+        if "SSL" in text or "sslrootcert" in text:
+            hints.append("SSL の設定を確認してください（サーバの ssl、database.sslmode / sslrootcert。"
+                         "AWS RDS なら CA バンドル global-bundle.pem を sslrootcert に指定）。")
+        elif "接続できません" in text or "タイムアウト" in text:
+            hints.append("ホスト名・ポート（既定 5432）、ファイアウォール / セキュリティグループ、"
+                         "サーバの listen_addresses を確認してください。")
+    return hints
+
+
+def _with_hints(message: str, exc: Exception) -> str:
+    hints = diagnose_pg_error(exc)
+    return message + "".join("\n  確認: %s" % h for h in hints)
+
+
 class NullClient(DbClient):
     """--dry-run 用。DB へ一切接続しない。
 
@@ -518,6 +709,8 @@ def create_client(settings: Settings, offline: bool, case_id: str, dry_run: bool
         return NullClient()
     if offline:
         return OfflineClient(settings.project_root / "fixtures", case_id)
+    if settings.db_type == "postgresql":
+        return PostgresClient(settings)
     return PyodbcClient(settings)
 
 

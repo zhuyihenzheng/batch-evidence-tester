@@ -1,0 +1,35 @@
+# generated-by: autotest gen sha256=9b56961c1bd96b8793a11d868d568b9bc14691a7ca384ddfed112ceff1ae12df md=docs/testcases/order_import.md
+# =============================================================================
+# OI_005 手動：実行中の強制終了で中途半端な状態が残らない
+#   生成元 : docs/testcases/order_import.md:140
+#   仕様 : 4.3
+#   手順 :
+#     - `python -m autotest manual --case OI_005 --phase before` で実行前を採取する
+#     - batch を起動し、ログに「ファイル取込開始」が出た直後にタスクマネージャーで強制終了する
+#     - `python -m autotest manual --case OI_005 --phase after` で実行後を採取する
+#
+# この YAML は上の md から生成した。内容を変えるときは md を直して
+#   python -m autotest gen --md docs/testcases/order_import.md --overwrite
+# を実行する（YAML やデータファイルを直接直すと、以後 gen はこのケースを上書きしない）。
+# 生成直後の enabled は未レビューの印（false）。md と生成物を確認してから true にすること。
+# =============================================================================
+# generated-file: sha256=61a774464f44ae4678f7ccf82922c4ba9b578009600fa878efb802362dbbbde9 path=cases/order_import/OI_005/input/ORDER_20260806.csv
+id: OI_005
+name: "手動：実行中の強制終了で中途半端な状態が残らない"
+description: "取込の途中で batch を強制終了しても、ファイルの二重移動や結果ファイルの欠損が起きないこと（仕様: 4.3）"
+tags: [手動]
+enabled: false
+mode: manual
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  input_files:
+    - src: "input/ORDER_20260806.csv"
+      dest_dir: input_dir
+collect:
+  files:
+    - dir: output_dir
+      pattern: "*.csv"
+      preview: true
+review:
+  - "投入ファイルが投入・処理済・エラーのどれか 1 か所だけに存在すること"
+  - "結果ファイルが出力されていないか、出力されている場合は内容が欠けていないこと"

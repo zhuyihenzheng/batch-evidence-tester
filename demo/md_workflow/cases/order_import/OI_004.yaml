@@ -1,0 +1,36 @@
+# generated-by: autotest gen sha256=175ea9bf3d3791df3f90ada85ca7aa5695fd7e4ee76ad7f5bbcbed1c509b8efd md=docs/testcases/order_import.md
+# =============================================================================
+# OI_004 環境不備：出力フォルダが存在しない
+#   生成元 : docs/testcases/order_import.md:121
+#   仕様 : 6 / 7
+#
+# この YAML は上の md から生成した。内容を変えるときは md を直して
+#   python -m autotest gen --md docs/testcases/order_import.md --overwrite
+# を実行する（YAML やデータファイルを直接直すと、以後 gen はこのケースを上書きしない）。
+# 生成直後の enabled は未レビューの印（false）。md と生成物を確認してから true にすること。
+# =============================================================================
+# generated-file: sha256=7869dbc5873796789637642a87260302f0170096e4634afba2da74c1cd27b4ea path=cases/order_import/OI_004/input/ORDER_20260803.csv
+id: OI_004
+name: "環境不備：出力フォルダが存在しない"
+description: "出力フォルダが無いと終了コード 2 で終わり、投入ファイルは未処理のまま投入フォルダに残ること（仕様: 6 / 7）"
+tags: [異常系, 環境不備]
+enabled: false
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir]
+  remove_dirs: [output_dir]
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+execute:
+  args: ["--mode", "daily", "--date", "20260803"]
+review:
+  - "標準エラーに原因（出力フォルダ不在とそのパス）が出力されていること"
+assert:
+  exit_code: 2
+  files:
+    - name: "input_dir/ORDER_*.csv が 1 件"
+      exists: {dir: input_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "processed_dir/* が 0 件"
+      exists: {dir: processed_dir, pattern: "*", count: 0}
+  log:
+    must_contain: [出力フォルダが存在しません, 処理異常終了]

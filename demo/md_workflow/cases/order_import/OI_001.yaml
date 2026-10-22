@@ -1,0 +1,60 @@
+# generated-by: autotest gen sha256=df29f0e99a25bf32c9a17759fcf1b4bacb04fbb18d62ac19d3dcf279801d4f40 md=docs/testcases/order_import.md
+# =============================================================================
+# OI_001 正常系：受注 2 件を取り込む
+#   生成元 : docs/testcases/order_import.md:21
+#   仕様 : 4.2 / 4.3 / 5
+#
+# この YAML は上の md から生成した。内容を変えるときは md を直して
+#   python -m autotest gen --md docs/testcases/order_import.md --overwrite
+# を実行する（YAML やデータファイルを直接直すと、以後 gen はこのケースを上書きしない）。
+# 生成直後の enabled は未レビューの印（false）。md と生成物を確認してから true にすること。
+# =============================================================================
+# generated-file: sha256=2a912f1970d7b5e7db06cc3380f1ae5a48280bbe1dc9281e70d7f883bd21a37a path=fixtures/OI_001/before_T_ORDER.csv
+# generated-file: sha256=c7f2e00c0f50b70fd360b18f3fe966e0b61a9013ff37cb0a4bc670a117b27c3b path=cases/order_import/OI_001/input/ORDER_20260803.csv
+# generated-file: sha256=4e3fccaa4f2be10aa6daf75e5e0146c50c8ffad7245d0c8000c66ea704f56e6e path=expected/OI_001/db_T_ORDER.csv
+# generated-file: sha256=4e3fccaa4f2be10aa6daf75e5e0146c50c8ffad7245d0c8000c66ea704f56e6e path=fixtures/OI_001/after_T_ORDER.csv
+# generated-file: sha256=ff918ae14a03d5b831bcb5a6ef03246b22b93252f182bd5e8b670a22f3e9e06d path=expected/OI_001/RESULT_20260803.csv
+# generated-file: sha256=730d1e9e1e175acb7277c20501dff54590715d9b39f980b70838c185c4bafac7 path=cases/order_import/OI_001/seed.sql
+id: OI_001
+name: "正常系：受注 2 件を取り込む"
+description: "受注 CSV の 2 件が取り込まれて STATUS が完了になり、処理済へ移動し、結果ファイルが出力されること（仕様: 4.2 / 4.3 / 5）"
+tags: [正常系]
+enabled: false
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  sql:
+    - file: "cases/order_import/OI_001/seed.sql"
+  input_files:
+    - src: "input/ORDER_20260803.csv"
+      dest_dir: input_dir
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: "SELECT [ORDER_ID], [ORDER_NO], [CUSTOMER_NM], [AMOUNT], [STATUS] FROM T_ORDER ORDER BY [ORDER_ID]"
+execute:
+  args: ["--mode", "daily", "--date", "{date}"]
+  date: "20260803"
+collect:
+  files:
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+assert:
+  exit_code: 0
+  db:
+    - table: T_ORDER
+      expected: "expected/OI_001/db_T_ORDER.csv"
+      key: [ORDER_ID]
+  files:
+    - name: "processed_dir/ORDER_*.csv が 1 件"
+      exists: {dir: processed_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "error_dir/* が 0 件"
+      exists: {dir: error_dir, pattern: "*", count: 0}
+    - name: "input_dir/* が 0 件"
+      exists: {dir: input_dir, pattern: "*", count: 0}
+    - name: "output_dir/RESULT_*.csv の内容"
+      actual: {dir: output_dir, pattern: "RESULT_*.csv"}
+      expected: "expected/OI_001/RESULT_20260803.csv"
+  log:
+    must_contain: ["処理開始", "取込件数=2", "処理正常終了"]
+    must_not_contain: [明細エラー]

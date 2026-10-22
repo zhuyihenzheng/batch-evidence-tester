@@ -17,11 +17,29 @@ FILE_DIFF_COLUMNS = ["行", "区分", "期待値", "実績値"]
 MAX_DIFF_ROWS = 200
 
 
+# 相違が前後の空白だけだったときに添える説明。比較は厳密に行い（NG のまま）、直し方だけを示す
+_WHITESPACE_NOTE_DB = ("（うち %d 件は前後の空白だけが違う値・キーです。CHAR(n) の埋め草なら SQL で RTRIM するか、"
+                       "期待値も空白込みで書いてください）")
+_WHITESPACE_NOTE_FILE = ("（うち %d 行は前後の空白だけが違います。固定長なら実際の差です。"
+                         "期待値ファイルの空白がエディタの保存時に削られていないかも確認してください）")
+
+
 def _norm(value: object) -> str:
-    """比較用の正規化。前後空白と改行コードの差は無視する。"""
+    """比較用の正規化。改行コード（CRLF / CR → LF）の差だけを吸収する。
+
+    前後の空白は比較から外さない。固定長・EDI では空白に意味があり、末尾の埋め草が
+    欠けた出力や、右寄せの数字欄の先頭空白の違いを「一致」と見なすと偽 OK になる
+    （以前は strip していたため、空白 1 つの違いを見逃していた）。
+    改行コードだけを吸収するのは、Windows の git（autocrlf）が取り出した期待値ファイルの
+    改行を CRLF に書き換えるため。セル内の CRLF / LF の違いという、より狭い穴は残る。
+    """
     if value is None:
         return ""
-    return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+    return str(value).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _differs_only_by_spaces(expected: str, actual: str) -> bool:
+    return expected != actual and expected.strip() == actual.strip()
 
 
 def compare_db_table(
@@ -86,6 +104,7 @@ def compare_db_table(
         )
 
     diff_rows: List[List[str]] = []
+    spaces_only = 0
 
     for key, exp_row in exp_index.items():
         key_text = " / ".join(key)
@@ -97,6 +116,8 @@ def compare_db_table(
             e = _norm(exp_row.get(col))
             a = _norm(act_row.get(col))
             if e != a:
+                if _differs_only_by_spaces(e, a):
+                    spaces_only += 1
                 diff_rows.append(["相違", key_text, col,
                                   shown(col, exp_row.get(col, "")), shown(col, act_row.get(col, ""))])
 
@@ -104,9 +125,15 @@ def compare_db_table(
         if key not in exp_index:
             diff_rows.append(["実績のみ", " / ".join(key), "(レコード全体)", "", _row_digest(actual.columns, act_row, masked=masked)])
 
+    # CHAR(n) のキー列は埋め草込みで返るため、期待値のキーと空白だけ違って対応付けに失敗する
+    unmatched_actual = {tuple(k.strip() for k in key) for key in act_index if key not in exp_index}
+    spaces_only += sum(1 for key in exp_index
+                       if key not in act_index and tuple(k.strip() for k in key) in unmatched_actual)
+
     result = _build_result(
         check_name, "db", diff_rows, DIFF_COLUMNS,
         ok_detail=f"{len(exp_index)} 件一致（比較列 {len(compare_cols)} / 除外列 {sorted(ignore) or 'なし'}）",
+        note=_WHITESPACE_NOTE_DB % spaces_only if spaces_only else "",
     )
 
     # キー以外の全列を ignore_columns で外すと、値は一切照合されないまま OK が出る。
@@ -127,6 +154,7 @@ def _compare_by_position(check_name: str, category: str, actual: Table, expected
     """キー列が指定されない場合は行順で比較する（ORDER BY 済みが前提）。"""
     compare_cols = [c for c in expected.columns if c not in ignore]
     diff_rows: List[List[str]] = []
+    spaces_only = 0
     # 比較は生値、差分表への出力だけ伏せる
     masked = set(actual.mask_columns) | set(expected.mask_columns)
 
@@ -144,13 +172,17 @@ def _compare_by_position(check_name: str, category: str, actual: Table, expected
                               _row_digest(expected.columns, exp_row, masked=masked), ""])
         else:
             for col in compare_cols:
-                if _norm(exp_row.get(col)) != _norm(act_row.get(col)):
+                e, a = _norm(exp_row.get(col)), _norm(act_row.get(col))
+                if e != a:
+                    if _differs_only_by_spaces(e, a):
+                        spaces_only += 1
                     diff_rows.append(["相違", f"{i + 1}行目", col,
                                       shown(col, exp_row.get(col, "")), shown(col, act_row.get(col, ""))])
 
     return _build_result(
         check_name, category, diff_rows, DIFF_COLUMNS,
         ok_detail=f"{len(expected.rows)} 行一致（行順比較）",
+        note=_WHITESPACE_NOTE_DB % spaces_only if spaces_only else "",
     )
 
 
@@ -187,6 +219,7 @@ def compare_text_file(
         actual_lines = [ln for ln in actual_lines if keep(ln)]
 
     diff_rows: List[List[str]] = []
+    spaces_only = 0
     matcher = difflib.SequenceMatcher(None, [_norm(x) for x in expected_lines], [_norm(x) for x in actual_lines])
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
@@ -195,6 +228,8 @@ def compare_text_file(
             for offset in range(max(i2 - i1, j2 - j1)):
                 e = expected_lines[i1 + offset] if i1 + offset < i2 else ""
                 a = actual_lines[j1 + offset] if j1 + offset < j2 else ""
+                if i1 + offset < i2 and j1 + offset < j2 and _differs_only_by_spaces(e, a):
+                    spaces_only += 1
                 diff_rows.append([str(i1 + offset + 1), "相違", e, a])
         elif tag == "delete":
             for i in range(i1, i2):
@@ -206,6 +241,7 @@ def compare_text_file(
     return _build_result(
         check_name, "file", diff_rows, FILE_DIFF_COLUMNS,
         ok_detail=f"{len(expected_lines)} 行一致",
+        note=_WHITESPACE_NOTE_FILE % spaces_only if spaces_only else "",
     )
 
 
@@ -259,7 +295,8 @@ def _row_digest(columns: List[str], row: Dict[str, object], limit: int = 6,
     return ", ".join(parts)
 
 
-def _build_result(name: str, category: str, diff_rows: List[List[str]], columns: List[str], ok_detail: str) -> CheckResult:
+def _build_result(name: str, category: str, diff_rows: List[List[str]], columns: List[str], ok_detail: str,
+                  note: str = "") -> CheckResult:
     if not diff_rows:
         return CheckResult(name, category, OK, ok_detail)
 
@@ -273,5 +310,5 @@ def _build_result(name: str, category: str, diff_rows: List[List[str]], columns:
         cell_marks=marks,
         truncated_from=total if total > MAX_DIFF_ROWS else None,
     )
-    detail = f"{total} 件の相違があります" + (f"（先頭 {MAX_DIFF_ROWS} 件を表示）" if total > MAX_DIFF_ROWS else "")
+    detail = f"{total} 件の相違があります" + (f"（先頭 {MAX_DIFF_ROWS} 件を表示）" if total > MAX_DIFF_ROWS else "") + note
     return CheckResult(name, category, NG, detail, diff_table=table)

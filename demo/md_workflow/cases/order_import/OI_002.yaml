@@ -1,0 +1,64 @@
+# generated-by: autotest gen sha256=e7332533bf8f61860e6f014865251422fd2db65df921bb92638c66bdf1c1dc3d md=docs/testcases/order_import.md
+# =============================================================================
+# OI_002 異常系：金額が負の明細を含む
+#   生成元 : docs/testcases/order_import.md:59
+#   仕様 : 4.1 / 4.3 / 6
+#
+# この YAML は上の md から生成した。内容を変えるときは md を直して
+#   python -m autotest gen --md docs/testcases/order_import.md --overwrite
+# を実行する（YAML やデータファイルを直接直すと、以後 gen はこのケースを上書きしない）。
+# 生成直後の enabled は未レビューの印（false）。md と生成物を確認してから true にすること。
+# =============================================================================
+# generated-file: sha256=78b2cf5bbe3c72d8acc530f7c19d01eb7831e7c1728e36114772eb9897e5d510 path=fixtures/OI_002/before_T_ORDER.csv
+# generated-file: sha256=273e2b618991a3f42097893b528461f8c27e55dfcd67c1d79d3ee18415964f6b path=cases/order_import/OI_002/input/ORDER_20260804.csv
+# generated-file: sha256=f19e611d9dec9f4466a9c3f89e10143b99b12523dbff51f4e6cca3960b4ef351 path=expected/OI_002/db_T_ORDER.csv
+# generated-file: sha256=f19e611d9dec9f4466a9c3f89e10143b99b12523dbff51f4e6cca3960b4ef351 path=fixtures/OI_002/after_T_ORDER.csv
+# generated-file: sha256=0b84ca7f456c5f0b6fec0bc81ffc5a6a3b155ec420c2c14b29e447bac5d7757a path=expected/OI_002/RESULT_20260804.csv
+# generated-file: sha256=8bf3f7357bc447d6d4ae88a8f655accba5cad5fc94d9aefa185361f3a4fa4490 path=cases/order_import/OI_002/seed.sql
+id: OI_002
+name: "異常系：金額が負の明細を含む"
+description: "金額が負の明細だけが STATUS=エラーになり、ファイルはエラーフォルダへ退避され、終了コード 1 で終わること（仕様: 4.1 / 4.3 / 6）"
+tags: [異常系]
+enabled: false
+setup:
+  clean_dirs: [input_dir, processed_dir, error_dir, output_dir]
+  sql:
+    - file: "cases/order_import/OI_002/seed.sql"
+  input_files:
+    - src: "input/ORDER_20260804.csv"
+      dest_dir: input_dir
+snapshot:
+  tables:
+    - name: T_ORDER
+      sql: "SELECT ORDER_ID, ORDER_NO, CUSTOMER_NM, AMOUNT, STATUS FROM T_ORDER WHERE ORDER_ID IN (3, 4) ORDER BY ORDER_ID"
+      mask: [CUSTOMER_NM]
+execute:
+  args: ["--mode", "daily", "--date", "{date}"]
+  date: "20260804"
+collect:
+  files:
+    - dir: error_dir
+      pattern: "*.csv"
+      preview: true
+    - dir: output_dir
+      pattern: "RESULT_*.csv"
+      preview: true
+review:
+  - "エラーフォルダへ退避されたファイルが、投入したファイルと同じ内容のままであること"
+assert:
+  exit_code: 1
+  db:
+    - table: T_ORDER
+      expected: "expected/OI_002/db_T_ORDER.csv"
+      key: [ORDER_ID]
+  files:
+    - name: "error_dir/ORDER_*.csv が 1 件"
+      exists: {dir: error_dir, pattern: "ORDER_*.csv", count: 1}
+    - name: "processed_dir/* が 0 件"
+      exists: {dir: processed_dir, pattern: "*", count: 0}
+    - name: "output_dir/RESULT_*.csv の内容"
+      actual: {dir: output_dir, pattern: "RESULT_*.csv"}
+      expected: "expected/OI_002/RESULT_20260804.csv"
+  log:
+    must_contain: ["明細エラー A0004", "処理異常終了"]
+    must_not_contain: [処理正常終了]

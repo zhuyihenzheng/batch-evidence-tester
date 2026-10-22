@@ -5,6 +5,7 @@
   python -m autotest run --tag 正常系        タグ指定
   python -m autotest run --offline          DB/exe 無しでパイプライン検証
   python -m autotest validate               設定とケース定義の妥当性チェックのみ
+  python -m autotest gen --md <md>          テストケース md からケース YAML を生成
 """
 
 import argparse
@@ -15,11 +16,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import result_store
-from .config import ConfigError, _validate_settings, default_config, load_cases, load_settings
+from .config import (ConfigError, _validate_settings, batch_type, default_config, load_cases,
+                     load_settings)
 from .excel import build_workbook
 from .models import OK, REVIEW, RunResult
 from .orchestrator import CaseRunner
-from .runner import _resolve_exe
+from .runner import _resolve_exe, _resolve_java, describe_batch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -81,20 +83,37 @@ def _project_root_for(config_path: Path) -> Path:
 
     設定ファイルは <root>/config/settings.yaml に置く規約なので、その 2 階層上を
     ルートとみなす。規約から外れた場所を指された場合はパッケージ位置から推測する。
+
+    config/ の下にあれば cases/ がまだ無くても規約どおりとみなす。cases/ の有無だけで
+    判定すると、gen で最初のケースを作る前の新しいプロジェクトがツール自身の
+    ルートと取り違えられ、生成物が別のプロジェクトへ書き込まれてしまうため。
     """
-    candidate = config_path.resolve().parent.parent
-    return candidate if (candidate / "cases").is_dir() else PROJECT_ROOT
+    resolved = config_path.resolve()
+    candidate = resolved.parent.parent
+    if resolved.parent.name == "config" or (candidate / "cases").is_dir():
+        return candidate
+    return PROJECT_ROOT
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autotest", description="batch(.exe) 自動テスト実行ツール")
     parser.add_argument("command",
-                        choices=["run", "validate", "list", "dbcheck", "new", "copy",
+                        choices=["run", "validate", "list", "dbcheck", "new", "copy", "gen",
                                  "manual", "report", "finalize", "gui"],
                         help="実行するコマンド（gui: 操作画面を開く / new: ひな形からケース作成 / "
-                             "copy: 既存ケースの複製 / manual: 手動実施ケースの証跡採取 / "
+                             "copy: 既存ケースの複製 / gen: テストケース md からケース生成 / "
+                             "manual: 手動実施ケースの証跡採取 / "
                              "report: 証跡の結合 / finalize: 人工確認済み Excel の確定 / "
-                             "dbcheck: SQL Server へ実際に接続できるか確認）")
+                             "dbcheck: DB（SQL Server / PostgreSQL）へ実際に接続できるか確認）")
+    parser.add_argument("--md", default=None, help="gen で読むテストケース md")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="gen で、md と差分のある生成済みケースを更新する（手で編集したものは更新しない）")
+    parser.add_argument("--check", action="store_true",
+                        help="gen で、書き込まずに生成物が md と一致しているかだけを確認する（不一致があれば終了コード 1）")
+    parser.add_argument("--json", action="store_true",
+                        help="gen の結果を 1 行の JSON で出す（AI の代理が読む用）")
+    parser.add_argument("--include-disabled", action="store_true",
+                        help="validate / list で enabled: false のケースも対象にする（作成途中の静的検査用）")
     parser.add_argument("--id", default=None, help="new / copy で作るケースID")
     parser.add_argument("--template", default="normal",
                         help="new で使うひな形（templates/ の名前。既定: normal）")
@@ -116,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--case", action="append", dest="cases", help="実行するケースID（複数指定可）")
     parser.add_argument("--tag", action="append", dest="tags", help="実行するタグ（複数指定可）")
     parser.add_argument("--out", default=None, help="Excel 出力先（既定: settings.excel.output_dir）")
-    parser.add_argument("--offline", action="store_true", help="SQL Server の代わりに fixtures/ の CSV を使う")
+    parser.add_argument("--offline", action="store_true", help="DB の代わりに fixtures/ の CSV を使う")
     parser.add_argument("--dry-run", action="store_true",
                         help=".exe も DB 接続も行わず、流れと設定だけを確認する")
     parser.add_argument("--date", default=None,
@@ -154,7 +173,9 @@ def _list_cases(cases) -> int:
     print("-" * (id_w + tag_w + 50))
     for c in cases:
         mode = "手動" if c.is_manual else "自動"
-        print(_pad(c.case_id, id_w) + _pad("/".join(c.tags), tag_w) + _pad(mode, 10) + c.name)
+        # --include-disabled のときだけ無効ケースが混ざる。実行対象と取り違えないよう明示する
+        state = "" if c.enabled else "  （無効: enabled: false）"
+        print(_pad(c.case_id, id_w) + _pad("/".join(c.tags), tag_w) + _pad(mode, 10) + c.name + state)
 
     # 使えるタグを提示する。--tag に何を渡せるか分からないと使えないため
     counts = {}
@@ -172,11 +193,13 @@ def _list_cases(cases) -> int:
 
 
 def _dbcheck(settings, timeout_sec: int = 10) -> int:
-    """SQL Server へ実際に接続できるかを確認する。
+    """DB へ実際に接続できるかを確認する。
 
     validate は設定の書式しか見ないため、「本当に繋がるか」は別途確認が要る。
     失敗時は原因の切り分けに必要な情報（導入済みドライバ一覧など）まで出す。
     """
+    if settings.db_type == "postgresql":
+        return _dbcheck_postgres(settings, timeout_sec)
     from . import db as db_mod
 
     print("=" * 66)
@@ -307,6 +330,105 @@ def _dbcheck(settings, timeout_sec: int = 10) -> int:
     return 0
 
 
+def _dbcheck_postgres(settings, timeout_sec: int) -> int:
+    """PostgreSQL 版の接続確認。
+
+    出力の「サーバ名   :」「データベース:」の 2 行は操作画面が拾うので、
+    SQL Server 版と同じ書式に保つ。
+    """
+    from . import db as db_mod
+    from . import pgwire
+
+    print("=" * 66)
+    print(" PostgreSQL 接続確認")
+    print("=" * 66)
+
+    db = settings.database
+    target = db_mod.postgres_target(settings)
+    print("  接続先     : %s:%d / %s" % (target["host"], target["port"], target["database"]))
+    print("  ユーザー   : %s" % target["user"])
+    print("  SSL        : sslmode=%s%s" % (
+        target["sslmode"], "（CA: %s）" % target["sslrootcert"] if target["sslrootcert"] else ""))
+    print("  ドライバ   : 内蔵（標準ライブラリだけで接続。psycopg2 / ODBC ドライバは不要）")
+
+    # --- パスワード環境変数 --------------------------------------------------
+    env_name = str(db.get("password_env") or "")
+    if env_name:
+        print("\n  パスワード環境変数 %s:" % env_name)
+        for line in db_mod.diagnose_password_env(env_name, os.environ.get(env_name)):
+            print("    %s" % line)
+    else:
+        print("\n  パスワード : password_env 未指定（サーバがパスワードを求めたら接続は失敗します）")
+
+    # --- TCP 到達性 ---------------------------------------------------------
+    print("\n  TCP 到達確認 : %s:%d" % (target["host"], target["port"]))
+    ok, reason = db_mod.check_tcp_reachable(target["host"], target["port"], timeout_sec=min(5, timeout_sec))
+    if not ok:
+        print("    [NG] %s" % reason)
+        print("\n  ネットワーク層で止まっています。次を確認してください:")
+        print("    - ホスト名 / ポートの誤り（PostgreSQL の既定ポートは 5432。host:5432 か port: で指定）")
+        print("    - セキュリティグループ / ファイアウォールで %d 番が開いているか" % target["port"])
+        print("    - サーバの listen_addresses が外部からの接続を受け付ける設定か")
+        print("    - Windows 側からは次で追加確認できます:")
+        print("        Test-NetConnection -ComputerName %s -Port %d" % (target["host"], target["port"]))
+        return 1
+    print("    [OK] ポートまで到達できています")
+
+    # --- 実接続 --------------------------------------------------------------
+    print("\n  接続パラメータ : %s" % db_mod.describe_postgres(settings))
+    print("\n  接続中（タイムアウト %d 秒）..." % timeout_sec)
+    started = datetime.now()
+    try:
+        conn = db_mod.connect_postgres(settings, connect_timeout=timeout_sec)
+    except (db_mod.DbError, ConfigError) as exc:
+        elapsed = (datetime.now() - started).total_seconds()
+        print("\n[NG] 接続に失敗しました（%.1f 秒）" % elapsed)
+        print("     %s" % str(exc).replace("\n", "\n     "))
+        return 1
+    elapsed = (datetime.now() - started).total_seconds()
+    print("[OK] 接続成功（%.2f 秒）" % elapsed)
+    print("  認証方式   : %s" % conn.auth_method)
+    print("  通信       : %s" % (conn.ssl_version or "平文（SSL なし）"))
+
+    # --- 接続先の実体を確認（設定ミスで別 DB に繋がっていないか）--------------
+    mismatch = False
+    try:
+        rows = conn.execute(
+            "SELECT version(), current_database(), current_user,"
+            " COALESCE(host(inet_server_addr()), ''), COALESCE(CAST(inet_server_port() AS text), ''),"
+            " current_setting('TimeZone'), current_setting('search_path')")[0].rows
+        version, dbname, login, address, port, timezone, search_path = rows[0]
+        print("\n  実際の接続先:")
+        print("    サーバ名   : %s" % ("%s:%s" % (address, port) if address else target["host"]))
+        print("    データベース: %s" % dbname)
+        print("    ログイン   : %s" % login)
+        print("    バージョン : %s" % str(version).split(",")[0].strip())
+        print("    タイムゾーン: %s" % timezone)
+        print("    search_path: %s" % search_path)
+        if dbname != target["database"]:
+            mismatch = True
+            print("\n[警告] 接続先 DB が設定値 '%s' と異なります。" % target["database"])
+            print("       このまま試験すると、別の DB を見た結果が証跡として残ります。")
+            print("       settings の database.database を確認してください。")
+        # timestamp（タイムゾーン無し）の列を {batch_start} と比べるとき、batch 側の接続と
+        # 時刻帯が違うと時刻がずれて対象行を取りこぼす
+        print("\n  {batch_start} はこの接続のタイムゾーン（%s）の時刻です。batch が別のタイムゾーンで" % timezone)
+        print("  timestamp 列を書くなら、database.timezone をそちらに合わせてください。")
+    except pgwire.PgError as exc:
+        print("\n[警告] 接続はできましたが情報取得に失敗しました: %s" % exc)
+    finally:
+        conn.close()
+
+    print("\n" + "=" * 66)
+    if mismatch:
+        print(" 接続はできましたが、接続先が設定と違います。上の警告を解消してください。")
+        print("=" * 66)
+        return 1
+    print(" 接続確認 OK。次は python -m autotest validate で設定全体を確認してください。")
+    print("=" * 66)
+    return 0
+
+
 def _is_under(path: Path, parent: Path) -> bool:
     """path が parent の配下か。Path.is_relative_to は 3.9+ のため自前で判定する。"""
     try:
@@ -332,8 +454,16 @@ def _validate(settings, cases, args, project_root: Path) -> int:
 
     base_settings = settings
     for case in cases:
-        settings = base_settings.for_case(case)
-        settings.set_base_date(case.execute.get("date") or args.date)
+        state = "" if case.enabled else "  （無効: enabled: false）"
+        try:
+            settings = base_settings.for_case(case)
+            settings.set_base_date(case.execute.get("date") or args.date)
+        except ConfigError as exc:
+            # 1 件の設定不備で残りのケースの検査を止めない（作成途中のケースをまとめて直せるように）
+            print(f"\n  [NG] {case.case_id}  {case.name}{state}")
+            print(f"        - {exc}")
+            errors.append(f"{case.case_id}: {exc}")
+            continue
         print("\n  %s 設定: %s" % (case.case_id, " -> ".join(str(p) for p in settings.sources)))
         # --- paths（run 時に自動作成されるため「未作成」は警告扱い）--------------
         raw_paths = settings.raw.get("paths") or {}
@@ -359,16 +489,32 @@ def _validate(settings, cases, args, project_root: Path) -> int:
                 )
 
         # 実際に選択された batch を表示。主・前置 batch の存在検査は preflight で行う。
-        profile = settings.batch_profile(case.execute.get("batch"))
-        exe = _resolve_exe(str(profile.get("exe_path", "")), project_root)
-        print(f"  batch.exe_path   {exe}")
+        try:
+            profile = settings.batch_profile(case.execute.get("batch"))
+        except ConfigError:
+            profile = None   # 未定義の batch 名。詳細は下の preflight で表示する
+        if profile is None:
+            pass
+        elif batch_type(profile) == "java":
+            # PATH 任せの java は端末ごとに別の JDK を拾い得る。実際の解決先を必ず見せる
+            java = _resolve_java(profile, project_root)
+            print(f"  batch.java       {java or '（見つかりません）'}")
+            print(f"  batch.jar        {_resolve_exe(str(profile.get('jar', '')), project_root)}")
+            spec = case.assertions or {}
+            if "exit_code" in spec and "job_status" not in spec:
+                warnings.append(
+                    f"{case.case_id}: java batch を終了コードだけで判定しています。Spring Boot は作りによって"
+                    f"ジョブが FAILED でも 0 で終わるため、assert.job_status の併用を推奨します")
+        else:
+            exe = _resolve_exe(str(profile.get("exe_path", "")), project_root)
+            print(f"  batch.exe_path   {exe}")
         try:
             folder_cfg = settings.folder_evidence_for(case)
             print("  folder_evidence  %s" % (", ".join(folder_cfg.get("targets", [])) or "なし"))
         except ConfigError:
             pass  # エラーの詳細は下の共通 preflight で表示する。
 
-        print(f"  database         {settings.database.get('server')} / {settings.database.get('database')}")
+        print(f"  database         {settings.db_label()} / {settings.database.get('database')}")
 
         # --- DB パスワード環境変数（offline 運用もあるため警告扱い）--------------
         env_name = settings.database.get("password_env")
@@ -378,14 +524,18 @@ def _validate(settings, cases, args, project_root: Path) -> int:
 
         problems = preflight_case(settings, case)
         status = "OK" if not problems else "NG"
-        print(f"  [{status}] {case.case_id}  {case.name}")
+        print(f"  [{status}] {case.case_id}  {case.name}{state}")
         for p in problems:
             print(f"        - {p}")
             errors.append(f"{case.case_id}: {p}")
 
     print()
+    # 同じ paths を共有するケースが多いと、同一の警告がケース数だけ並んで本当の問題が埋もれる
+    shown = []  # type: List[str]
     for w in warnings:
-        print(f"[警告] {w}")
+        if w not in shown:
+            shown.append(w)
+            print(f"[警告] {w}")
     if errors:
         print(f"[NG] 問題 {len(errors)} 件。上記を解消してから実行してください。")
         return 1
@@ -576,8 +726,8 @@ def _manual(args, settings, cases, out_dir: Path) -> int:
         finished_at=datetime.now(),
         env_name=str(settings.env.get("name", "")),
         tester=settings.tester,
-        exe_path=str(runner.settings.batch_profile(case.execute.get("batch")).get("exe_path", "")),
-        db_server=str(settings.database.get("server", "")),
+        exe_path=describe_batch(runner.settings, runner.settings.batch_profile(case.execute.get("batch"))),
+        db_server=settings.db_label(),
         db_name=str(settings.database.get("database", "")),
         filter_description="手動実施: %s" % case_id,
         total_available=1,
@@ -732,6 +882,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command in ("new", "copy"):
         return _scaffold(args, project_root, cases_dir)
 
+    if args.command == "gen":
+        # new / copy と同じく、既存ケースの読み込みより先に処理する。
+        # 生成対象と無関係なケースの不備で生成そのものが止まらないようにするため
+        from . import casegen
+        return casegen.main(args, project_root, cases_dir, config_path)
+
+    if (args.check or args.json) and args.command != "gen":
+        print("[設定エラー] --check / --json は gen 専用です。", file=sys.stderr)
+        return 2
+
+    if args.include_disabled and args.command not in ("list", "validate"):
+        # enabled: false は「まだレビューしていない」印。実行系で無視させない
+        print("[設定エラー] --include-disabled は validate / list 専用です。"
+              "実行するにはケースを確認してから enabled: true にしてください。", file=sys.stderr)
+        return 2
+
     if args.command == "gui":
         # 遅延 import。画面の無い環境（タスクスケジューラ等）で tkinter の
         # import に失敗しても、他のコマンドを巻き添えにしないため
@@ -743,10 +909,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         settings = load_settings(config_path, project_root=project_root, require_runtime=False)
         settings.set_base_date(args.date)   # {date} の既定基準日
-        cases = load_cases(cases_dir, only=args.cases, tags=args.tags)
-        # 絞り込み前の全件数。証跡に「何件を実行しなかったか」を残すために使う
-        total_available = len(load_cases(cases_dir)) if (args.cases or args.tags) else len(cases)
-        if args.command in ("run", "manual", "validate"):
+        if args.command == "dbcheck":
+            # 接続確認にケースは要らない。gen 直後（全ケースが enabled: false）でも
+            # 「有効なケースが 0 件」で止まらず確認できるようにする
+            return _dbcheck(settings, timeout_sec=int(settings.database.get("login_timeout_sec", 15)))
+        cases = load_cases(cases_dir, only=args.cases, tags=args.tags,
+                           include_disabled=args.include_disabled)
+        # 絞り込み前の全件数。証跡に「何件を実行しなかったか」を残すために使う。
+        # --include-disabled（validate / list）では使わない。有効ケースが 0 件の
+        # 作成途中のプロジェクトで、ここが「0 件」エラーを出して検査を止めないように
+        if args.include_disabled:
+            total_available = len(cases)
+        else:
+            total_available = len(load_cases(cases_dir)) if (args.cases or args.tags) else len(cases)
+        # 実行系は 1 件でも設定が壊れていたら何も始めない。--include-disabled の
+        # validate（作成途中の検査）は止めずに、ケースごとの NG として一覧で返す
+        if args.command in ("run", "manual") or (args.command == "validate" and not args.include_disabled):
             for case in cases:
                 effective = settings.for_case(case)
                 _validate_settings(effective)
@@ -757,9 +935,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "list":
         return _list_cases(cases)
-
-    if args.command == "dbcheck":
-        return _dbcheck(settings, timeout_sec=int(settings.database.get("login_timeout_sec", 15)))
 
     if args.command == "validate":
         return _validate(settings, cases, args, project_root)
@@ -813,9 +988,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         started_at=started,
         env_name=str(settings.env.get("name", "")),
         tester=settings.tester,
-        exe_path=" / ".join(sorted({str(settings.for_case(c).batch_profile(c.execute.get("batch")).get("exe_path", ""))
-                                  for c in cases})),
-        db_server=str(settings.database.get("server", "")),
+        exe_path=" / ".join(sorted({describe_batch(settings.for_case(c),
+                                                   settings.for_case(c).batch_profile(c.execute.get("batch")))
+                                    for c in cases})),
+        db_server=settings.db_label(),
         db_name=str(settings.database.get("database", "")),
         filter_description=_filter_description(args),
         total_available=total_available,

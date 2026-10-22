@@ -52,6 +52,21 @@ batch:
 #   nightly:
 #     exe_path: "C:/app/batch/NightlyBatch.exe"
 #     timeout_sec: 3600             # 上書きしたい項目だけ書けばよい
+#
+#   # Java（Spring Boot）の実行可能 jar。type: java にすると
+#   #   java [jvm_args] -jar <jar> [common_args] [ケースの execute.args]
+#   # を組み立てて起動する。java を省略すると env_vars.JAVA_HOME → 環境変数 JAVA_HOME → PATH の順で探す
+#   # （端末ごとに別の JDK を拾わないよう、実環境ではパスを書くことを推奨。validate が解決先を表示する）。
+#   # ★ Spring Boot は作りによってジョブが FAILED でも終了コード 0 で終わる。
+#   #    ケースでは assert.job_status（COMPLETED / FAILED）を必ず併用すること。
+#   order_job:
+#     type: java
+#     java: "C:/Program Files/Eclipse Adoptium/jdk-17/bin/java.exe"
+#     jar: "C:/app/order-batch/order-batch.jar"
+#     jvm_args: ["-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dspring.profiles.active=it"]
+#     common_args: ["--spring.batch.job.name=orderImportJob"]   # Spring Boot 2 系は spring.batch.job.names
+#     console_encoding: "utf-8"     # 上の stdout.encoding と揃える
+#     log_dir: order_job_log_dir    # logging.file.name の出力先（paths の論理名）
 
 # -----------------------------------------------------------------------------
 # ★ 入出力フォルダ設定（ここがテスト対象 batch のフォルダ構成に合わせる箇所）
@@ -133,6 +148,23 @@ database:
   # それが取得できなかった場合のみテスト機の時計で代用し、進んでいた場合に
   # 取りこぼさないようこの秒数だけさかのぼる。
   batch_start_margin_sec: 5
+
+# --- PostgreSQL の場合（上の database: と置き換える）--------------------------
+#   内蔵クライアントで接続するため psycopg2 / ODBC ドライバのインストールは不要。
+#   driver / auth / encrypt / trust_server_certificate は SQL Server 専用（書くとエラー）。
+# database:
+#   type: postgresql
+#   server: "pg01:5432"            # host / host:port。既定ポート 5432
+#   database: "batch_db"           # 大文字小文字を区別する
+#   user: "batch_app"              # 必須
+#   password_env: "AUTOTEST_DB_PASSWORD"
+#   sslmode: prefer                # disable | prefer | require | verify-ca | verify-full
+#   # sslrootcert: "certs/global-bundle.pem"   # verify-* で使う CA（AWS RDS の CA バンドル等）
+#   # timezone: "Asia/Tokyo"       # セッションのタイムゾーン（{batch_start} の基準）。batch と合わせる
+#   # search_path: "app, public"
+#   login_timeout_sec: 15
+#   query_timeout_sec: 60          # statement_timeout になる（0 = 無制限）
+#   batch_start_margin_sec: 5
 
 # -----------------------------------------------------------------------------
 # ログ収集

@@ -24,6 +24,8 @@ from .models import Table
 DEFAULT_ERROR_PATTERNS = [
     r"\[(?:ERROR|FATAL|SEVERE)\]",
     r"(?:^|\s)(?:ERROR|FATAL)\s*[:：]",
+    # Spring Boot（logback）既定書式: "... ERROR 12345 --- [main] ..."（レベル → PID → ---）
+    r"(?:^|\s)(?:ERROR|FATAL)\s+\d+\s+---\s",
     r"\b(?:Exception|StackTrace|Traceback)\b",
     r"異常終了|致命的|処理失敗",
     r"エラー(?!\s*(?:件数)?\s*[=:：]\s*0(?!\d))",
@@ -31,6 +33,7 @@ DEFAULT_ERROR_PATTERNS = [
 DEFAULT_WARN_PATTERNS = [
     r"\[(?:WARN|WARNING)\]",
     r"(?:^|\s)(?:WARN|WARNING)\s*[:：]",
+    r"(?:^|\s)WARN\s+\d+\s+---\s",
     r"警告",
 ]
 
