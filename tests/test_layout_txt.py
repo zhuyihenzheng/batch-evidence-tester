@@ -378,7 +378,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         self.assertEqual(sheet, "帳票定義")
         self.assertEqual(fields[0].value, "")
         self.assertEqual(fields[0].attribute_flag, "")
-        self.assertEqual(fields[0].coordinates, "1,2,3,4")
+        self.assertEqual(fields[0].coordinates, "")
         self.assertEqual(fields[1].attribute_flag, "7")
 
     def test_field_defaults_sheet_updates_existing_instance_without_duplicate(self):
@@ -640,6 +640,20 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
             values,
             ["1001", "1", "8", "5/8/6/10|5/8/6/11", "0", "430,10,480,60"])
 
+    def test_empty_screen_ocr_value_clears_coordinates(self):
+        out = self.tmp / "empty_ocr"
+        generate_layout_txt(
+            self.book, out, selected_form_ids=["1001"], selected_rows=[3],
+            field_overrides={
+                3: {"value": "", "coordinates": "1,2,3,4"},
+            },
+            error_patterns="none", filename_template="EMPTY_OCR",
+            generate_tif=False)
+        values = next(csv.reader([
+            (out / "EMPTY_OCR.txt").read_text(encoding="cp932").strip()]))
+        self.assertEqual(values[3], "")
+        self.assertEqual(values[5], "")
+
     def test_tar_only_contains_txt_and_tif_without_loose_files(self):
         out = self.tmp / "tar_only"
         result = generate_layout_txt(
@@ -753,6 +767,8 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         raw = (out / "4001_08_attribute_mixed_1_2.txt").read_text(encoding="cp932")
         values = next(csv.reader([raw.strip()]))
         self.assertEqual(values[4::4], ["0", "1", "2", "1,2"])
+        self.assertEqual(values[3::4][2], "")
+        self.assertEqual(values[5::4][2], "")
         self.assertIn('"1,2"', raw)
 
     def test_filename_template_and_matching_tif(self):

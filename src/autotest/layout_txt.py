@@ -763,6 +763,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                                      _coordinate_value(coordinates, coordinate_index))
                 if use_saved_coordinates and "coordinates" in saved_field:
                     field_coordinates = saved_field["coordinates"]
+                if value == "":
+                    field_coordinates = ""
 
                 fields.append(LayoutField(
                     form_id=form_id, layout_id=layout_id,
@@ -1301,6 +1303,10 @@ def _make_pattern_case(source_form_id: str, base_fields: Sequence[LayoutField],
     else:
         raise LayoutTxtError("未対応のエラーPatternです: %s" % pattern)
 
+    for field in fields:
+        if field.value == "":
+            field.coordinates = ""
+
     # Normal output must retain explicit Excel/GUI coordinates, including duplicates.
     if pattern != "normal":
         _deduplicate_coordinates(fields)
@@ -1577,6 +1583,8 @@ def _filter_and_override_fields(
             for name in ("field_id", "value", "attribute_flag", "coordinates"):
                 if name in values:
                     setattr(field, name, str(values[name]))
+        if field.value == "":
+            field.coordinates = ""
         result.append(field)
     if not result:
         raise LayoutTxtError("指定条件に一致する出力項目がありません。")
