@@ -5,26 +5,125 @@ from collections import OrderedDict
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .layout_templates import list_templates, save_template, load_template, delete_template
+from .layout_templates import (list_templates, save_template, load_template,
+                               scan_template_folder, export_template_batch)
 
 
 class TemplateGuiMixin(object):
     def _build_template_controls(self, parent):
         from .layout_txt_gui import _wrap_controls
         self.template_path = None
+        self.template_name = ''
+        self.template_legacy = False
         self.template_mode = False
         self.editor_states = {}
         self.displayed_form = None
         frame = ttk.Frame(parent)
         frame.grid(row=5, column=0, columnspan=8, sticky='we', pady=(6, 0))
-        ttk.Button(frame, text='テンプレートExcel...', command=self._choose_template).pack(side='left')
-        self.template_box = ttk.Combobox(frame, state='readonly', width=20)
-        self.template_box.pack(side='left', padx=5)
+        ttk.Button(frame, text='テンプレートを開く...', command=self._choose_template).pack(side='left')
+        ttk.Button(frame, text='フォルダから選択...', command=self._choose_template_folder).pack(side='left')
         for text, command in (
-                ('読込', self._load_template), ('新規保存', self._new_template),
-                ('上書き保存', self._save_template), ('削除', self._delete_template)):
+                ('再読込', self._load_template), ('名前を付けて保存...', self._new_template),
+                ('保存', self._save_template)):
             ttk.Button(frame, text=text, command=command).pack(side='left', padx=2)
+        self.template_label = ttk.Label(frame, text='テンプレート: 未選択')
+        self.template_label.pack(side='left', padx=5)
         _wrap_controls(frame)
+
+    def _choose_template_folder(self):
+        chosen = filedialog.askdirectory(parent=self.root, title='テンプレートフォルダを選択')
+        if chosen:
+            self._show_template_folder(Path(chosen))
+
+    def _show_template_folder(self, folder):
+        import tkinter as tk
+        from .layout_txt_gui import _wrap_controls
+        try:
+            entries, errors = scan_template_folder(folder)
+        except Exception as exc:
+            messagebox.showerror('フォルダ読込エラー', str(exc), parent=self.root)
+            return
+        previous = getattr(self, 'template_browser', None)
+        if previous is not None and previous.winfo_exists():
+            previous.destroy()
+        window = tk.Toplevel(self.root)
+        self.template_browser = window
+        window.title('テンプレート一覧 — Ctrl/Shiftで複数選択')
+        window.geometry('%dx%d' % (min(850, self.root.winfo_screenwidth() - 40),
+                                   min(520, self.root.winfo_screenheight() - 100)))
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+        ttk.Label(window, text=str(folder), wraplength=600).grid(
+            row=0, column=0, sticky='we', padx=8, pady=8)
+        table_frame = ttk.Frame(window)
+        table_frame.grid(row=1, column=0, sticky='nsew', padx=8)
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+        tree = ttk.Treeview(table_frame, columns=('file', 'name'), show='headings',
+                            selectmode='extended')
+        self.template_list = tree
+        self.template_entries = entries
+        tree.heading('file', text='テンプレートExcel')
+        tree.heading('name', text='テンプレート名（旧形式は複数行）')
+        tree.column('file', width=360, minwidth=120)
+        tree.column('name', width=260, minwidth=120)
+        tree.grid(row=0, column=0, sticky='nsew')
+        bar = ttk.Scrollbar(table_frame, orient='vertical', command=tree.yview)
+        bar.grid(row=0, column=1, sticky='ns')
+        tree.configure(yscrollcommand=bar.set)
+        for index, (path, name) in enumerate(entries):
+            tree.insert('', 'end', iid=str(index), values=(path.name, name))
+        controls = ttk.Frame(window)
+        controls.grid(row=2, column=0, sticky='we', padx=8, pady=8)
+        for label, command in (
+                ('全選択', lambda: tree.selection_set(tree.get_children(''))),
+                ('選択解除', lambda: tree.selection_remove(tree.selection())),
+                ('1件を編集', self._open_selected_template),
+                ('選択TXT一括出力', lambda: self._export_selected_templates('txt')),
+                ('選択CSV一括出力', lambda: self._export_selected_templates('csv')),
+                ('再読込', lambda: self._show_template_folder(folder))):
+            ttk.Button(controls, text=label, command=command).pack(side='left', padx=2)
+        _wrap_controls(controls)
+        tree.bind('<Double-1>', lambda _event: self._open_selected_template())
+        ttk.Label(window, text='%d件 / 読込対象外%dファイル。選択した保存済みテンプレートを別々のフォルダへ出力します。'
+                  % (len(entries), len(errors)), wraplength=600).grid(
+                      row=3, column=0, sticky='we', padx=8, pady=(0, 8))
+        if errors:
+            messagebox.showwarning('読込対象外のExcel', '\n'.join(
+                '%s: %s' % (path.name, reason) for path, reason in errors), parent=window)
+
+    def _selected_templates(self):
+        selected = set(self.template_list.selection())
+        return [self.template_entries[int(iid)] for iid in self.template_list.get_children('')
+                if iid in selected]
+
+    def _open_selected_template(self):
+        entries = self._selected_templates()
+        if len(entries) != 1:
+            messagebox.showwarning('テンプレート選択', '編集するテンプレートを1件選択してください。\n'
+                                   '複数選択時は一括出力できます。', parent=self.template_browser)
+            return
+        self._load_template(path=entries[0][0], name=entries[0][1])
+
+    def _export_selected_templates(self, mode):
+        entries = self._selected_templates()
+        if not entries:
+            messagebox.showwarning('テンプレート選択', 'テンプレートを選択してください。', parent=self.template_browser)
+            return
+        output = filedialog.askdirectory(parent=self.template_browser, title='一括出力先を選択')
+        if not output:
+            return
+        self.status_var.set('%d件の保存済みテンプレートを一括出力中...' % len(entries))
+        self.root.update_idletasks()
+        try:
+            result = export_template_batch(entries, output, mode)
+        except Exception as exc:
+            self.status_var.set('一括出力できませんでした: %s' % exc)
+            messagebox.showerror('テンプレート一括出力エラー', str(exc), parent=self.template_browser)
+            return
+        self.status_var.set('一括出力完了: %d件 / %s' % (len(entries), result))
+        messagebox.showinfo('テンプレート一括出力完了', '%d件を個別フォルダへ出力しました。\n\n%s'
+                            % (len(entries), result), parent=self.template_browser)
 
     def _choose_template(self):
         chosen = filedialog.askopenfilename(parent=self.root, title='テンプレートExcelを選択',
@@ -33,13 +132,24 @@ class TemplateGuiMixin(object):
             return
         try:
             names = list_templates(chosen)
+            if not names:
+                raise ValueError('テンプレートがありません。')
         except Exception as exc:
             messagebox.showerror('テンプレート読込エラー', str(exc), parent=self.root)
             return
-        self.template_path = Path(chosen)
-        self.template_box.configure(values=names)
-        self.template_box.set(names[0] if names else '')
-        self.status_var.set('テンプレートExcel: %s / 名前を選んで「読込」を押してください。' % chosen)
+        name = names[0]
+        if len(names) > 1:
+            from tkinter import simpledialog
+            number = simpledialog.askinteger(
+                '旧形式テンプレートの読込',
+                '読み込むテンプレートの番号を入力してください。\n'
+                '読込後「名前を付けて保存」で個別ファイルにできます。\n\n' +
+                '\n'.join('%d: %s' % (index, value) for index, value in enumerate(names, 1)),
+                minvalue=1, maxvalue=len(names), parent=self.root)
+            if number is None:
+                return
+            name = names[number - 1]
+        self._load_template(path=Path(chosen), name=name)
 
     def _capture_editor(self):
         self._finish_cell_edit(save=True)
@@ -64,28 +174,25 @@ class TemplateGuiMixin(object):
         return result
 
     def _new_template(self):
-        from tkinter import simpledialog
-        name = simpledialog.askstring('新規テンプレート', 'テンプレート名:', parent=self.root)
-        if name:
-            self._save_template(name=name.strip())
+        self._save_template(save_as=True)
 
-    def _save_template(self, name=None):
+    def _save_template(self, name=None, save_as=False):
         from .layout_txt_gui import SETTING_VARIABLE_NAMES
-        overwrite = name is None
-        name = self.template_box.get() if name is None else name
-        if not name:
-            messagebox.showwarning('テンプレート', '「新規保存」で名前を指定してください。', parent=self.root)
-            return
-        if self.template_path is None:
+        target = self.template_path
+        if target is None or save_as or self.template_legacy:
             chosen = filedialog.asksaveasfilename(
-                parent=self.root, title='テンプレートExcelの保存先',
-                defaultextension='.xlsx', initialfile='出力テンプレート.xlsx',
+                parent=self.root, title='1テンプレート1ファイルで保存',
+                defaultextension='.xlsx', initialfile=(
+                    self.template_path.name if self.template_path and not self.template_legacy
+                    else '出力テンプレート.xlsx'),
                 filetypes=(('Excelテンプレート', '*.xlsx'),))
             if not chosen:
                 return
-            self.template_path = Path(chosen)
+            target = Path(chosen)
+        name = name or target.stem
+        overwrite = target.exists()
         if overwrite and not messagebox.askyesno(
-                'テンプレート上書き', '%s を現在の設定で上書きしますか？' % name, parent=self.root):
+                'テンプレート上書き', '%s を現在の設定で上書きしますか？' % target, parent=self.root):
             return
         try:
             self._finish_package_cell_edit(save=True)
@@ -96,12 +203,13 @@ class TemplateGuiMixin(object):
             settings['form_var'] = self.form_var.get()
             # Excel内の説明列は手編集時の案内として使う。
             descriptions = self._setting_descriptions()
-            save_template(self.template_path, name, settings, fields,
+            save_template(target, name, settings, fields,
                           [(self.package_items[iid], self.package_tree.set(iid, 'include'))
                            for iid in self.package_tree.get_children('')],
-                          descriptions=descriptions, overwrite=overwrite)
-            self.template_box.configure(values=list_templates(self.template_path))
-            self.template_box.set(name)
+                          descriptions=descriptions, overwrite=overwrite, single_file=True)
+            self.template_path, self.template_name = target, name
+            self.template_legacy = False
+            self.template_label.configure(text='テンプレート: ' + target.name)
             self.status_var.set('テンプレート保存完了: %s / %s' % (self.template_path, name))
             messagebox.showinfo('テンプレート保存完了',
                                 'Excelの各セルを編集できます。\n画像資材フォルダも一緒に保管してください。\n\n%s'
@@ -150,13 +258,18 @@ class TemplateGuiMixin(object):
         visit(self.root)
         return descriptions
 
-    def _load_template(self):
+    def _load_template(self, path=None, name=None):
         from .layout_txt_gui import (SETTING_VARIABLE_NAMES, PROFILE_LABELS,
                                      DATE_MODE_LABELS, CSV_STYLE_LABELS)
-        if self.template_path is None or not self.template_box.get():
+        path = Path(path) if path is not None else self.template_path
+        if path is None:
             return
         try:
-            settings, fields, packages = load_template(self.template_path, self.template_box.get())
+            names = list_templates(path)
+            name = name or (names[0] if len(names) == 1 else self.template_name)
+            if name not in names:
+                raise ValueError('テンプレートを開き直してください。')
+            settings, fields, packages = load_template(path, name)
             allowed = set(SETTING_VARIABLE_NAMES) | {'form_var'}
             if set(settings) - allowed or set(SETTING_VARIABLE_NAMES) - set(settings):
                 raise ValueError('テンプレート設定キーに不足または未対応の項目があります。')
@@ -213,19 +326,8 @@ class TemplateGuiMixin(object):
             self.package_items[iid] = item
             self.package_tree.insert('', 'end', iid=iid, values=self._package_values(item, include))
         self.template_mode = True
+        self.template_path, self.template_name = path, name
+        self.template_legacy = len(names) > 1
+        self.template_label.configure(text='テンプレート: ' + path.name)
         self.status_var.set('テンプレート読込完了: %s / %d画像。出力OCRの編集はExcelで変更後、再読込してください。'
-                            % (self.template_box.get(), len(packages)))
-
-    def _delete_template(self):
-        name = self.template_box.get()
-        if self.template_path is None or not name:
-            return
-        if not messagebox.askyesno('テンプレート削除', '%s を削除しますか？' % name, parent=self.root):
-            return
-        try:
-            delete_template(self.template_path, name)
-            self.template_box.configure(values=list_templates(self.template_path))
-            self.template_box.set('')
-            self.status_var.set('テンプレートを削除しました。画像資材は保管されています。')
-        except Exception as exc:
-            messagebox.showerror('テンプレート削除エラー', str(exc), parent=self.root)
+                            % (path.name, len(packages)))

@@ -5,7 +5,9 @@ import csv
 import hashlib
 import io
 import os
+import shutil
 import tempfile
+from datetime import datetime
 from collections import OrderedDict
 from pathlib import Path
 
@@ -13,8 +15,9 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from .layout_txt import LayoutField, _atomic_write
-from .layout_tar import PackageItem, _form_records, format_extra_fields, parse_extra_fields
+from .layout_txt import LayoutField, _atomic_write, generate_layout_txt
+from .layout_tar import (PackageItem, _form_records, format_extra_fields, parse_extra_fields,
+                         build_image_tar, format_package_tar_name, parse_manifest_columns)
 
 
 class TemplateError(ValueError):
@@ -92,6 +95,94 @@ def list_templates(path):
         wb.close()
 
 
+def scan_template_folder(folder):
+    """同じフォルダのExcelだけを検査し、読めないファイルも理由付きで返す。"""
+    entries, errors = [], []
+    for path in sorted(Path(folder).iterdir(), key=lambda p: p.name.lower()):
+        if not path.is_file() or path.suffix.lower() != '.xlsx' or path.name.startswith('~$'):
+            continue
+        try:
+            names = list_templates(path)
+            if not names:
+                raise TemplateError('テンプレートがありません。')
+            entries.extend((path, name) for name in names)
+        except Exception as exc:
+            errors.append((path, str(exc)))
+    return entries, errors
+
+
+def export_template_batch(entries, output_dir, mode):
+    """各テンプレートを独立出力し、全件成功したときだけ結果フォルダを公開する。"""
+    if mode not in ('txt', 'csv') or not entries:
+        raise TemplateError('テンプレートと出力形式を選択してください。')
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(
+        prefix='.templates_' + datetime.now().strftime('%Y%m%d_%H%M%S_'), dir=str(output_dir)))
+    published = False
+    try:
+        for index, (path, name) in enumerate(entries, 1):
+            path = Path(path)
+            try:
+                settings, fields, packages = load_template(path, name)
+                destination = staging / ('%03d_%s' % (index, path.stem))
+                # 保存元の出力先や上書き指定は使わず、この実行専用フォルダへ出す。
+                encoding = settings.get('encoding_var', 'cp932')
+                csv_encoding = settings.get('manifest_encoding_var', 'cp932')
+                for key in ('split_var', 'generate_tif_var', 'create_tar_var', 'tar_only_var'):
+                    if key in settings and not isinstance(settings[key], bool):
+                        raise TemplateError('設定の型が不正です: %s' % key)
+                if encoding not in ('cp932', 'utf-8-sig', 'utf-8') or csv_encoding not in ('cp932', 'utf-8-sig', 'utf-8'):
+                    raise TemplateError('文字コードが未対応です。')
+                if not packages and mode == 'txt':
+                    selected = [field for field, include in fields if include == '1']
+                    generate_layout_txt(
+                        Path(settings.get('excel_var') or path.stem), destination,
+                        prepared_fields=selected, error_patterns='none',
+                        filename_template=settings.get('filename_template_var', '{form_id}'),
+                        encoding=encoding, split_by_form=settings.get('split_var', True),
+                        generate_tif=settings.get('generate_tif_var', True),
+                        create_tar=settings.get('create_tar_var', True) or settings.get('tar_only_var', False),
+                        tar_only=settings.get('tar_only_var', False),
+                        tar_name=settings.get('tar_name_var', '{source}_layout_data'))
+                    continue
+                items = [item for item, include in packages if include == '1']
+                if not items:
+                    raise TemplateError('出力対象の画像がありません。出力リストを保存してください。')
+                style_label = settings.get('manifest_style_var', '固定10列（画像ごと・ヘッダーなし）')
+                styles = {'固定10列（画像ごと・ヘッダーなし）': 'image_list',
+                          'カスタム列（1件ごと・ヘッダーあり）': 'custom'}
+                if mode == 'csv' and style_label not in styles:
+                    raise TemplateError('CSV形式が未対応です。')
+                style = styles.get(style_label, 'image_list')
+                columns = (parse_manifest_columns(settings.get('manifest_columns_var', ''))
+                           if mode == 'csv' and style == 'custom' else None)
+                if mode == 'csv' and style == 'custom' and not columns:
+                    raise TemplateError('カスタムCSV列が空です。')
+                source = Path(settings['excel_var']).stem if settings.get('excel_var') else 'images'
+                tar_name = format_package_tar_name(
+                    settings.get('tar_name_var', '{source}_layout_data'),
+                    settings.get('package_tar_name_var', 'image_package'), mode == 'csv',
+                    source, [item.form_id for item in items])
+                build_image_tar(
+                    items, destination, tar_name, include_recognition_txt=mode == 'txt',
+                    include_manifest_csv=mode == 'csv',
+                    manifest_name=settings.get('manifest_name_var', 'file_list.csv'),
+                    manifest_columns=columns, manifest_style=style,
+                    text_encoding=encoding, csv_encoding=csv_encoding)
+            except Exception as exc:
+                raise TemplateError('%s / %s: %s' % (path.name, name, exc))
+        final = output_dir / staging.name[1:]
+        if final.exists():
+            raise TemplateError('出力先が存在します。再実行してください: %s' % final)
+        staging.rename(final)
+        published = True
+        return final
+    finally:
+        if not published:
+            shutil.rmtree(str(staging))
+
+
 def _cell(ws, row, column, value):
     text = str(value)
     if len(text) > 32767:
@@ -149,7 +240,8 @@ def _asset(path, payload, extension):
     return relative.as_posix()
 
 
-def save_template(path, name, settings, fields, packages, descriptions=None, overwrite=False):
+def save_template(path, name, settings, fields, packages, descriptions=None, overwrite=False,
+                  single_file=True):
     path = Path(path)
     name = name.strip()
     if not name:
@@ -164,9 +256,15 @@ def save_template(path, name, settings, fields, packages, descriptions=None, ove
         finally:
             wb.close()
     exists = any(row[0] == name for rows in tables.values() for row in rows)
+    if single_file:
+        names = set(row[0] for rows in tables.values() for row in rows)
+        if len(names) > 1:
+            raise TemplateError('旧形式の複数テンプレートExcelには上書きできません。別のファイル名で保存してください。')
+        exists = bool(names)
     if exists and not overwrite:
         raise TemplateError('同名テンプレートがあります: %s' % name)
-    tables = {title: [r for r in rows if r[0] != name] for title, rows in tables.items()}
+    tables = {title: [] if single_file else [r for r in rows if r[0] != name]
+              for title, rows in tables.items()}
     settings = dict(settings)
     settings['template_version'] = '1'
     for key, value in sorted(settings.items()):

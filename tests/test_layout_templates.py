@@ -10,12 +10,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
 
 from autotest.layout_templates import (TemplateError, save_template, load_template,
-                                      list_templates, delete_template)
+                                      list_templates, delete_template,
+                                      scan_template_folder, export_template_batch)
 from autotest.layout_tar import PackageItem, build_image_tar
 from autotest.layout_txt import LayoutField, generate_layout_txt
 
@@ -42,7 +43,96 @@ class TemplateTests(unittest.TestCase):
         self.temp.cleanup()
 
     def save(self, name='正常', overwrite=False):
-        save_template(self.path, name, self.settings, [self.field], [(self.item, '0')], overwrite=overwrite)
+        # 旧形式の互換性を検査するため、このヘルパーだけ複数テンプレートを許可する。
+        save_template(self.path, name, self.settings, [self.field], [(self.item, '0')],
+                      overwrite=overwrite, single_file=False)
+
+    def test_single_file_save_replaces_one_template_and_keeps_other_files(self):
+        first = self.root / '正常.xlsx'
+        second = self.root / '空値.xlsx'
+        save_template(first, '正常', self.settings, [self.field], [(self.item, '1')])
+        first_bytes = first.read_bytes()
+        self.field['value'] = ''
+        save_template(second, '空値', self.settings, [self.field], [(self.item, '0')])
+        self.assertEqual(first.read_bytes(), first_bytes)
+        self.assertEqual(list_templates(first), ['正常'])
+        self.assertEqual(list_templates(second), ['空値'])
+        save_template(second, '変更後', self.settings, [self.field], [(self.item, '0')], overwrite=True)
+        self.assertEqual(list_templates(second), ['変更後'])
+        wb = load_workbook(str(second))
+        self.assertEqual(wb['編集項目'].max_row, 2)
+        wb.close()
+        shutil.rmtree(str(self.root / '正常_assets'))
+        self.assertEqual(load_template(second, '変更後')[2][0][0].front_payload(), b'front')
+
+    def test_single_file_refuses_to_overwrite_legacy_multiple_templates(self):
+        self.save('正常')
+        self.save('空値')
+        before = self.path.read_bytes()
+        with self.assertRaises(TemplateError):
+            save_template(self.path, '新規', self.settings, [self.field], [], overwrite=True)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_folder_scan_lists_templates_and_reports_other_excel(self):
+        self.save('正常')
+        self.save('空値')
+        wb = Workbook()
+        wb.save(str(self.root / 'other.xlsx'))
+        wb.close()
+        (self.root / '~$locked.xlsx').write_bytes(b'lock')
+        (self.root / 'subdir').mkdir()
+        entries, errors = scan_template_folder(self.root)
+        self.assertEqual(entries, [(self.path, '正常'), (self.path, '空値')])
+        self.assertEqual([p.name for p, _reason in errors], ['other.xlsx'])
+
+    def test_batch_outputs_keep_individual_csv_settings_and_names(self):
+        first, second = self.root / 'a.xlsx', self.root / 'b.xlsx'
+        for path, value in ((first, '0001'), (second, '0002')):
+            self.item.scan_batch_id = value
+            save_template(path, path.stem, {
+                'package_tar_name_var': 'same', 'manifest_name_var': 'list.csv',
+                'manifest_style_var': '固定10列（画像ごと・ヘッダーなし）',
+                'manifest_encoding_var': 'utf-8',
+            }, [self.field], [(self.item, '1')])
+        entries = [(first, 'a'), (second, 'b')]
+        result = export_template_batch(entries, self.root / 'out', 'csv')
+        for index, (name, value) in enumerate((('a', '0001'), ('b', '0002')), 1):
+            with tarfile.open(str(result / ('%03d_%s' % (index, name)) / 'same.tar')) as tar:
+                content = tar.extractfile('list.csv').read().decode('utf-8')
+                self.assertEqual(next(csv.reader(io.StringIO(content)))[0], value)
+                self.assertNotIn(self.item.front_recognition_name, tar.getnames())
+        again = export_template_batch(entries, self.root / 'out', 'txt')
+        self.assertNotEqual(result, again)
+        with tarfile.open(str(next((again / '001_a').glob('*.tar')))) as tar:
+            self.assertEqual(tar.extractfile(self.item.front_recognition_name).read().decode('cp932'),
+                             self.item.front_recognition_text.replace('\r\n', '\n').replace('\n', '\r\n'))
+
+    def test_failed_batch_does_not_publish_partial_results(self):
+        self.save()
+        # 最初のテンプレートは成功し、2件目の画像読み取りで失敗する。
+        second = self.root / 'broken.xlsx'
+        save_template(second, 'broken', self.settings, [self.field], [(self.item, '1')])
+        for path in (self.root / 'broken_assets').iterdir():
+            path.unlink()
+        good = self.root / 'good.xlsx'
+        save_template(good, 'good', self.settings, [self.field], [(self.item, '1')])
+        output = self.root / 'out'
+        output.mkdir()
+        (output / 'existing.txt').write_text('keep', encoding='utf-8')
+        with self.assertRaises(TemplateError) as error:
+            export_template_batch([(good, 'good'), (second, 'broken')], output, 'txt')
+        self.assertIn('broken.xlsx', str(error.exception))
+        self.assertEqual([p.name for p in output.iterdir()], ['existing.txt'])
+
+    def test_batch_direct_txt_without_output_list(self):
+        self.field['include'] = '1'
+        save_template(self.path, 'direct', {'generate_tif_var': False, 'create_tar_var': False,
+                                          'encoding_var': 'utf-8'}, [self.field], [])
+        result = export_template_batch([(self.path, 'direct')], self.root / 'out', 'txt')
+        text = (result / '001_templates' / '1001.txt').read_text(encoding='utf-8')
+        self.assertEqual(next(csv.reader(io.StringIO(text)))[3], '=001\n 値 ')
+        with self.assertRaises(TemplateError):
+            export_template_batch([(self.path, 'direct')], self.root / 'out', 'csv')
 
     def test_roundtrip_preserves_values_and_tar_members(self):
         self.save()

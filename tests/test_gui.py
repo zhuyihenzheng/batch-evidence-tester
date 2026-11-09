@@ -302,6 +302,47 @@ class LayoutTemplateGuiCase(unittest.TestCase):
                 self.assertEqual(app.package_items['package_00001'].form_id, '777')
                 self.assertEqual(app.package_tree.set('package_00001', 'include'), '0')
                 self.assertTrue(app.template_mode)
+                # 別名保存は既存ファイルへ追加せず、別ファイルと画像資材を作る。
+                original = app.template_path
+                original_bytes = original.read_bytes()
+                new_path = Path(directory) / '別テンプレート.xlsx'
+                with mock.patch.object(layout_txt_gui.filedialog, 'asksaveasfilename',
+                                       return_value=str(new_path)), \
+                        mock.patch.object(layout_txt_gui.messagebox, 'showinfo'), \
+                        mock.patch.object(layout_txt_gui.messagebox, 'showerror') as error:
+                    app._new_template()
+                    error.assert_not_called()
+                self.assertEqual(app.template_path, new_path)
+                self.assertEqual(original.read_bytes(), original_bytes)
+                from autotest.layout_templates import list_templates
+                self.assertEqual(list_templates(new_path), ['別テンプレート'])
+                # ファイル選択だけで読込に進み、取消時は現在の保存先を変えない。
+                with mock.patch.object(layout_txt_gui.filedialog, 'askopenfilename',
+                                       return_value=str(original)), \
+                        mock.patch.object(layout_txt_gui.messagebox, 'askyesno', return_value=False):
+                    app._choose_template()
+                self.assertEqual(app.template_path, new_path)
+                with mock.patch.object(layout_txt_gui.filedialog, 'askopenfilename',
+                                       return_value=str(original)), \
+                        mock.patch.object(layout_txt_gui.messagebox, 'askyesno', return_value=True), \
+                        mock.patch.object(layout_txt_gui.messagebox, 'showerror') as error:
+                    app._choose_template()
+                    error.assert_not_called()
+                self.assertEqual(app.template_path, original)
+                self.assertEqual(app.tree.set('3:1', 'value'), '編集後')
+                app._show_template_folder(Path(directory))
+                app.template_browser.withdraw()
+                self.assertEqual(len(app.template_entries), 2)
+                app.template_list.selection_set(app.template_list.get_children(''))
+                self.assertEqual(len(app._selected_templates()), 2)
+                with mock.patch.object(layout_txt_gui.filedialog, 'askdirectory',
+                                       return_value=str(Path(directory) / 'batch')), \
+                        mock.patch('autotest.layout_template_gui.export_template_batch',
+                                   return_value=Path(directory) / 'batch') as export, \
+                        mock.patch.object(layout_txt_gui.messagebox, 'showinfo'):
+                    app._export_selected_templates('txt')
+                self.assertEqual(len(export.call_args[0][0]), 2)
+                self.assertEqual(export.call_args[0][2], 'txt')
                 root.update()
             finally:
                 root.destroy()
