@@ -313,6 +313,7 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
 
 
 def _serial_coordinates(index: int) -> str:
+    # 取込形式は X,Y,幅,高さ。末尾2値は右下座標ではない。
     column = index % AUTO_COORDINATE_COLUMNS
     row = index // AUTO_COORDINATE_COLUMNS
     left = AUTO_COORDINATE_MARGIN + column * (
@@ -320,7 +321,7 @@ def _serial_coordinates(index: int) -> str:
     top = AUTO_COORDINATE_MARGIN + row * (
         AUTO_COORDINATE_SIZE + AUTO_COORDINATE_GAP)
     return "%d,%d,%d,%d" % (
-        left, top, left + AUTO_COORDINATE_SIZE, top + AUTO_COORDINATE_SIZE)
+        left, top, AUTO_COORDINATE_SIZE, AUTO_COORDINATE_SIZE)
 
 
 def _coordinate_value(coordinates: str, index: int) -> str:
@@ -1808,7 +1809,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attribute-flag", default="0", help="項目毎の属性フラグ（既定: 0）")
     parser.add_argument(
         "--coordinates", default="auto",
-        help="Excel座標が空の場合の座標情報（既定: autoでFORM毎に末尾を連番）")
+        help="Excel座標が空の場合のX,Y,幅,高さ（既定: autoで50×50、10項目ごとに改行）")
     parser.add_argument("--lf", action="store_true", help="改行を CRLF ではなく LF にする")
     return parser
 

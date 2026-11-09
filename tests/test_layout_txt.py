@@ -39,7 +39,7 @@ def expected_auto_coordinates(index):
     row = index // 10
     left = 10 + column * 60
     top = 10 + row * 60
-    return "%d,%d,%d,%d" % (left, top, left + 50, top + 50)
+    return "%d,%d,50,50" % (left, top)
 
 
 class LayoutWorkbookCase(unittest.TestCase):
@@ -172,9 +172,11 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             [field.coordinates for field in fields],
             ([expected_auto_coordinates(index) for index in range(52)] +
              [expected_auto_coordinates(index) for index in range(4)]))
-        self.assertEqual(fields[0].coordinates, "10,10,60,60")
-        self.assertEqual(fields[9].coordinates, "550,10,600,60")
-        self.assertEqual(fields[10].coordinates, "10,70,60,120")
+        self.assertEqual(fields[0].coordinates, "10,10,50,50")
+        self.assertEqual(fields[9].coordinates, "550,10,50,50")
+        self.assertEqual(fields[10].coordinates, "10,70,50,50")
+        for field in fields:
+            self.assertEqual(field.coordinates.split(',')[2:], ['50', '50'])
 
     def test_column_can_be_selected_by_header_or_letter(self):
         fields, _sheet, _header, columns = read_layout_fields(
@@ -239,7 +241,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
                 fields, _sheet, _header, columns = read_layout_fields(self.book)
                 self.assertEqual(columns["coordinates"], 18)
                 self.assertEqual(fields[0].coordinates, "10,20,30,40")
-                self.assertEqual(fields[1].coordinates, "70,10,120,60")
+                self.assertEqual(fields[1].coordinates, "70,10,50,50")
                 self.assertEqual(
                     [field.coordinates for field in fields[6:52]],
                     ["50,60,70,80"] * 46)
@@ -256,7 +258,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             self.assertEqual(fields[0].coordinates, "10,20,30,40")
             self.assertEqual(fields[1].coordinates, "9,8,7,6")
         fields, _, _, _ = read_layout_fields(self.book, coordinates_column="none")
-        self.assertEqual(fields[0].coordinates, "10,10,60,60")
+        self.assertEqual(fields[0].coordinates, "10,10,50,50")
 
     def test_normal_output_preserves_excel_coordinates_and_screen_overrides(self):
         wb = load_workbook(str(self.book))
@@ -454,8 +456,8 @@ class TestReadLayoutFields(LayoutWorkbookCase):
              "5/8/6/1|5/8/6/2"])
         self.assertEqual(sum("|" in field.value for field in fields), 11)
         self.assertEqual(len(set(field.coordinates for field in fields)), 46)
-        self.assertEqual(fields[0].coordinates, "10,10,60,60")
-        self.assertEqual(fields[-1].coordinates, "310,250,360,300")
+        self.assertEqual(fields[0].coordinates, "10,10,50,50")
+        self.assertEqual(fields[-1].coordinates, "310,250,50,50")
 
         output = self.tmp / "46_calendar_output"
         generate_layout_txt(
@@ -573,7 +575,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
                 self.assertEqual(image.size, (1654, 2339))
         self.assertEqual(
             next(csv.reader([front_text.strip()])),
-            ["1001", "1", "1", "正面テスト", "0", "10,10,60,60"])
+            ["1001", "1", "1", "正面テスト", "0", "10,10,50,50"])
 
         with self.assertRaises(LayoutTxtError):
             render_form_tif_payload(fields, "1001", side="unknown")
@@ -622,7 +624,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(
             text,
             '"1001","1","9901","画面修正値","2","1,2,3,4",'
-            '"2","9","0","70,10,120,60"\n')
+            '"2","9","0","70,10,50,50"\n')
 
     def test_one_expanded_calendar_occurrence_can_be_edited(self):
         out = self.tmp / "calendar_edit"
@@ -638,7 +640,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
             (out / "CALENDAR_EDIT.txt").read_text(encoding="cp932").strip()]))
         self.assertEqual(
             values,
-            ["1001", "1", "8", "5/8/6/10|5/8/6/11", "0", "430,10,480,60"])
+            ["1001", "1", "8", "5/8/6/10|5/8/6/11", "0", "430,10,50,50"])
 
     def test_empty_screen_ocr_value_clears_coordinates(self):
         out = self.tmp / "empty_ocr"

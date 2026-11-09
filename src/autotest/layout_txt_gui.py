@@ -640,6 +640,7 @@ class LayoutTxtGui(TemplateGuiMixin):
         _wrap_description(
             selector,
             text="出力/OCR値/属性/FIELD_ID/座標はダブルクリックで編集できます。"
+                 " 座標はX,Y,幅,高さ（例: 10,10,50,50）です。"
                  " 保存ボタンは表示中FORMのOCR・属性・座標を「項目既定値」Sheetへ書き込みます。",
             foreground="#666").grid(row=3, column=0, columnspan=7, sticky="w", pady=(5, 0))
 
