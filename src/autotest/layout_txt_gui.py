@@ -15,11 +15,10 @@ except ImportError as exc:  # pragma: no cover - GUI無し環境
     raise SystemExit("画面を開けません（tkinterが見つかりません）: %s" % exc)
 
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
-
 from .layout_naming import with_random_prefix
 
 from .layout_txt import (
+    FIELD_DEFAULTS_SHEET,
     LayoutTxtError,
     _print_result,
     generate_layout_txt,
@@ -27,7 +26,7 @@ from .layout_txt import (
     render_form_tif_payload,
     render_form_txt_text,
     resolve_form_filename_stem,
-    save_layout_default_values,
+    save_layout_field_defaults,
 )
 from .layout_tar import (
     IMAGE_EXTENSIONS,
@@ -164,7 +163,7 @@ SETTING_VARIABLE_NAMES = (
     "type_col_var", "ime_col_var", "max_col_var",
     "input_attribute_col_var", "input_rule_col_var", "notes_col_var",
     "output_example_col_var", "default_value_col_var", "coordinates_col_var", "use_default_value_var",
-    "profile_var", "date_mode_var",
+    "profile_var", "date_mode_var", "attribute_flag_var",
     "coverage_form_var", "error_pattern_var", "filename_template_var",
     "generate_tif_var", "create_tar_var", "tar_only_var", "tar_name_var",
     "format_var", "encoding_var", "split_var", "overwrite_var",
@@ -252,6 +251,7 @@ class LayoutTxtGui(object):
         self.use_default_value_var = tk.BooleanVar(value=True)
         self.profile_var = tk.StringVar(value=PROFILE_LABELS[0][0])
         self.date_mode_var = tk.StringVar(value=DATE_MODE_LABELS[0][0])
+        self.attribute_flag_var = tk.StringVar(value="0")
         self.coverage_form_var = tk.StringVar(value="4001")
         self.error_pattern_var = tk.StringVar(value=ERROR_PATTERN_LABELS[0][0])
         self.filename_template_var = tk.StringVar(value="{form_id}")
@@ -489,13 +489,13 @@ class LayoutTxtGui(object):
             foreground="#666").grid(
                 row=4, column=0, columnspan=8, sticky="w", pady=(6, 0))
         ttk.Checkbutton(
-            columns_frame, text="ExcelのOCR既定値を使用",
+            columns_frame, text="ExcelのOCR既定値を使用（項目既定値Sheet含む）",
             variable=self.use_default_value_var,
             command=self._default_value_usage_changed).grid(
                 row=5, column=0, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Label(
             columns_frame,
-            text="OFFにすると既定値列を残したまま自動生成値へ戻します。",
+            text="OFFにするとOCR既定値だけを無効化して自動生成値へ戻します。",
             foreground="#666").grid(
                 row=6, column=0, columnspan=8, sticky="w", pady=(6, 0))
 
@@ -523,6 +523,9 @@ class LayoutTxtGui(object):
             generation, textvariable=self.error_pattern_var,
             values=[label for label, _value in ERROR_PATTERN_LABELS],
             state="readonly", width=18).grid(row=0, column=7, sticky="we", padx=(5, 0))
+        ttk.Label(generation, text="属性既定値:").grid(row=0, column=8, sticky="w")
+        ttk.Entry(generation, textvariable=self.attribute_flag_var, width=10).grid(
+            row=0, column=9, sticky="we", padx=(5, 0))
 
         ttk.Label(generation, text="TXT名:").grid(row=1, column=0, sticky="w", pady=(7, 0))
         ttk.Entry(generation, textvariable=self.filename_template_var).grid(
@@ -614,7 +617,7 @@ class LayoutTxtGui(object):
         column_menu.add_command(label="全列を表示", command=self._show_all_columns)
         column_button.configure(menu=column_menu)
         self.defaults_button = ttk.Button(
-            selector, text="編集OCR値をExcelへ既定値保存",
+            selector, text="OCR・属性・座標を別Sheetへ既定値保存",
             command=self._save_defaults_to_excel)
         self.defaults_button.grid(row=1, column=0, columnspan=3, sticky="w", pady=4)
         self.add_form_button = ttk.Button(
@@ -626,7 +629,7 @@ class LayoutTxtGui(object):
         _wrap_description(
             selector,
             text="出力/OCR値/属性/FIELD_ID/座標はダブルクリックで編集できます。"
-                 " 保存ボタンは表示中FORMのOCR値を入力Excelへ書き戻します。",
+                 " 保存ボタンは表示中FORMのOCR・属性・座標を「項目既定値」Sheetへ書き込みます。",
             foreground="#666").grid(row=3, column=0, columnspan=7, sticky="w", pady=(5, 0))
 
         package = ttk.LabelFrame(
@@ -824,8 +827,11 @@ class LayoutTxtGui(object):
         try:
             wb = load_workbook(str(path), read_only=True, data_only=True)
             try:
-                names = list(wb.sheetnames)
+                names = [name for name in wb.sheetnames
+                         if name != FIELD_DEFAULTS_SHEET]
                 active = wb.active.title
+                if active == FIELD_DEFAULTS_SHEET and names:
+                    active = names[0]
             finally:
                 wb.close()
         except Exception as exc:
@@ -882,6 +888,7 @@ class LayoutTxtGui(object):
                 self.default_value_col_var.get()
                 if self.use_default_value_var.get() else "none"),
             "coordinates_column": self.coordinates_col_var.get(),
+            "attribute_flag": self.attribute_flag_var.get(),
             "profile": _value_for_label(PROFILE_LABELS, self.profile_var.get()),
             "date_mode": _value_for_label(DATE_MODE_LABELS, self.date_mode_var.get()),
             "coverage_form_id": self.coverage_form_var.get().strip(),
@@ -1580,14 +1587,23 @@ class LayoutTxtGui(object):
                 return
         self._finish_cell_edit(save=True)
         form_id = self.form_var.get().strip()
-        values_by_instance = {}
+        defaults_by_instance = {}
+        item_name_index = TREE_COLUMNS.index("item_name")
         value_index = TREE_COLUMNS.index("value")
+        attribute_index = TREE_COLUMNS.index("attribute_flag")
+        coordinates_index = TREE_COLUMNS.index("coordinates")
         for item in self.tree.get_children(""):
             values = list(self.tree.item(item, "values"))
-            values_by_instance[item] = values[value_index]
-        if not values_by_instance:
+            defaults_by_instance[item] = {
+                "form_id": form_id,
+                "item_name": values[item_name_index],
+                "value": values[value_index],
+                "attribute_flag": values[attribute_index],
+                "coordinates": values[coordinates_index],
+            }
+        if not defaults_by_instance:
             messagebox.showwarning(
-                "既定値保存", "保存するOCR値がありません。", parent=self.root)
+                "既定値保存", "保存する項目既定値がありません。", parent=self.root)
             return
 
         excel = Path(self.excel_var.get().strip())
@@ -1597,21 +1613,22 @@ class LayoutTxtGui(object):
             return
         if not messagebox.askyesno(
                 "既定値をExcelへ保存",
-                "表示中FORM_ID %s のOCR値を入力Excelへ書き込みます。\n"
-                "Excelを開いている場合は閉じてください。\n\n実行しますか？" % form_id,
+                "表示中FORM_ID %s のOCR生成値・属性・座標を\n"
+                "入力Excelの「%s」Sheetへ項目別に書き込みます。\n"
+                "Excelを開いている場合は閉じてください。\n\n実行しますか？"
+                % (form_id, FIELD_DEFAULTS_SHEET),
                 parent=self.root):
             return
 
         self.defaults_button.config(state="disabled")
-        self.status_var.set("OCR既定値をExcelへ保存中...")
+        self.status_var.set("項目既定値をExcelへ保存中...")
         self.root.update_idletasks()
         try:
-            path, column, row_count = save_layout_default_values(
+            path, defaults_sheet, item_count = save_layout_field_defaults(
                 excel_path=excel,
-                values_by_instance=values_by_instance,
-                sheet_name=self.sheet_var.get() or None,
-                header_row=self._header_row(),
-                default_value_column=self.default_value_col_var.get())
+                defaults_by_instance=defaults_by_instance,
+                source_sheet_name=self.sheet_var.get() or None,
+                header_row=self._header_row())
         except LayoutTxtError as exc:
             self.status_var.set("既定値を保存できませんでした: %s" % exc)
             messagebox.showerror("既定値保存エラー", str(exc), parent=self.root)
@@ -1621,14 +1638,14 @@ class LayoutTxtGui(object):
         else:
             self._read_definitions(show_errors=False)
             self.status_var.set(
-                "既定値保存完了: FORM_ID %s / %d Excel行 / %s列"
-                % (form_id, row_count, get_column_letter(column)))
+                "既定値保存完了: FORM_ID %s / %d項目 / %s Sheet"
+                % (form_id, item_count, defaults_sheet))
             messagebox.showinfo(
                 "既定値保存完了",
-                "表示中FORM_IDのOCR値をExcelへ保存しました。\n\n"
-                "ファイル: %s\n列: %s\n更新行: %d\n\n"
-                "次回読込時はこの既定値を優先します。"
-                % (path, get_column_letter(column), row_count),
+                "表示中FORM_IDのOCR生成値・属性・座標を保存しました。\n\n"
+                "ファイル: %s\nSheet: %s\n項目数: %d\n\n"
+                "通院日などの展開項目も1項目1行で編集できます。"
+                % (path, defaults_sheet, item_count),
                 parent=self.root)
         finally:
             self.defaults_button.config(state="normal")
@@ -1694,6 +1711,7 @@ class LayoutTxtGui(object):
                     self.default_value_col_var.get()
                     if self.use_default_value_var.get() else "none"),
                 coordinates_column=self.coordinates_col_var.get(),
+                attribute_flag=self.attribute_flag_var.get(),
                 profile=_value_for_label(PROFILE_LABELS, self.profile_var.get()),
                 date_mode=_value_for_label(DATE_MODE_LABELS, self.date_mode_var.get()),
                 coverage_form_id=self.coverage_form_var.get().strip(),

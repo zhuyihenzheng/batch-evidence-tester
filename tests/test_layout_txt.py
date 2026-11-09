@@ -16,6 +16,8 @@ from openpyxl import Workbook, load_workbook
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from autotest.layout_txt import (  # noqa: E402
+    FIELD_DEFAULT_EMPTY,
+    FIELD_DEFAULTS_SHEET,
     LayoutTxtError,
     DEFAULT_EMPTY_VALUE,
     generate_layout_txt,
@@ -25,6 +27,7 @@ from autotest.layout_txt import (  # noqa: E402
     render_form_tif_payload,
     render_form_txt_text,
     resolve_form_filename_stem,
+    save_layout_field_defaults,
     save_layout_default_values,
 )
 from autotest.layout_tar import PackageItem, base_name_from_front  # noqa: E402
@@ -298,6 +301,97 @@ class TestReadLayoutFields(LayoutWorkbookCase):
 
         fields, _sheet, _header, _columns = read_layout_fields(self.book)
         self.assertEqual([field.value for field in fields[6:52]], expected)
+
+    def test_field_defaults_sheet_saves_calendar_items_on_separate_rows(self):
+        values = {}
+        for index in range(1, 47):
+            values["9:%d" % index] = {
+                "form_id": "1001",
+                "item_name": "通院日",
+                "value": "通院日%d" % index,
+                "attribute_flag": str(index % 3),
+                "coordinates": "10,20,30,%d" % index,
+            }
+
+        path, sheet, count = save_layout_field_defaults(
+            self.book, values, source_sheet_name="帳票定義")
+
+        self.assertEqual(path, self.book)
+        self.assertEqual(sheet, FIELD_DEFAULTS_SHEET)
+        self.assertEqual(count, 46)
+        wb = load_workbook(str(self.book), data_only=True)
+        self.assertIn(FIELD_DEFAULTS_SHEET, wb.sheetnames)
+        defaults_ws = wb[FIELD_DEFAULTS_SHEET]
+        self.assertEqual(defaults_ws.max_row, 47)
+        self.assertEqual(
+            [defaults_ws.cell(row=2, column=column).value
+             for column in range(1, 9)],
+            ["帳票定義", 9, 1, "1001", "通院日",
+             "通院日1", "1", "10,20,30,1"])
+        self.assertEqual(defaults_ws.cell(row=47, column=6).value, "通院日46")
+        self.assertNotIn("\n", defaults_ws.cell(row=47, column=6).value)
+        self.assertEqual(wb["帳票定義"].max_column, 17)
+        wb.close()
+
+        fields, _sheet, _header, _columns = read_layout_fields(self.book)
+        calendar = fields[6:52]
+        self.assertEqual(
+            [field.value for field in calendar],
+            ["通院日%d" % index for index in range(1, 47)])
+        self.assertEqual(
+            [field.attribute_flag for field in calendar],
+            [str(index % 3) for index in range(1, 47)])
+        self.assertEqual(
+            [field.coordinates for field in calendar],
+            ["10,20,30,%d" % index for index in range(1, 47)])
+
+    def test_field_defaults_sheet_supports_attribute_default_and_empty_value(self):
+        save_layout_field_defaults(
+            self.book,
+            {"3:1": {
+                "form_id": "1001", "item_name": "傷病名1",
+                "value": "", "attribute_flag": "", "coordinates": "1,2,3,4",
+            }},
+            source_sheet_name="帳票定義")
+
+        wb = load_workbook(str(self.book), data_only=True)
+        defaults_ws = wb[FIELD_DEFAULTS_SHEET]
+        self.assertEqual(defaults_ws.cell(row=2, column=6).value, FIELD_DEFAULT_EMPTY)
+        self.assertEqual(defaults_ws.cell(row=2, column=7).value, FIELD_DEFAULT_EMPTY)
+        wb.active = wb.sheetnames.index(FIELD_DEFAULTS_SHEET)
+        wb.save(str(self.book))
+        wb.close()
+
+        fields, sheet, _header, _columns = read_layout_fields(
+            self.book, attribute_flag="7")
+        self.assertEqual(sheet, "帳票定義")
+        self.assertEqual(fields[0].value, "")
+        self.assertEqual(fields[0].attribute_flag, "")
+        self.assertEqual(fields[0].coordinates, "1,2,3,4")
+        self.assertEqual(fields[1].attribute_flag, "7")
+
+    def test_field_defaults_sheet_updates_existing_instance_without_duplicate(self):
+        first = {
+            "3:1": {
+                "form_id": "1001", "item_name": "傷病名1",
+                "value": "初回", "attribute_flag": "0", "coordinates": "0,0,0,1",
+            },
+        }
+        save_layout_field_defaults(
+            self.book, first, source_sheet_name="帳票定義")
+        first["3:1"]["value"] = "更新後"
+        first["3:1"]["attribute_flag"] = "2"
+        save_layout_field_defaults(
+            self.book, first, source_sheet_name="帳票定義")
+
+        wb = load_workbook(str(self.book), data_only=True)
+        defaults_ws = wb[FIELD_DEFAULTS_SHEET]
+        self.assertEqual(defaults_ws.max_row, 2)
+        self.assertEqual(defaults_ws.cell(row=2, column=6).value, "更新後")
+        wb.close()
+        fields, _sheet, _header, _columns = read_layout_fields(self.book)
+        self.assertEqual(fields[0].value, "更新後")
+        self.assertEqual(fields[0].attribute_flag, "2")
 
     def test_calendar_default_count_mismatch_is_rejected(self):
         wb = load_workbook(str(self.book))

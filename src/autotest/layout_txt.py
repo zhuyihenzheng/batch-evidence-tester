@@ -82,6 +82,12 @@ CHOICE_VALUES = ("1", "2", "1.2")
 CALENDAR_OCCURRENCES = 46
 DEFAULT_VALUE_HEADER = "OCR_DEFAULT_VALUE"
 DEFAULT_EMPTY_VALUE = "<EMPTY_OCR>"
+FIELD_DEFAULTS_SHEET = "項目既定値"
+FIELD_DEFAULT_EMPTY = "<EMPTY>"
+FIELD_DEFAULT_HEADERS = (
+    "元シート", "Excel行", "展開番号", "FORM_ID", "ITEM_NAME",
+    "OCR生成値", "属性", "座標",
+)
 
 # 4001 は全網羅データ用。1 と 2 が同じ項目に混在する場合はカンマ区切り。
 COVERAGE_ATTRIBUTE_FLAGS = ("0", "1", "2", "1,2")
@@ -522,6 +528,75 @@ def _default_values(raw_value, occurrence_count: int,
     return values
 
 
+def _field_default_text(cell):
+    value = cell.value
+    if value is None or value == "":
+        return None
+    if str(value) == FIELD_DEFAULT_EMPTY:
+        return ""
+    if isinstance(value, str):
+        return value
+    return _cell_text(cell)
+
+
+def _read_field_defaults(wb, source_sheet_name: str) -> Dict:
+    """独立Sheetの既定値を、展開後の1項目単位で読み取る。"""
+    if FIELD_DEFAULTS_SHEET not in wb.sheetnames:
+        return {}
+    ws = wb[FIELD_DEFAULTS_SHEET]
+    headers = {}
+    for cell in ws[1]:
+        header = str(cell.value or "").strip()
+        if header:
+            column = cell.column
+            if isinstance(column, str):
+                column = column_index_from_string(column)
+            headers[header] = column
+    missing = [header for header in FIELD_DEFAULT_HEADERS if header not in headers]
+    if missing:
+        raise LayoutTxtError(
+            "%s Sheetの見出しが不足しています: %s"
+            % (FIELD_DEFAULTS_SHEET, ", ".join(missing)))
+
+    result = {}
+    for row_number in range(2, ws.max_row + 1):
+        source = _cell_text(ws.cell(row=row_number, column=headers["元シート"]))
+        if not source:
+            continue
+        if source != source_sheet_name:
+            continue
+        excel_row_raw = _cell_text(ws.cell(
+            row=row_number, column=headers["Excel行"]))
+        occurrence_raw = _cell_text(ws.cell(
+            row=row_number, column=headers["展開番号"]))
+        try:
+            excel_row = int(excel_row_raw)
+            occurrence = int(occurrence_raw)
+        except (TypeError, ValueError):
+            raise LayoutTxtError(
+                "%s Sheet %d行目のExcel行/展開番号が不正です。"
+                % (FIELD_DEFAULTS_SHEET, row_number))
+        if excel_row < 1 or occurrence < 1:
+            raise LayoutTxtError(
+                "%s Sheet %d行目のExcel行/展開番号は1以上にしてください。"
+                % (FIELD_DEFAULTS_SHEET, row_number))
+        key = (excel_row, occurrence)
+        if key in result:
+            raise LayoutTxtError(
+                "%s Sheetで既定値が重複しています: %s / %d:%d"
+                % (FIELD_DEFAULTS_SHEET, source_sheet_name, excel_row, occurrence))
+        values = {}
+        for header, name in (("OCR生成値", "value"),
+                             ("属性", "attribute_flag"),
+                             ("座標", "coordinates")):
+            value = _field_default_text(ws.cell(
+                row=row_number, column=headers[header]))
+            if value is not None:
+                values[name] = value
+        result[key] = values
+    return result
+
+
 def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                        header_row: Optional[int] = None,
                        form_column: str = "auto", layout_column: str = "auto",
@@ -558,9 +633,17 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             if sheet_name not in wb.sheetnames:
                 raise LayoutTxtError(
                     "シート %r がありません。候補: %s" % (sheet_name, ", ".join(wb.sheetnames)))
+            if sheet_name == FIELD_DEFAULTS_SHEET:
+                raise LayoutTxtError("%s Sheetはレイアウト定義ではありません。" % sheet_name)
             ws = wb[sheet_name]
         else:
             ws = wb.active
+            if ws.title == FIELD_DEFAULTS_SHEET:
+                candidates = [candidate for candidate in wb.worksheets
+                              if candidate.title != FIELD_DEFAULTS_SHEET]
+                if not candidates:
+                    raise LayoutTxtError("レイアウト定義Sheetがありません。")
+                ws = candidates[0]
 
         actual_header_row = header_row or _find_header_row(ws)
         if actual_header_row < 1 or actual_header_row > ws.max_row:
@@ -574,6 +657,9 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
             output_example_column=output_example_column,
             default_value_column=default_value_column,
             coordinates_column=coordinates_column)
+        field_defaults = _read_field_defaults(wb, ws.title)
+        use_saved_values = str(default_value_column or "auto").strip().lower() != "none"
+        use_saved_coordinates = str(coordinates_column or "auto").strip().lower() != "none"
 
         fields = []  # type: List[LayoutField]
         last_form_id = ""
@@ -658,6 +744,14 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                     selection_index=selection_index)
                 if saved_defaults is not None:
                     value = saved_defaults[occurrence_index - 1]
+                saved_field = field_defaults.get((row_number, occurrence_index), {})
+                if use_saved_values and "value" in saved_field:
+                    value = saved_field["value"]
+                field_attribute = saved_field.get("attribute_flag", attribute_flag)
+                field_coordinates = (saved_coordinates or
+                                     _coordinate_value(coordinates, coordinate_index))
+                if use_saved_coordinates and "coordinates" in saved_field:
+                    field_coordinates = saved_field["coordinates"]
 
                 fields.append(LayoutField(
                     form_id=form_id, layout_id=layout_id,
@@ -666,9 +760,8 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                     field_id=str(coordinate_index + 1), item_name=item_name,
                     data_type=data_type, ime_name=ime_name, max_digits=max_digits,
                     value=value, row_number=row_number,
-                    attribute_flag=attribute_flag,
-                    coordinates=(saved_coordinates or
-                                 _coordinate_value(coordinates, coordinate_index)),
+                    attribute_flag=field_attribute,
+                    coordinates=field_coordinates,
                     input_attribute=input_attribute, input_rule=input_rule,
                     notes=notes, output_example=output_example,
                     occurrence_index=occurrence_index,
@@ -803,6 +896,164 @@ def save_layout_default_values(
     except Exception as exc:
         raise LayoutTxtError(
             "既定値をExcelへ保存できません。Excelを閉じて再試行してください: %s" % exc)
+    finally:
+        if wb is not None:
+            wb.close()
+        if temp_name:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+
+
+def _encoded_field_default(value):
+    if value is None:
+        return None
+    text = str(value)
+    return FIELD_DEFAULT_EMPTY if text == "" else text
+
+
+def save_layout_field_defaults(
+        excel_path: Path, defaults_by_instance: Dict,
+        source_sheet_name: Optional[str] = None,
+        header_row: Optional[int] = None) -> Tuple[Path, str, int]:
+    """GUI編集値を独立Sheetへ、展開後の1項目につき1行で保存する。"""
+    path = Path(excel_path)
+    if not path.is_file():
+        raise LayoutTxtError("Excel ファイルが見つかりません: %s" % path)
+    if path.suffix.lower() not in (".xlsx", ".xlsm"):
+        raise LayoutTxtError(".xlsx / .xlsm のみ対応しています: %s" % path.name)
+    if not defaults_by_instance:
+        raise LayoutTxtError("Excelへ保存する項目既定値がありません。")
+
+    try:
+        wb = load_workbook(
+            str(path), data_only=False, keep_vba=path.suffix.lower() == ".xlsm")
+    except Exception as exc:
+        raise LayoutTxtError("Excel を開けません: %s" % exc)
+
+    temp_name = None
+    try:
+        if source_sheet_name:
+            if source_sheet_name not in wb.sheetnames:
+                raise LayoutTxtError(
+                    "シート %r がありません。候補: %s"
+                    % (source_sheet_name, ", ".join(wb.sheetnames)))
+            source_ws = wb[source_sheet_name]
+        else:
+            candidates = [candidate for candidate in wb.worksheets
+                          if candidate.title != FIELD_DEFAULTS_SHEET]
+            if not candidates:
+                raise LayoutTxtError("レイアウト定義Sheetがありません。")
+            source_ws = candidates[0]
+        if source_ws.title == FIELD_DEFAULTS_SHEET:
+            raise LayoutTxtError("%s Sheetはレイアウト定義ではありません。"
+                                 % FIELD_DEFAULTS_SHEET)
+        actual_header_row = header_row or _find_header_row(source_ws)
+
+        if FIELD_DEFAULTS_SHEET in wb.sheetnames:
+            defaults_ws = wb[FIELD_DEFAULTS_SHEET]
+            existing_headers = [str(cell.value or "").strip()
+                                for cell in defaults_ws[1]]
+            missing = [header for header in FIELD_DEFAULT_HEADERS
+                       if header not in existing_headers]
+            if missing:
+                raise LayoutTxtError(
+                    "%s Sheetの見出しが不足しています: %s"
+                    % (FIELD_DEFAULTS_SHEET, ", ".join(missing)))
+        else:
+            defaults_ws = wb.create_sheet(FIELD_DEFAULTS_SHEET)
+            defaults_ws.append(list(FIELD_DEFAULT_HEADERS))
+            defaults_ws.freeze_panes = "A2"
+            widths = (18, 10, 10, 12, 24, 28, 10, 20)
+            for column, width in enumerate(widths, 1):
+                defaults_ws.column_dimensions[get_column_letter(column)].width = width
+
+        columns = {}
+        for cell in defaults_ws[1]:
+            header = str(cell.value or "").strip()
+            if header:
+                column = cell.column
+                if isinstance(column, str):
+                    column = column_index_from_string(column)
+                columns[header] = column
+
+        existing = {}
+        for defaults_row in range(2, defaults_ws.max_row + 1):
+            source = _cell_text(defaults_ws.cell(
+                row=defaults_row, column=columns["元シート"]))
+            if not source:
+                continue
+            excel_row_raw = _cell_text(defaults_ws.cell(
+                row=defaults_row, column=columns["Excel行"]))
+            occurrence_raw = _cell_text(defaults_ws.cell(
+                row=defaults_row, column=columns["展開番号"]))
+            try:
+                excel_row = int(excel_row_raw)
+                occurrence = int(occurrence_raw)
+            except (TypeError, ValueError):
+                raise LayoutTxtError(
+                    "%s Sheet %d行目のExcel行/展開番号が不正です。"
+                    % (FIELD_DEFAULTS_SHEET, defaults_row))
+            key = (source, excel_row, occurrence)
+            if key in existing:
+                raise LayoutTxtError(
+                    "%s Sheetで既定値が重複しています: %s / %d:%d"
+                    % (FIELD_DEFAULTS_SHEET, source, excel_row, occurrence))
+            existing[key] = defaults_row
+
+        parsed = []
+        for instance_key, defaults in defaults_by_instance.items():
+            excel_row, occurrence = _instance_position(instance_key)
+            if excel_row <= actual_header_row or excel_row > source_ws.max_row:
+                raise LayoutTxtError(
+                    "項目既定値の保存先Excel行が範囲外です: %d" % excel_row)
+            if not isinstance(defaults, dict):
+                raise LayoutTxtError("項目既定値は辞書形式で指定してください: %s"
+                                     % instance_key)
+            parsed.append((excel_row, occurrence, defaults))
+        parsed.sort(key=lambda item: (item[0], item[1]))
+
+        for excel_row, occurrence, defaults in parsed:
+            key = (source_ws.title, excel_row, occurrence)
+            defaults_row = existing.get(key)
+            if defaults_row is None:
+                defaults_row = defaults_ws.max_row + 1
+                existing[key] = defaults_row
+            row_values = {
+                "元シート": source_ws.title,
+                "Excel行": excel_row,
+                "展開番号": occurrence,
+                "FORM_ID": str(defaults.get("form_id", "")),
+                "ITEM_NAME": str(defaults.get("item_name", "")),
+                "OCR生成値": _encoded_field_default(defaults.get("value")),
+                "属性": _encoded_field_default(defaults.get("attribute_flag")),
+                "座標": _encoded_field_default(defaults.get("coordinates")),
+            }
+            for header, value in row_values.items():
+                defaults_ws.cell(
+                    row=defaults_row, column=columns[header], value=value)
+            defaults_ws.cell(
+                row=defaults_row, column=columns["OCR生成値"]).alignment = Alignment(
+                    wrap_text=True, vertical="top")
+
+        defaults_ws.auto_filter.ref = "A1:%s%d" % (
+            get_column_letter(len(FIELD_DEFAULT_HEADERS)), defaults_ws.max_row)
+        handle, temp_name = tempfile.mkstemp(
+            prefix=path.stem + ".", suffix=path.suffix, dir=str(path.parent))
+        os.close(handle)
+        wb.save(temp_name)
+        wb.close()
+        wb = None
+        os.replace(temp_name, str(path))
+        temp_name = None
+        return path, FIELD_DEFAULTS_SHEET, len(parsed)
+    except LayoutTxtError:
+        raise
+    except Exception as exc:
+        raise LayoutTxtError(
+            "項目既定値をExcelへ保存できません。Excelを閉じて再試行してください: %s"
+            % exc)
     finally:
         if wb is not None:
             wb.close()
