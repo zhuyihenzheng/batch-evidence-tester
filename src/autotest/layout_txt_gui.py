@@ -58,12 +58,6 @@ PROFILE_LABELS = (
     ("最大桁数 + 1（異常系）", "over"),
 )
 
-FORMAT_LABELS = (
-    ("1帳票1行（全値ダブルクォート）", "raw"),
-    ("ラベル付き（確認用）", "labeled"),
-    ("TSV（1項目1行）", "tsv"),
-)
-
 DATE_MODE_LABELS = (
     ("通常Form=和暦 / 4001=日付3・カレンダー4形式（推奨）", "coverage"),
     ("日付3形式 / カレンダー4形式を順番使用", "cycle"),
@@ -71,12 +65,6 @@ DATE_MODE_LABELS = (
     ("西暦: /2026/6/1", "seireki"),
     ("元号+西暦: 5/2026/6/1", "era-seireki"),
     ("複数（カレンダーのみ）: 5/8/6/1|5/8/6/2", "multiple"),
-)
-
-ERROR_PATTERN_LABELS = (
-    ("全24 Pattern（推奨）", "all"),
-    ("主要8 Pattern", "core"),
-    ("異常Patternなし", "none"),
 )
 
 CSV_STYLE_LABELS = (
@@ -164,9 +152,9 @@ SETTING_VARIABLE_NAMES = (
     "input_attribute_col_var", "input_rule_col_var", "notes_col_var",
     "output_example_col_var", "default_value_col_var", "coordinates_col_var", "use_default_value_var",
     "profile_var", "date_mode_var", "attribute_flag_var",
-    "coverage_form_var", "error_pattern_var", "filename_template_var",
+    "coverage_form_var", "filename_template_var",
     "generate_tif_var", "create_tar_var", "tar_only_var", "tar_name_var",
-    "format_var", "encoding_var", "split_var", "overwrite_var",
+    "encoding_var", "split_var", "overwrite_var",
     "package_tar_name_var", "package_result_var", "package_include_back_var",
     "manifest_name_var", "manifest_columns_var", "manifest_encoding_var",
     "manifest_style_var",
@@ -253,13 +241,11 @@ class LayoutTxtGui(object):
         self.date_mode_var = tk.StringVar(value=DATE_MODE_LABELS[0][0])
         self.attribute_flag_var = tk.StringVar(value="0")
         self.coverage_form_var = tk.StringVar(value="4001")
-        self.error_pattern_var = tk.StringVar(value=ERROR_PATTERN_LABELS[0][0])
         self.filename_template_var = tk.StringVar(value="{form_id}")
         self.generate_tif_var = tk.BooleanVar(value=True)
         self.create_tar_var = tk.BooleanVar(value=True)
         self.tar_only_var = tk.BooleanVar(value=False)
         self.tar_name_var = tk.StringVar(value="{source}_layout_data")
-        self.format_var = tk.StringVar(value=FORMAT_LABELS[0][0])
         self.encoding_var = tk.StringVar(value="cp932")
         self.split_var = tk.BooleanVar(value=True)
         self.overwrite_var = tk.BooleanVar(value=False)
@@ -518,14 +504,9 @@ class LayoutTxtGui(object):
         ttk.Label(generation, text="全網羅Form:").grid(row=0, column=4, sticky="w")
         ttk.Entry(generation, textvariable=self.coverage_form_var, width=10).grid(
             row=0, column=5, sticky="w", padx=(5, 12))
-        ttk.Label(generation, text="全出力Pattern:").grid(row=0, column=6, sticky="w")
-        ttk.Combobox(
-            generation, textvariable=self.error_pattern_var,
-            values=[label for label, _value in ERROR_PATTERN_LABELS],
-            state="readonly", width=18).grid(row=0, column=7, sticky="we", padx=(5, 0))
-        ttk.Label(generation, text="属性既定値:").grid(row=0, column=8, sticky="w")
+        ttk.Label(generation, text="属性既定値:").grid(row=0, column=6, sticky="w")
         ttk.Entry(generation, textvariable=self.attribute_flag_var, width=10).grid(
-            row=0, column=9, sticky="we", padx=(5, 0))
+            row=0, column=7, sticky="we", padx=(5, 0))
 
         ttk.Label(generation, text="TXT名:").grid(row=1, column=0, sticky="w", pady=(7, 0))
         ttk.Entry(generation, textvariable=self.filename_template_var).grid(
@@ -538,18 +519,12 @@ class LayoutTxtGui(object):
             row=1, column=4, sticky="w", pady=(7, 0))
         ttk.Entry(generation, textvariable=self.package_tar_name_var).grid(
             row=1, column=5, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="形式:").grid(row=1, column=6, sticky="w", pady=(7, 0))
-        ttk.Combobox(
-            generation, textvariable=self.format_var,
-            values=[label for label, _value in FORMAT_LABELS],
-            state="readonly", width=16).grid(
-                row=1, column=7, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="文字コード:").grid(row=1, column=8, sticky="w", pady=(7, 0))
+        ttk.Label(generation, text="文字コード:").grid(row=1, column=6, sticky="w", pady=(7, 0))
         ttk.Combobox(
             generation, textvariable=self.encoding_var,
             values=("cp932", "utf-8-sig", "utf-8"),
             state="readonly", width=12).grid(
-                row=1, column=9, sticky="we", padx=(5, 0), pady=(7, 0))
+                row=1, column=7, sticky="we", padx=(5, 0), pady=(7, 0))
 
         flags = ttk.Frame(generation)
         flags.grid(row=2, column=0, columnspan=10, sticky="w", pady=(7, 0))
@@ -1210,8 +1185,7 @@ class LayoutTxtGui(object):
                 field_overrides=overrides, side="front")
             front_text = render_form_txt_text(
                 self.loaded_fields, form_id, selected_rows=rows,
-                field_overrides=overrides,
-                output_format=_value_for_label(FORMAT_LABELS, self.format_var.get()))
+                field_overrides=overrides, output_format="raw")
             back = None
             if self.package_include_back_var.get():
                 back = render_form_tif_payload(
@@ -1320,8 +1294,7 @@ class LayoutTxtGui(object):
                         form_front_text = render_form_txt_text(
                             self.loaded_fields, self.form_var.get().strip(),
                             selected_rows=rows, field_overrides=overrides,
-                            output_format=_value_for_label(
-                                FORMAT_LABELS, self.format_var.get()))
+                            output_format="raw")
                         form_text_ready = True
                     front_text = form_front_text
                 if front_text is None:
@@ -1680,16 +1653,14 @@ class LayoutTxtGui(object):
             return
         self._run_generation(
             selected_form_ids=[form_id], selected_rows=rows,
-            field_overrides=overrides, error_patterns="none")
+            field_overrides=overrides)
 
     def _generate_all(self) -> None:
         self._run_generation(
-            selected_form_ids=None, selected_rows=None, field_overrides=None,
-            error_patterns=_value_for_label(
-                ERROR_PATTERN_LABELS, self.error_pattern_var.get()))
+            selected_form_ids=None, selected_rows=None, field_overrides=None)
 
     def _run_generation(self, selected_form_ids, selected_rows,
-                        field_overrides, error_patterns) -> None:
+                        field_overrides) -> None:
         try:
             excel, output = self._validate_paths()
         except LayoutTxtError as exc:
@@ -1719,14 +1690,14 @@ class LayoutTxtGui(object):
                 profile=_value_for_label(PROFILE_LABELS, self.profile_var.get()),
                 date_mode=_value_for_label(DATE_MODE_LABELS, self.date_mode_var.get()),
                 coverage_form_id=self.coverage_form_var.get().strip(),
-                error_patterns=error_patterns,
+                error_patterns="none",
                 filename_template=self.filename_template_var.get().strip(),
                 generate_tif=self.generate_tif_var.get(),
                 selected_form_ids=selected_form_ids,
                 selected_rows=selected_rows, field_overrides=field_overrides,
                 create_tar=self.create_tar_var.get() or self.tar_only_var.get(),
                 tar_name=self.tar_name_var.get().strip(), tar_only=self.tar_only_var.get(),
-                output_format=_value_for_label(FORMAT_LABELS, self.format_var.get()),
+                output_format="raw",
                 encoding=self.encoding_var.get(), split_by_form=self.split_var.get(),
                 overwrite=self.overwrite_var.get())
         except LayoutTxtError as exc:
