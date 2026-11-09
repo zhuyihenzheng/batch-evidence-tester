@@ -764,6 +764,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                 if use_saved_coordinates and "coordinates" in saved_field:
                     field_coordinates = saved_field["coordinates"]
                 if value == "":
+                    field_attribute = ""
                     field_coordinates = ""
 
                 fields.append(LayoutField(
@@ -1584,6 +1585,7 @@ def _filter_and_override_fields(
                 if name in values:
                     setattr(field, name, str(values[name]))
         if field.value == "":
+            field.attribute_flag = ""
             field.coordinates = ""
         result.append(field)
     if not result:

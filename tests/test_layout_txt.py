@@ -361,14 +361,14 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             self.book,
             {"3:1": {
                 "form_id": "1001", "item_name": "傷病名1",
-                "value": "", "attribute_flag": "", "coordinates": "1,2,3,4",
+                "value": "", "attribute_flag": "2", "coordinates": "1,2,3,4",
             }},
             source_sheet_name="帳票定義")
 
         wb = load_workbook(str(self.book), data_only=True)
         defaults_ws = wb[FIELD_DEFAULTS_SHEET]
         self.assertEqual(defaults_ws.cell(row=2, column=6).value, FIELD_DEFAULT_EMPTY)
-        self.assertEqual(defaults_ws.cell(row=2, column=7).value, FIELD_DEFAULT_EMPTY)
+        self.assertEqual(defaults_ws.cell(row=2, column=7).value, "2")
         wb.active = wb.sheetnames.index(FIELD_DEFAULTS_SHEET)
         wb.save(str(self.book))
         wb.close()
@@ -652,6 +652,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         values = next(csv.reader([
             (out / "EMPTY_OCR.txt").read_text(encoding="cp932").strip()]))
         self.assertEqual(values[3], "")
+        self.assertEqual(values[4], "")
         self.assertEqual(values[5], "")
 
     def test_tar_only_contains_txt_and_tif_without_loose_files(self):

@@ -1024,6 +1024,7 @@ class LayoutTxtGui(object):
                 values[index] = editor.get()
                 if (index == TREE_COLUMNS.index("value") and
                         values[index] == ""):
+                    values[TREE_COLUMNS.index("attribute_flag")] = ""
                     values[TREE_COLUMNS.index("coordinates")] = ""
                 self.tree.item(item, values=values)
         editor.destroy()
