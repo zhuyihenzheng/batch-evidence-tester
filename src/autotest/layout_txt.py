@@ -88,6 +88,10 @@ FIELD_DEFAULT_HEADERS = (
     "元シート", "Excel行", "展開番号", "FORM_ID", "ITEM_NAME",
     "OCR生成値", "属性", "座標",
 )
+AUTO_COORDINATE_MARGIN = 10
+AUTO_COORDINATE_SIZE = 50
+AUTO_COORDINATE_GAP = 10
+AUTO_COORDINATE_COLUMNS = 10
 
 # 4001 は全網羅データ用。1 と 2 が同じ項目に混在する場合はカンマ区切り。
 COVERAGE_ATTRIBUTE_FLAGS = ("0", "1", "2", "1,2")
@@ -309,7 +313,14 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
 
 
 def _serial_coordinates(index: int) -> str:
-    return "0,0,0,%d" % (index + 1)
+    column = index % AUTO_COORDINATE_COLUMNS
+    row = index // AUTO_COORDINATE_COLUMNS
+    left = AUTO_COORDINATE_MARGIN + column * (
+        AUTO_COORDINATE_SIZE + AUTO_COORDINATE_GAP)
+    top = AUTO_COORDINATE_MARGIN + row * (
+        AUTO_COORDINATE_SIZE + AUTO_COORDINATE_GAP)
+    return "%d,%d,%d,%d" % (
+        left, top, left + AUTO_COORDINATE_SIZE, top + AUTO_COORDINATE_SIZE)
 
 
 def _coordinate_value(coordinates: str, index: int) -> str:
@@ -1129,21 +1140,17 @@ def _copy_fields(fields: Sequence[LayoutField]) -> List[LayoutField]:
 
 
 def _deduplicate_coordinates(fields: Sequence[LayoutField]) -> None:
-    last_numbers = []
-    for field in fields:
-        try:
-            parts = [int(value) for value in field.coordinates.split(",")]
-            if len(parts) == 4:
-                last_numbers.append(parts[-1])
-        except ValueError:
-            continue
-    next_number = max(last_numbers) + 1 if last_numbers else 1
     seen = set()
+    next_index = 0
     for field in fields:
         coordinate = field.coordinates
         if coordinate and coordinate in seen:
-            field.coordinates = "0,0,0,%d" % next_number
-            next_number += 1
+            candidate = _serial_coordinates(next_index)
+            while candidate in seen:
+                next_index += 1
+                candidate = _serial_coordinates(next_index)
+            field.coordinates = candidate
+            next_index += 1
         if field.coordinates:
             seen.add(field.coordinates)
 

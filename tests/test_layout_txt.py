@@ -34,6 +34,14 @@ from autotest.layout_tar import PackageItem, base_name_from_front  # noqa: E402
 from autotest import layout_naming  # noqa: E402
 
 
+def expected_auto_coordinates(index):
+    column = index % 10
+    row = index // 10
+    left = 10 + column * 60
+    top = 10 + row * 60
+    return "%d,%d,%d,%d" % (left, top, left + 50, top + 50)
+
+
 class LayoutWorkbookCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="autotest_layout_txt_"))
@@ -162,8 +170,11 @@ class TestReadLayoutFields(LayoutWorkbookCase):
                          ["0"] * 56)
         self.assertEqual(
             [field.coordinates for field in fields],
-            (["0,0,0,%d" % index for index in range(1, 53)] +
-             ["0,0,0,%d" % index for index in range(1, 5)]))
+            ([expected_auto_coordinates(index) for index in range(52)] +
+             [expected_auto_coordinates(index) for index in range(4)]))
+        self.assertEqual(fields[0].coordinates, "10,10,60,60")
+        self.assertEqual(fields[9].coordinates, "550,10,600,60")
+        self.assertEqual(fields[10].coordinates, "10,70,60,120")
 
     def test_column_can_be_selected_by_header_or_letter(self):
         fields, _sheet, _header, columns = read_layout_fields(
@@ -228,7 +239,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
                 fields, _sheet, _header, columns = read_layout_fields(self.book)
                 self.assertEqual(columns["coordinates"], 18)
                 self.assertEqual(fields[0].coordinates, "10,20,30,40")
-                self.assertEqual(fields[1].coordinates, "0,0,0,2")
+                self.assertEqual(fields[1].coordinates, "70,10,120,60")
                 self.assertEqual(
                     [field.coordinates for field in fields[6:52]],
                     ["50,60,70,80"] * 46)
@@ -245,7 +256,7 @@ class TestReadLayoutFields(LayoutWorkbookCase):
             self.assertEqual(fields[0].coordinates, "10,20,30,40")
             self.assertEqual(fields[1].coordinates, "9,8,7,6")
         fields, _, _, _ = read_layout_fields(self.book, coordinates_column="none")
-        self.assertEqual(fields[0].coordinates, "0,0,0,1")
+        self.assertEqual(fields[0].coordinates, "10,10,60,60")
 
     def test_normal_output_preserves_excel_coordinates_and_screen_overrides(self):
         wb = load_workbook(str(self.book))
@@ -443,8 +454,8 @@ class TestReadLayoutFields(LayoutWorkbookCase):
              "5/8/6/1|5/8/6/2"])
         self.assertEqual(sum("|" in field.value for field in fields), 11)
         self.assertEqual(len(set(field.coordinates for field in fields)), 46)
-        self.assertEqual(fields[0].coordinates, "0,0,0,1")
-        self.assertEqual(fields[-1].coordinates, "0,0,0,46")
+        self.assertEqual(fields[0].coordinates, "10,10,60,60")
+        self.assertEqual(fields[-1].coordinates, "310,250,360,300")
 
         output = self.tmp / "46_calendar_output"
         generate_layout_txt(
@@ -562,7 +573,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
                 self.assertEqual(image.size, (1654, 2339))
         self.assertEqual(
             next(csv.reader([front_text.strip()])),
-            ["1001", "1", "1", "正面テスト", "0", "0,0,0,1"])
+            ["1001", "1", "1", "正面テスト", "0", "10,10,60,60"])
 
         with self.assertRaises(LayoutTxtError):
             render_form_tif_payload(fields, "1001", side="unknown")
@@ -611,7 +622,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(
             text,
             '"1001","1","9901","画面修正値","2","1,2,3,4",'
-            '"2","9","0","0,0,0,2"\n')
+            '"2","9","0","70,10,120,60"\n')
 
     def test_one_expanded_calendar_occurrence_can_be_edited(self):
         out = self.tmp / "calendar_edit"
@@ -627,7 +638,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
             (out / "CALENDAR_EDIT.txt").read_text(encoding="cp932").strip()]))
         self.assertEqual(
             values,
-            ["1001", "1", "8", "5/8/6/10|5/8/6/11", "0", "0,0,0,8"])
+            ["1001", "1", "8", "5/8/6/10|5/8/6/11", "0", "430,10,480,60"])
 
     def test_tar_only_contains_txt_and_tif_without_loose_files(self):
         out = self.tmp / "tar_only"
@@ -691,7 +702,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
         self.assertEqual(values[3::4][6:], ["5/8/6/1"] * 46)
         self.assertEqual(
             values[5::4],
-            ["0,0,0,%d" % index for index in range(1, 53)])
+            [expected_auto_coordinates(index) for index in range(52)])
 
         coverage = (out / "4001_01_normal.txt").read_bytes().decode("cp932")
         coverage_values = next(csv.reader([coverage.strip()]))
@@ -702,7 +713,7 @@ class TestGenerateLayoutTxt(LayoutWorkbookCase):
                           "5/8/6/1"])
         self.assertEqual(
             coverage_values[5::4],
-            ["0,0,0,%d" % index for index in range(1, 5)])
+            [expected_auto_coordinates(index) for index in range(4)])
 
     def test_count_and_element_id_patterns_change_actual_structure(self):
         out = self.tmp / "patterns"
