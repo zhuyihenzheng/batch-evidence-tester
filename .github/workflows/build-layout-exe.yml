@@ -22,6 +22,7 @@ on:
       - "src/autotest/layout_templates.py"
       - "src/autotest/layout_template_gui.py"
       - "src/autotest/layout_grid.py"
+      - "src/autotest/layout_package_editor.py"
       - "tests/test_layout_grid.py"
       - "tests/test_layout_templates.py"
       - "tests/test_layout_txt.py"

@@ -2,6 +2,8 @@
 """セル範囲編集で値の欠落や部分適用が起きないことを確認する。"""
 
 import sys
+import csv
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -146,6 +148,85 @@ class GridGuiTests(unittest.TestCase):
         self.app._show_selected_form()
         self.assertEqual(self.grid.undo_stack, [])
         self.assertEqual(self.app.tree.set('1:1', 'value'), '')
+
+    def add_editable_package(self):
+        from autotest.layout_tar import PackageItem
+        stream = io.StringIO()
+        csv.writer(stream, quoting=csv.QUOTE_ALL, lineterminator='\r\n').writerows([
+            ['1001', '1', '1', '元の値', '0', '10,10,50,50'],
+            ['1001', '1', '1', '別の帳票', '2', '70,10,50,50']])
+        item = PackageItem('saved_', form_id='999', front_image_bytes=b'image',
+                           front_recognition_text=stream.getvalue())
+        iid = self.app._insert_package_item(item)
+        self.app.package_tree.set(iid, 'include', '0')
+        self.app._edit_package_content()
+        editor = self.app.package_content_editor
+        editor.window.withdraw()
+        return iid, item, editor
+
+    def test_package_contents_save_multiple_forms_and_persist_in_template(self):
+        from autotest.layout_templates import save_template, load_template
+        iid, item, editor = self.add_editable_package()
+        original = item.front_recognition_text
+        editor.form_var.set('2002')
+        editor.presence_var.set('0')
+        editor.grid.change({('0', 'value'): '001\n"手編集",値'})
+        self.assertEqual(item.front_recognition_text, original)
+        editor.form_box.current(1)
+        editor.switch()
+        self.assertEqual(editor.form_var.get(), '1001')
+        editor.grid.select(('0', 'value'))
+        editor.grid.clear()
+        editor.form_box.current(0)
+        editor.switch()
+        self.assertEqual(editor.tree.set('0', 'value'), '001\n"手編集",値')
+        editor.save()
+        records = list(csv.reader(io.StringIO(item.front_recognition_text)))
+        self.assertEqual(records[0], ['2002', '0', '1', '001\n"手編集",値', '0', '10,10,50,50'])
+        self.assertEqual(records[1], ['1001', '1', '1', '', '', ''])
+        self.assertEqual(item.form_id, '999')
+        self.assertEqual(item.front_image_bytes, b'image')
+        self.assertEqual(self.app.package_tree.set(iid, 'include'), '0')
+        path = Path(self.temp.name) / 'edited.xlsx'
+        save_template(path, 'edited', {}, [], [(item, '0')])
+        restored = load_template(path, 'edited')[2][0][0]
+        self.assertEqual(restored.front_recognition_text, item.front_recognition_text)
+
+    def test_package_contents_cancel_does_not_change_list(self):
+        _iid, item, editor = self.add_editable_package()
+        original = item.front_recognition_text
+        editor.grid.change({('0', 'value'): '破棄する編集'})
+        editor.form_box.current(1)
+        editor.switch()
+        with mock.patch('tkinter.messagebox.askyesno', return_value=True):
+            editor.cancel()
+        self.assertEqual(item.front_recognition_text, original)
+
+    def test_package_contents_reject_stale_editor(self):
+        _iid, item, first = self.add_editable_package()
+        first.grid.change({('0', 'value'): '古い編集'})
+        self.app._edit_package_content()
+        second = self.app.package_content_editor
+        second.window.withdraw()
+        second.grid.change({('0', 'value'): '新しい編集'})
+        second.save()
+        with mock.patch('tkinter.messagebox.showerror') as error:
+            first.save()
+        error.assert_called_once()
+        self.assertIn('新しい編集', item.front_recognition_text)
+        self.assertNotIn('古い編集', item.front_recognition_text)
+        first.window.destroy()
+
+    def test_package_contents_invalid_form_is_not_saved(self):
+        _iid, item, editor = self.add_editable_package()
+        original = item.front_recognition_text
+        editor.form_var.set('invalid')
+        with mock.patch('tkinter.messagebox.showerror') as error:
+            editor.save()
+        error.assert_called_once()
+        self.assertEqual(item.front_recognition_text, original)
+        self.assertTrue(editor.window.winfo_exists())
+        editor.window.destroy()
 
 
 if __name__ == '__main__':

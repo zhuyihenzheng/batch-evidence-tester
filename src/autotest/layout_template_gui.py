@@ -329,5 +329,5 @@ class TemplateGuiMixin(object):
         self.template_path, self.template_name = path, name
         self.template_legacy = len(names) > 1
         self.template_label.configure(text='テンプレート: ' + path.name)
-        self.status_var.set('テンプレート読込完了: %s / %d画像。出力OCRの編集はExcelで変更後、再読込してください。'
+        self.status_var.set('テンプレート読込完了: %s / %d画像。出力リストを選択して「選択行の内容を編集」でOCRを変更できます。'
                             % (path.name, len(packages)))

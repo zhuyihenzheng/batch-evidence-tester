@@ -672,6 +672,9 @@ class LayoutTxtGui(TemplateGuiMixin):
             package_toolbar, text="選択画像のTXTに表示中FORMを追記",
             command=self._append_current_form_to_image).pack(side="left", padx=(0, 8))
         ttk.Button(
+            package_toolbar, text="選択行の内容を編集...",
+            command=self._edit_package_content).pack(side="left", padx=(0, 8))
+        ttk.Button(
             package_toolbar, text="選択行を削除",
             command=self._remove_package_items).pack(side="left", padx=(0, 8))
         ttk.Button(
@@ -1298,6 +1301,35 @@ class LayoutTxtGui(TemplateGuiMixin):
         self.status_var.set(
             "%s にFORM_ID %sを追記しました（TXT内%d帳票）。画像とCSV位置5は元の設定を使用します。"
             % (item.front_recognition_name, form_id, item.front_form_count))
+
+    def _edit_package_content(self) -> None:
+        from .layout_package_editor import PackageContentEditor
+        self._finish_package_cell_edit(save=True)
+        selected = list(self.package_tree.selection())
+        if len(selected) != 1:
+            messagebox.showwarning('内容編集', '編集する出力リストの行を1件選択してください。', parent=self.root)
+            return
+        iid = selected[0]
+        item = self.package_items[iid]
+        original_text = item.front_recognition_text
+
+        def save(text):
+            self._finish_package_cell_edit(save=True)
+            if (not self.package_tree.exists(iid) or self.package_items.get(iid) is not item or
+                    item.front_recognition_text != original_text):
+                raise LayoutTarError('編集中に出力リストが変更されました。閉じて編集画面を開き直してください。')
+            item.front_recognition_text = text
+            self.package_grid.reset()
+            include = self.package_tree.set(iid, 'include')
+            self.package_tree.item(iid, values=self._package_values(item, include))
+            self.status_var.set('出力リストの編集を保存しました: %s / TXT内%d帳票。再利用する場合はテンプレートを保存してください。'
+                                % (item.front_recognition_name, item.front_form_count))
+
+        try:
+            self.package_content_editor = PackageContentEditor(
+                self.root, original_text, item.front_recognition_name, save)
+        except LayoutTarError as exc:
+            messagebox.showerror('内容編集エラー', str(exc), parent=self.root)
 
     def _add_current_form_to_package(self) -> None:
         if not self.form_fields:
