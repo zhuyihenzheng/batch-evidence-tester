@@ -2,6 +2,7 @@
 """Excel -> Layout TXT/TIF/TAR 生成ツールの単独GUI。"""
 
 import csv
+import copy
 import re
 import sys
 from collections import OrderedDict
@@ -17,6 +18,7 @@ except ImportError as exc:  # pragma: no cover - GUI無し環境
 from openpyxl import load_workbook
 from .layout_naming import with_random_prefix
 from .layout_template_gui import TemplateGuiMixin
+from .layout_grid import CellGrid
 
 from .layout_txt import (
     FIELD_DEFAULTS_SHEET,
@@ -640,6 +642,7 @@ class LayoutTxtGui(TemplateGuiMixin):
         _wrap_description(
             selector,
             text="出力/OCR値/属性/FIELD_ID/座標はダブルクリックで編集できます。"
+                 " ドラッグ/Shift+クリックで範囲選択、Ctrl+C/Vでコピー/貼付、Deleteでクリア、Ctrl+Zで元に戻します。"
                  " 座標はX,Y,幅,高さ（例: 10,10,50,50）です。"
                  " 保存ボタンは表示中FORMのOCR・属性・座標を「項目既定値」Sheetへ書き込みます。",
             foreground="#666").grid(row=3, column=0, columnspan=7, sticky="w", pady=(5, 0))
@@ -793,6 +796,11 @@ class LayoutTxtGui(TemplateGuiMixin):
         ybar.grid(row=0, column=1, sticky="ns")
         xbar.grid(row=1, column=0, sticky="we")
         self.tree.bind("<Double-1>", self._begin_cell_edit)
+        self.field_grid = CellGrid(
+            self.tree, EDITABLE_COLUMNS, self._apply_field_cells, self.status_var.set)
+        self.package_grid = CellGrid(
+            self.package_tree, PACKAGE_EDITABLE_COLUMNS, self._apply_package_cells,
+            self.status_var.set)
 
         status = tk.Label(shell, textvariable=self.status_var, anchor="w", justify="left",
                           fg="#333", wraplength=1160)
@@ -942,6 +950,8 @@ class LayoutTxtGui(TemplateGuiMixin):
 
     def _clear_tree(self) -> None:
         self._finish_cell_edit(save=False)
+        if hasattr(self, 'field_grid'):
+            self.field_grid.reset()
         for item in self.tree.get_children(""):
             self.tree.delete(item)
 
@@ -979,6 +989,9 @@ class LayoutTxtGui(TemplateGuiMixin):
                 self.visible_column_vars["item_name"].set(True)
             self.visible_columns = visible
         if hasattr(self, "tree"):
+            if hasattr(self, 'field_grid'):
+                self.field_grid.finish(True)
+                self.field_grid.reset()
             self.tree.configure(displaycolumns=tuple(self.visible_columns))
         if save and hasattr(self, "tree"):
             self._save_persisted_settings(show_message=False)
@@ -1032,6 +1045,8 @@ class LayoutTxtGui(TemplateGuiMixin):
         editor.bind("<FocusOut>", lambda _event: self._finish_cell_edit(save=True))
 
     def _finish_cell_edit(self, save: bool) -> None:
+        if hasattr(self, 'field_grid') and self.field_grid.editor is not None:
+            self.field_grid.finish(save)
         if self.cell_editor is None:
             return
         editor = self.cell_editor
@@ -1049,6 +1064,69 @@ class LayoutTxtGui(TemplateGuiMixin):
                     values[TREE_COLUMNS.index("coordinates")] = ""
                 self.tree.item(item, values=values)
         editor.destroy()
+
+    def _restore_field_cells(self, snapshot):
+        previous = {iid: tuple(self.tree.item(iid, 'values')) for iid in snapshot}
+        for iid, values in snapshot.items():
+            self.tree.item(iid, values=values)
+        return lambda: self._restore_field_cells(previous)
+
+    def _apply_field_cells(self, changes):
+        pending = {}
+        for (iid, column), value in changes.items():
+            if column not in EDITABLE_COLUMNS or not self.tree.exists(iid):
+                raise ValueError('編集できないセルです。')
+            if column == 'include' and value not in ('0', '1'):
+                raise ValueError('出力列は0または1を入力してください。')
+            values = pending.setdefault(iid, list(self.tree.item(iid, 'values')))
+            values[TREE_COLUMNS.index(column)] = value
+        # 矩形全体を適用してから空OCR規則を評価する。貼付順に依存させない。
+        for values in pending.values():
+            if values[TREE_COLUMNS.index('value')] == '':
+                values[TREE_COLUMNS.index('attribute_flag')] = ''
+                values[TREE_COLUMNS.index('coordinates')] = ''
+        return self._restore_field_cells(pending)
+
+    def _restore_package_cells(self, snapshot):
+        previous = {iid: (copy.copy(self.package_items[iid]),
+                          self.package_tree.set(iid, 'include')) for iid in snapshot}
+        for iid, (item, include) in snapshot.items():
+            self.package_items[iid] = copy.copy(item)
+            self.package_tree.item(iid, values=self._package_values(item, include))
+        return lambda: self._restore_package_cells(previous)
+
+    def _apply_package_cells(self, changes):
+        pending = {}
+        for (iid, column), value in changes.items():
+            if column not in PACKAGE_EDITABLE_COLUMNS or iid not in self.package_items:
+                raise ValueError('編集できないセルです。')
+            if iid not in pending:
+                pending[iid] = (copy.copy(self.package_items[iid]),
+                                self.package_tree.set(iid, 'include'))
+            item, include = pending[iid]
+            if column == 'include':
+                if value not in ('0', '1'):
+                    raise ValueError('出力列は0または1を入力してください。')
+                pending[iid] = (item, value)
+            elif column == 'base_name':
+                if not value.strip():
+                    raise ValueError('画像基礎名は空にできません。')
+                item.base_name = value.strip()
+            elif column == 'extra_fields':
+                try:
+                    item.extra_fields = parse_extra_fields(value)
+                except LayoutTarError as exc:
+                    raise ValueError(str(exc))
+            else:
+                setattr(item, column, value if column == 'back_recognition_result' else value.strip())
+        names = set()
+        for iid, original in self.package_items.items():
+            item = pending[iid][0] if iid in pending else original
+            name = item.safe_base_name.lower()
+            if name in names:
+                raise ValueError('画像基礎名が重複しています: %s' % item.safe_base_name)
+            names.add(name)
+        return self._restore_package_cells(pending)
 
     def _screen_edits(self):
         self._finish_cell_edit(save=True)
@@ -1149,6 +1227,8 @@ class LayoutTxtGui(TemplateGuiMixin):
                 setattr(item, name, variable.get().strip())
 
     def _insert_package_item(self, item: PackageItem) -> str:
+        self.package_grid.finish(True)
+        self.package_grid.reset()
         self._prepare_package_csv_fields(item)
         self.package_sequence += 1
         iid = "package_%05d" % self.package_sequence
@@ -1161,6 +1241,7 @@ class LayoutTxtGui(TemplateGuiMixin):
 
     def _apply_package_csv_defaults(self) -> None:
         self._finish_package_cell_edit(save=True)
+        self.package_grid.reset()
         targets = list(self.package_tree.selection())
         if not targets:
             targets = list(self.package_tree.get_children(""))
@@ -1210,6 +1291,8 @@ class LayoutTxtGui(TemplateGuiMixin):
             messagebox.showerror("帳票追記エラー", str(exc), parent=self.root)
             return
         item.front_recognition_text = combined
+        if hasattr(self, 'package_grid'):
+            self.package_grid.reset()
         include = self.package_tree.set(iid, "include") or "1"
         self.package_tree.item(iid, values=self._package_values(item, include))
         self.status_var.set(
@@ -1376,6 +1459,8 @@ class LayoutTxtGui(TemplateGuiMixin):
         self.status_var.set(message)
 
     def _set_back_image_for_selected(self) -> None:
+        self._finish_package_cell_edit(save=True)
+        self.package_grid.reset()
         selected = list(self.package_tree.selection())
         if len(selected) != 1:
             messagebox.showwarning(
@@ -1428,6 +1513,7 @@ class LayoutTxtGui(TemplateGuiMixin):
 
     def _remove_package_items(self) -> None:
         self._finish_package_cell_edit(save=True)
+        self.package_grid.reset()
         for iid in list(self.package_tree.selection()):
             self.package_items.pop(iid, None)
             if self.package_tree.exists(iid):
@@ -1442,6 +1528,7 @@ class LayoutTxtGui(TemplateGuiMixin):
                 parent=self.root):
             return
         self._finish_package_cell_edit(save=False)
+        self.package_grid.reset()
         for iid in self.package_tree.get_children(""):
             self.package_tree.delete(iid)
         self.package_items.clear()
@@ -1481,6 +1568,8 @@ class LayoutTxtGui(TemplateGuiMixin):
         editor.bind("<FocusOut>", lambda _event: self._finish_package_cell_edit(save=True))
 
     def _finish_package_cell_edit(self, save: bool) -> None:
+        if hasattr(self, 'package_grid') and self.package_grid.editor is not None:
+            self.package_grid.finish(save)
         if self.package_editor is None:
             return
         editor = self.package_editor

@@ -23,6 +23,7 @@ except ImportError:
     tkinter_stub.messagebox = types.SimpleNamespace()
     tkinter_stub.ttk = types.SimpleNamespace()
     sys.modules["tkinter"] = tkinter_stub
+    tkinter = tkinter_stub
 
 from autotest import gui  # noqa: E402
 from autotest import layout_txt_gui  # noqa: E402

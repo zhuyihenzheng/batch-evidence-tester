@@ -204,6 +204,7 @@ class TemplateGuiMixin(object):
             self._clear_tree()
         for iid in self.package_tree.get_children(''):
             self.package_tree.delete(iid)
+        self.package_grid.reset()
         self.package_items.clear()
         self.package_sequence = 0
         for item, include in packages:
