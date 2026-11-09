@@ -6,13 +6,14 @@ import io
 
 from .layout_grid import CellGrid
 from .layout_tar import LayoutTarError, _form_records
+from .layout_txt import LayoutTxtError, coordinate_dimensions, resize_coordinates
 
 
 COLUMNS = ('field_id', 'value', 'attribute_flag', 'coordinates')
 
 
 class PackageContentEditor(object):
-    def __init__(self, parent, text, title, on_save):
+    def __init__(self, parent, text, title, on_save, coordinate_width=50, coordinate_height=50):
         import tkinter as tk
         from tkinter import ttk
         self.records = _form_records(text)
@@ -30,6 +31,8 @@ class PackageContentEditor(object):
         self.form_var = tk.StringVar(master=self.window)
         self.presence_var = tk.StringVar(master=self.window)
         self.status_var = tk.StringVar(master=self.window)
+        self.width_var = tk.StringVar(master=self.window, value=str(coordinate_width))
+        self.height_var = tk.StringVar(master=self.window, value=str(coordinate_height))
         top = ttk.Frame(self.window, padding=8)
         top.grid(row=0, column=0, sticky='we')
         top.columnconfigure(1, weight=1)
@@ -43,6 +46,12 @@ class PackageContentEditor(object):
         ttk.Entry(fields, textvariable=self.form_var, width=16).grid(row=0, column=1, padx=6)
         ttk.Label(fields, text='対象有無:').grid(row=0, column=2, sticky='w')
         ttk.Entry(fields, textvariable=self.presence_var, width=10).grid(row=0, column=3, padx=6)
+        ttk.Label(fields, text='座標幅:').grid(row=1, column=0, sticky='w', pady=5)
+        ttk.Entry(fields, textvariable=self.width_var, width=10).grid(row=1, column=1, padx=6)
+        ttk.Label(fields, text='座標高さ:').grid(row=1, column=2, sticky='w')
+        ttk.Entry(fields, textvariable=self.height_var, width=10).grid(row=1, column=3, padx=6)
+        ttk.Button(fields, text='選択項目／全項目へ反映', command=self.resize).grid(
+            row=2, column=0, columnspan=4, sticky='w', pady=(0, 5))
         table = ttk.Frame(self.window, padding=8)
         table.grid(row=2, column=0, sticky='nsew')
         table.columnconfigure(0, weight=1)
@@ -112,6 +121,23 @@ class PackageContentEditor(object):
                 values[2] = values[3] = ''
             row.extend(values)
         return row
+
+    def resize(self):
+        from tkinter import messagebox
+        if not self.grid.finish(True):
+            return
+        try:
+            width, height = coordinate_dimensions(self.width_var.get(), self.height_var.get())
+            selected = set(self.tree.selection()) or set(self.tree.get_children(''))
+            changes = {}
+            for index, iid in enumerate(self.tree.get_children('')):
+                if iid in selected:
+                    changes[(iid, 'coordinates')] = resize_coordinates(
+                        self.tree.set(iid, 'coordinates'), index, width, height
+                    ) if self.tree.set(iid, 'value') else ''
+            self.grid.change(changes)
+        except LayoutTxtError as exc:
+            messagebox.showerror('座標設定エラー', str(exc), parent=self.window)
 
     def commit(self):
         from tkinter import messagebox

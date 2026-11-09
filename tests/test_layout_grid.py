@@ -228,6 +228,27 @@ class GridGuiTests(unittest.TestCase):
         self.assertTrue(editor.window.winfo_exists())
         editor.window.destroy()
 
+    def test_custom_dimensions_apply_to_selected_rows_and_empty_ocr(self):
+        self.app.coordinate_width_var.set('80')
+        self.app.coordinate_height_var.set('30')
+        self.grid.select(('1:1', 'coordinates'))
+        self.app._apply_coordinate_dimensions()
+        self.assertEqual(self.app.tree.set('1:1', 'coordinates'), '10,10,80,30')
+        self.assertEqual(self.app.tree.set('2:1', 'coordinates'), '10,10,50,50')
+        self.grid.undo()
+        self.assertEqual(self.app.tree.set('1:1', 'coordinates'), '10,10,50,50')
+        self.app.tree.set('1:1', 'value', '')
+        self.app._apply_coordinate_dimensions()
+        self.assertEqual(self.app.tree.set('1:1', 'coordinates'), '')
+        _iid, item, editor = self.add_editable_package()
+        self.assertEqual(editor.width_var.get(), '80')
+        self.assertEqual(editor.height_var.get(), '30')
+        editor.resize()
+        editor.save()
+        records = list(csv.reader(io.StringIO(item.front_recognition_text)))
+        self.assertEqual(records[0][-1], '10,10,80,30')
+        self.assertEqual(records[1][-1], '70,10,50,50')
+
 
 if __name__ == '__main__':
     unittest.main()

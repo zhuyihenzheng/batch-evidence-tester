@@ -196,6 +196,8 @@ class TemplateGuiMixin(object):
             return
         try:
             self._finish_package_cell_edit(save=True)
+            from .layout_txt import coordinate_dimensions
+            coordinate_dimensions(self.coordinate_width_var.get(), self.coordinate_height_var.get())
             fields = self._template_fields()
             if not fields and not self.package_items:
                 raise ValueError('Excel定義を読み込むか、出力リストへ画像を追加してください。')
@@ -222,6 +224,7 @@ class TemplateGuiMixin(object):
             'excel_var': '元の帳票定義Excel', 'output_var': '出力フォルダ',
             'sheet_var': '元の帳票定義Sheet', 'header_var': '見出し行',
             'form_var': '表示中FORM_ID', 'use_default_value_var': 'ExcelのOCR既定値を使用',
+            'coordinate_width_var': '自動座標の幅', 'coordinate_height_var': '自動座標の高さ',
             'generate_tif_var': '同名TIFを生成', 'create_tar_var': 'TARを生成',
             'tar_only_var': 'TARだけ残す', 'split_var': 'FORM_IDごとに分割',
             'overwrite_var': '既存出力を上書き',
@@ -270,6 +273,11 @@ class TemplateGuiMixin(object):
             if name not in names:
                 raise ValueError('テンプレートを開き直してください。')
             settings, fields, packages = load_template(path, name)
+            # 旧テンプレートは従来の50×50として読み込み、現在の画面値を引き継がない。
+            settings.setdefault('coordinate_width_var', '50')
+            settings.setdefault('coordinate_height_var', '50')
+            from .layout_txt import coordinate_dimensions
+            coordinate_dimensions(settings['coordinate_width_var'], settings['coordinate_height_var'])
             allowed = set(SETTING_VARIABLE_NAMES) | {'form_var'}
             if set(settings) - allowed or set(SETTING_VARIABLE_NAMES) - set(settings):
                 raise ValueError('テンプレート設定キーに不足または未対応の項目があります。')

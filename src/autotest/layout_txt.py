@@ -312,22 +312,42 @@ def generate_ocr_value(data_type: str, ime_name: str, max_digits: Optional[int],
     return _repeat_to_length(base, target)
 
 
-def _serial_coordinates(index: int) -> str:
+def coordinate_dimensions(width, height):
+    values = []
+    for label, raw in (('幅', width), ('高さ', height)):
+        text = str(raw).strip()
+        if not re.match(r'^[0-9]+$', text) or int(text) < 1:
+            raise LayoutTxtError('座標の%sは1以上の整数で指定してください: %s' % (label, raw))
+        values.append(int(text))
+    return tuple(values)
+
+
+def _serial_coordinates(index: int, width: int = 50, height: int = 50) -> str:
     # 取込形式は X,Y,幅,高さ。末尾2値は右下座標ではない。
     column = index % AUTO_COORDINATE_COLUMNS
     row = index // AUTO_COORDINATE_COLUMNS
     left = AUTO_COORDINATE_MARGIN + column * (
-        AUTO_COORDINATE_SIZE + AUTO_COORDINATE_GAP)
+        width + AUTO_COORDINATE_GAP)
     top = AUTO_COORDINATE_MARGIN + row * (
-        AUTO_COORDINATE_SIZE + AUTO_COORDINATE_GAP)
+        height + AUTO_COORDINATE_GAP)
     return "%d,%d,%d,%d" % (
-        left, top, AUTO_COORDINATE_SIZE, AUTO_COORDINATE_SIZE)
+        left, top, width, height)
 
 
-def _coordinate_value(coordinates: str, index: int) -> str:
+def resize_coordinates(coordinates, index, width, height):
+    width, height = coordinate_dimensions(width, height)
+    if not coordinates:
+        return _serial_coordinates(index, width, height)
+    parts = str(coordinates).split(',')
+    if len(parts) != 4 or any(not re.match(r'^-?[0-9]+$', part.strip()) for part in parts[:2]):
+        raise LayoutTxtError('座標はX,Y,幅,高さで指定してください: %s' % coordinates)
+    return ','.join(parts[:2] + [str(width), str(height)])
+
+
+def _coordinate_value(coordinates: str, index: int, width: int = 50, height: int = 50) -> str:
     raw = str(coordinates or "auto").strip()
     if raw.lower() in ("auto", "serial") or raw == "連番":
-        return _serial_coordinates(index)
+        return _serial_coordinates(index, width, height)
     return raw
 
 
@@ -624,7 +644,9 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                        attribute_flag: str = "0",
                        coordinates: str = "auto",
                        default_value_column: str = "auto",
-                       coordinates_column: str = "auto") -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
+                       coordinates_column: str = "auto",
+                       coordinate_width: int = 50, coordinate_height: int = 50) -> Tuple[List[LayoutField], str, int, Dict[str, int]]:
+    coordinate_width, coordinate_height = coordinate_dimensions(coordinate_width, coordinate_height)
     path = Path(excel_path)
     if not path.is_file():
         raise LayoutTxtError("Excel ファイルが見つかりません: %s" % path)
@@ -761,7 +783,7 @@ def read_layout_fields(excel_path: Path, sheet_name: Optional[str] = None,
                     value = saved_field["value"]
                 field_attribute = saved_field.get("attribute_flag", attribute_flag)
                 field_coordinates = (saved_coordinates or
-                                     _coordinate_value(coordinates, coordinate_index))
+                                     _coordinate_value(coordinates, coordinate_index, coordinate_width, coordinate_height))
                 if use_saved_coordinates and "coordinates" in saved_field:
                     field_coordinates = saved_field["coordinates"]
                 if value == "":
@@ -1143,16 +1165,16 @@ def _copy_fields(fields: Sequence[LayoutField]) -> List[LayoutField]:
     return [_copy_field(field) for field in fields]
 
 
-def _deduplicate_coordinates(fields: Sequence[LayoutField]) -> None:
+def _deduplicate_coordinates(fields: Sequence[LayoutField], width=50, height=50) -> None:
     seen = set()
     next_index = 0
     for field in fields:
         coordinate = field.coordinates
         if coordinate and coordinate in seen:
-            candidate = _serial_coordinates(next_index)
+            candidate = _serial_coordinates(next_index, width, height)
             while candidate in seen:
                 next_index += 1
-                candidate = _serial_coordinates(next_index)
+                candidate = _serial_coordinates(next_index, width, height)
             field.coordinates = candidate
             next_index += 1
         if field.coordinates:
@@ -1197,7 +1219,7 @@ def _invalid_ime_value(field: LayoutField) -> str:
 
 def _make_pattern_case(source_form_id: str, base_fields: Sequence[LayoutField],
                        target_presence: str, pattern: str,
-                       sequence: int) -> GeneratedCase:
+                       sequence: int, coordinate_width=50, coordinate_height=50) -> GeneratedCase:
     fields = _copy_fields(base_fields)
     form_id = source_form_id
     target = target_presence
@@ -1311,14 +1333,14 @@ def _make_pattern_case(source_form_id: str, base_fields: Sequence[LayoutField],
 
     # Normal output must retain explicit Excel/GUI coordinates, including duplicates.
     if pattern != "normal":
-        _deduplicate_coordinates(fields)
+        _deduplicate_coordinates(fields, coordinate_width, coordinate_height)
     return GeneratedCase(
         source_form_id=source_form_id, form_id=form_id, fields=fields,
         target_presence=target, pattern=pattern, sequence=sequence)
 
 
 def _build_cases(groups, coverage_form_id: str, error_patterns: str,
-                 target_presence: str) -> List[GeneratedCase]:
+                 target_presence: str, coordinate_width=50, coordinate_height=50) -> List[GeneratedCase]:
     if error_patterns not in ("none", "core", "all"):
         raise LayoutTxtError("エラーPatternは none / core / all から指定してください: %s"
                              % error_patterns)
@@ -1331,7 +1353,7 @@ def _build_cases(groups, coverage_form_id: str, error_patterns: str,
             names = ("normal",)
         for sequence, pattern in enumerate(names, 1):
             cases.append(_make_pattern_case(
-                form_id, form_fields, target_presence, pattern, sequence))
+                form_id, form_fields, target_presence, pattern, sequence, coordinate_width, coordinate_height))
     return cases
 
 
@@ -1621,7 +1643,9 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         tar_only: bool = False,
                         default_value_column: str = "auto",
                         coordinates_column: str = "auto",
-                        prepared_fields: Optional[Sequence[LayoutField]] = None) -> GenerationResult:
+                        prepared_fields: Optional[Sequence[LayoutField]] = None,
+                        coordinate_width: int = 50, coordinate_height: int = 50) -> GenerationResult:
+    coordinate_width, coordinate_height = coordinate_dimensions(coordinate_width, coordinate_height)
     if prepared_fields is None:
         fields, actual_sheet, actual_header, columns = read_layout_fields(
             excel_path=excel_path, sheet_name=sheet_name, header_row=header_row,
@@ -1635,6 +1659,7 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
             output_example_column=output_example_column,
             default_value_column=default_value_column,
             coordinates_column=coordinates_column,
+            coordinate_width=coordinate_width, coordinate_height=coordinate_height,
             profile=profile, date_mode=date_mode,
             coverage_form_id=coverage_form_id,
             attribute_flag=attribute_flag, coordinates=coordinates)
@@ -1653,7 +1678,8 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
 
     cases = _build_cases(
         groups, coverage_form_id=coverage_form_id,
-        error_patterns=error_patterns, target_presence=target_presence)
+        error_patterns=error_patterns, target_presence=target_presence,
+        coordinate_width=coordinate_width, coordinate_height=coordinate_height)
 
     line_ending = "\r\n" if crlf else "\n"
     rendered = []  # type: List[Tuple[Path, bytes, str]]
@@ -1809,7 +1835,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attribute-flag", default="0", help="項目毎の属性フラグ（既定: 0）")
     parser.add_argument(
         "--coordinates", default="auto",
-        help="Excel座標が空の場合のX,Y,幅,高さ（既定: autoで50×50、10項目ごとに改行）")
+        help="Excel座標が空の場合のX,Y,幅,高さ（autoで幅・高さ設定を使用、10項目ごとに改行）")
+    parser.add_argument('--coordinate-width', default=50, type=int, help='自動座標の幅（既定: 50）')
+    parser.add_argument('--coordinate-height', default=50, type=int, help='自動座標の高さ（既定: 50）')
     parser.add_argument("--lf", action="store_true", help="改行を CRLF ではなく LF にする")
     return parser
 
@@ -1868,6 +1896,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             tar_name=args.tar_name, tar_only=args.tar_only,
             overwrite=args.overwrite, target_presence=args.target_presence,
             attribute_flag=args.attribute_flag, coordinates=args.coordinates,
+            coordinate_width=args.coordinate_width, coordinate_height=args.coordinate_height,
             crlf=not args.lf)
     except LayoutTxtError as exc:
         print("[設定エラー] %s" % exc, file=sys.stderr)

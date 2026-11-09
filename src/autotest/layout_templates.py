@@ -144,6 +144,8 @@ def export_template_batch(entries, output_dir, mode):
                         generate_tif=settings.get('generate_tif_var', True),
                         create_tar=settings.get('create_tar_var', True) or settings.get('tar_only_var', False),
                         tar_only=settings.get('tar_only_var', False),
+                        coordinate_width=settings.get('coordinate_width_var', '50'),
+                        coordinate_height=settings.get('coordinate_height_var', '50'),
                         tar_name=settings.get('tar_name_var', '{source}_layout_data'))
                     continue
                 items = [item for item, include in packages if include == '1']

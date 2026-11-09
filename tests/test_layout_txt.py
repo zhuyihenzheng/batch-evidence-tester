@@ -178,6 +178,43 @@ class TestReadLayoutFields(LayoutWorkbookCase):
         for field in fields:
             self.assertEqual(field.coordinates.split(',')[2:], ['50', '50'])
 
+    def test_custom_coordinate_dimensions_control_grid_spacing(self):
+        fields, _, _, _ = read_layout_fields(self.book, coordinate_width='80', coordinate_height='30')
+        self.assertEqual(fields[0].coordinates, '10,10,80,30')
+        self.assertEqual(fields[1].coordinates, '100,10,80,30')
+        self.assertEqual(fields[9].coordinates, '820,10,80,30')
+        self.assertEqual(fields[10].coordinates, '10,50,80,30')
+        self.assertEqual(fields[52].coordinates, '10,10,80,30')
+
+    def test_invalid_coordinate_dimensions_are_rejected(self):
+        for width, height in ((0, 50), (50, -1), ('1.5', 50), ('abc', 50), (True, 50)):
+            with self.subTest(width=width, height=height), self.assertRaises(LayoutTxtError):
+                read_layout_fields(self.book, coordinate_width=width, coordinate_height=height)
+
+    def test_resize_preserves_position_and_explicit_values_win_on_read(self):
+        from autotest.layout_txt import resize_coordinates
+        self.assertEqual(resize_coordinates('70,10,50,50', 0, 80, 30), '70,10,80,30')
+        self.assertEqual(resize_coordinates('', 10, 80, 30), '10,50,80,30')
+        with self.assertRaises(LayoutTxtError):
+            resize_coordinates('invalid', 0, 80, 30)
+        wb = load_workbook(str(self.book))
+        wb.active['R2'] = '座標'
+        wb.active['R3'] = '1,2,3,4'
+        wb.save(str(self.book))
+        wb.close()
+        fields, _, _, _ = read_layout_fields(self.book, coordinate_width=80, coordinate_height=30)
+        self.assertEqual(fields[0].coordinates, '1,2,3,4')
+        self.assertEqual(fields[1].coordinates, '100,10,80,30')
+
+    def test_coordinate_dimensions_cli_output(self):
+        output = self.tmp / 'sized'
+        code = layout_main([str(self.book), '--out-dir', str(output), '--no-tif',
+                            '--error-patterns', 'none', '--coordinate-width', '80',
+                            '--coordinate-height', '30'])
+        self.assertEqual(code, 0)
+        row = next(csv.reader(io.StringIO((output / '1001.txt').read_text(encoding='cp932'))))
+        self.assertEqual(row[5], '10,10,80,30')
+
     def test_column_can_be_selected_by_header_or_letter(self):
         fields, _sheet, _header, columns = read_layout_fields(
             self.book, form_column="B", layout_column="C", field_column="ELEMENT_ID",

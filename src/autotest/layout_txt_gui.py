@@ -29,6 +29,8 @@ from .layout_txt import (
     render_form_tif_payload,
     render_form_txt_text,
     resolve_form_filename_stem,
+    coordinate_dimensions,
+    resize_coordinates,
     save_layout_field_defaults,
 )
 from .layout_tar import (
@@ -156,6 +158,7 @@ SETTING_VARIABLE_NAMES = (
     "output_example_col_var", "default_value_col_var", "coordinates_col_var", "use_default_value_var",
     "profile_var", "date_mode_var", "attribute_flag_var",
     "coverage_form_var", "filename_template_var",
+    "coordinate_width_var", "coordinate_height_var",
     "generate_tif_var", "create_tar_var", "tar_only_var", "tar_name_var",
     "encoding_var", "split_var", "overwrite_var",
     "package_tar_name_var", "package_result_var", "package_include_back_var",
@@ -243,6 +246,8 @@ class LayoutTxtGui(TemplateGuiMixin):
         self.profile_var = tk.StringVar(value=PROFILE_LABELS[0][0])
         self.date_mode_var = tk.StringVar(value=DATE_MODE_LABELS[0][0])
         self.attribute_flag_var = tk.StringVar(value="0")
+        self.coordinate_width_var = tk.StringVar(value='50')
+        self.coordinate_height_var = tk.StringVar(value='50')
         self.coverage_form_var = tk.StringVar(value="4001")
         self.filename_template_var = tk.StringVar(value="{form_id}")
         self.generate_tif_var = tk.BooleanVar(value=True)
@@ -606,6 +611,14 @@ class LayoutTxtGui(TemplateGuiMixin):
         for column in range(10):
             generation_details.columnconfigure(column, weight=1 if column in (1, 3) else 0)
         _wrap_controls(flags)
+        dimensions = ttk.Frame(generation_details)
+        dimensions.grid(row=8, column=0, columnspan=4, sticky='we', pady=(6, 0))
+        for label, variable in (('座標幅:', self.coordinate_width_var), ('座標高さ:', self.coordinate_height_var)):
+            ttk.Label(dimensions, text=label).pack(side='left')
+            ttk.Entry(dimensions, textvariable=variable, width=8).pack(side='left')
+        ttk.Button(dimensions, text='選択項目／全項目の座標サイズに反映',
+                   command=self._apply_coordinate_dimensions).pack(side='left')
+        _wrap_controls(dimensions)
         generation_details.grid_remove()
 
         selector = ttk.LabelFrame(outer, text="FORM_IDを選択して内容を編集", padding=8)
@@ -914,6 +927,8 @@ class LayoutTxtGui(TemplateGuiMixin):
                 self.default_value_col_var.get()
                 if self.use_default_value_var.get() else "none"),
             "coordinates_column": self.coordinates_col_var.get(),
+            "coordinate_width": self.coordinate_width_var.get(),
+            "coordinate_height": self.coordinate_height_var.get(),
             "attribute_flag": self.attribute_flag_var.get(),
             "profile": _value_for_label(PROFILE_LABELS, self.profile_var.get()),
             "date_mode": _value_for_label(DATE_MODE_LABELS, self.date_mode_var.get()),
@@ -1073,6 +1088,22 @@ class LayoutTxtGui(TemplateGuiMixin):
         for iid, values in snapshot.items():
             self.tree.item(iid, values=values)
         return lambda: self._restore_field_cells(previous)
+
+    def _apply_coordinate_dimensions(self):
+        if not self.field_grid.finish(True):
+            return
+        try:
+            width, height = coordinate_dimensions(self.coordinate_width_var.get(), self.coordinate_height_var.get())
+            selected = set(self.tree.selection()) or set(self.tree.get_children(''))
+            changes = {}
+            for index, iid in enumerate(self.tree.get_children('')):
+                if iid in selected:
+                    value = self.tree.set(iid, 'value')
+                    changes[(iid, 'coordinates')] = resize_coordinates(
+                        self.tree.set(iid, 'coordinates'), index, width, height) if value else ''
+            self.field_grid.change(changes)
+        except LayoutTxtError as exc:
+            messagebox.showerror('座標設定エラー', str(exc), parent=self.root)
 
     def _apply_field_cells(self, changes):
         pending = {}
@@ -1327,7 +1358,8 @@ class LayoutTxtGui(TemplateGuiMixin):
 
         try:
             self.package_content_editor = PackageContentEditor(
-                self.root, original_text, item.front_recognition_name, save)
+                self.root, original_text, item.front_recognition_name, save,
+                self.coordinate_width_var.get(), self.coordinate_height_var.get())
         except LayoutTarError as exc:
             messagebox.showerror('内容編集エラー', str(exc), parent=self.root)
 
@@ -1861,6 +1893,7 @@ class LayoutTxtGui(TemplateGuiMixin):
                     self.default_value_col_var.get()
                     if self.use_default_value_var.get() else "none"),
                 coordinates_column=self.coordinates_col_var.get(),
+                coordinate_width=self.coordinate_width_var.get(), coordinate_height=self.coordinate_height_var.get(),
                 attribute_flag=self.attribute_flag_var.get(),
                 profile=_value_for_label(PROFILE_LABELS, self.profile_var.get()),
                 date_mode=_value_for_label(DATE_MODE_LABELS, self.date_mode_var.get()),
