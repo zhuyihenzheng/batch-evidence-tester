@@ -339,6 +339,24 @@ class LayoutTxtGui(object):
         if keep_bottom_visible:
             self.content_canvas.yview_moveto(1.0)
 
+    def _toggle_column_settings(self) -> None:
+        if self.column_settings_frame.winfo_manager():
+            self.column_settings_frame.grid_remove()
+            self.column_settings_button.configure(text="▶ 詳細な列設定を表示")
+        else:
+            self.column_settings_frame.grid()
+            self.column_settings_button.configure(text="▼ 詳細な列設定を隠す")
+        self.root.after_idle(self._fit_content_to_canvas)
+
+    def _toggle_generation_settings(self) -> None:
+        if self.generation_settings_frame.winfo_manager():
+            self.generation_settings_frame.grid_remove()
+            self.generation_settings_button.configure(text="▶ 生成・ファイル設定を表示")
+        else:
+            self.generation_settings_frame.grid()
+            self.generation_settings_button.configure(text="▼ 生成・ファイル設定を隠す")
+        self.root.after_idle(self._fit_content_to_canvas)
+
     def _load_persisted_settings(self) -> None:
         try:
             settings = load_settings(self.settings_path)
@@ -457,8 +475,14 @@ class LayoutTxtGui(object):
             ("OCR既定値", self.default_value_col_var),
             ("座標既定値", self.coordinates_col_var),
         )
+        self.column_settings_button = ttk.Button(
+            source, text="▶ 詳細な列設定を表示",
+            command=self._toggle_column_settings)
+        self.column_settings_button.grid(
+            row=3, column=0, columnspan=8, sticky="w", pady=(7, 0))
         columns_frame = ttk.Frame(source)
-        columns_frame.grid(row=3, column=0, columnspan=8, sticky="we", pady=(7, 0))
+        self.column_settings_frame = columns_frame
+        columns_frame.grid(row=4, column=0, columnspan=8, sticky="we", pady=(4, 0))
         for index, (label, variable) in enumerate(required_column_items):
             row, column = divmod(index, 4)
             ttk.Label(columns_frame, text=label + ":").grid(row=row, column=column * 2, sticky="w")
@@ -484,49 +508,58 @@ class LayoutTxtGui(object):
             text="OFFにするとOCR既定値だけを無効化して自動生成値へ戻します。",
             foreground="#666").grid(
                 row=6, column=0, columnspan=8, sticky="w", pady=(6, 0))
+        columns_frame.grid_remove()
 
         generation = ttk.LabelFrame(outer, text="生成・ファイル設定", padding=8)
         generation.grid(row=2, column=0, sticky="we", pady=(8, 0))
+        generation.columnconfigure(0, weight=1)
+        self.generation_settings_button = ttk.Button(
+            generation, text="▶ 生成・ファイル設定を表示",
+            command=self._toggle_generation_settings)
+        self.generation_settings_button.grid(row=0, column=0, sticky="w")
+        generation_details = ttk.Frame(generation)
+        self.generation_settings_frame = generation_details
+        generation_details.grid(row=1, column=0, sticky="we", pady=(4, 0))
         for column in range(10):
-            generation.columnconfigure(
+            generation_details.columnconfigure(
                 column, weight=1 if column in (1, 3, 5, 7, 9) else 0)
 
-        ttk.Label(generation, text="データ:").grid(row=0, column=0, sticky="w")
+        ttk.Label(generation_details, text="データ:").grid(row=0, column=0, sticky="w")
         ttk.Combobox(
-            generation, textvariable=self.profile_var,
+            generation_details, textvariable=self.profile_var,
             values=[label for label, _value in PROFILE_LABELS],
             state="readonly", width=19).grid(row=0, column=1, sticky="we", padx=(5, 12))
-        ttk.Label(generation, text="日付:").grid(row=0, column=2, sticky="w")
+        ttk.Label(generation_details, text="日付:").grid(row=0, column=2, sticky="w")
         ttk.Combobox(
-            generation, textvariable=self.date_mode_var,
+            generation_details, textvariable=self.date_mode_var,
             values=[label for label, _value in DATE_MODE_LABELS],
             state="readonly", width=27).grid(row=0, column=3, sticky="we", padx=(5, 12))
-        ttk.Label(generation, text="全網羅Form:").grid(row=0, column=4, sticky="w")
-        ttk.Entry(generation, textvariable=self.coverage_form_var, width=10).grid(
+        ttk.Label(generation_details, text="全網羅Form:").grid(row=0, column=4, sticky="w")
+        ttk.Entry(generation_details, textvariable=self.coverage_form_var, width=10).grid(
             row=0, column=5, sticky="w", padx=(5, 12))
-        ttk.Label(generation, text="属性既定値:").grid(row=0, column=6, sticky="w")
-        ttk.Entry(generation, textvariable=self.attribute_flag_var, width=10).grid(
+        ttk.Label(generation_details, text="属性既定値:").grid(row=0, column=6, sticky="w")
+        ttk.Entry(generation_details, textvariable=self.attribute_flag_var, width=10).grid(
             row=0, column=7, sticky="we", padx=(5, 0))
 
-        ttk.Label(generation, text="TXT名:").grid(row=1, column=0, sticky="w", pady=(7, 0))
-        ttk.Entry(generation, textvariable=self.filename_template_var).grid(
+        ttk.Label(generation_details, text="TXT名:").grid(row=1, column=0, sticky="w", pady=(7, 0))
+        ttk.Entry(generation_details, textvariable=self.filename_template_var).grid(
             row=1, column=1, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="画像＋TXT TAR名:").grid(
+        ttk.Label(generation_details, text="画像＋TXT TAR名:").grid(
             row=1, column=2, sticky="w", pady=(7, 0))
-        ttk.Entry(generation, textvariable=self.tar_name_var).grid(
+        ttk.Entry(generation_details, textvariable=self.tar_name_var).grid(
             row=1, column=3, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="画像＋CSV TAR名:").grid(
+        ttk.Label(generation_details, text="画像＋CSV TAR名:").grid(
             row=1, column=4, sticky="w", pady=(7, 0))
-        ttk.Entry(generation, textvariable=self.package_tar_name_var).grid(
+        ttk.Entry(generation_details, textvariable=self.package_tar_name_var).grid(
             row=1, column=5, sticky="we", padx=(5, 12), pady=(7, 0))
-        ttk.Label(generation, text="文字コード:").grid(row=1, column=6, sticky="w", pady=(7, 0))
+        ttk.Label(generation_details, text="文字コード:").grid(row=1, column=6, sticky="w", pady=(7, 0))
         ttk.Combobox(
-            generation, textvariable=self.encoding_var,
+            generation_details, textvariable=self.encoding_var,
             values=("cp932", "utf-8-sig", "utf-8"),
             state="readonly", width=12).grid(
                 row=1, column=7, sticky="we", padx=(5, 0), pady=(7, 0))
 
-        flags = ttk.Frame(generation)
+        flags = ttk.Frame(generation_details)
         flags.grid(row=2, column=0, columnspan=10, sticky="w", pady=(7, 0))
         ttk.Checkbutton(flags, text="FormIDごとに分割", variable=self.split_var).pack(
             side="left", padx=(0, 14))
@@ -547,17 +580,17 @@ class LayoutTxtGui(object):
             command=self._enable_random_filename_prefix).pack(side="left")
 
         _wrap_description(
-            generation,
+            generation_details,
             text="TXT名: {form_id}/{pattern}/{seq:02d}/{source}/{random9}  "
                  "両TAR名: {form_id}/{source}/{random9}（生成ごとに9桁乱数）",
             foreground="#666").grid(row=3, column=0, columnspan=10, sticky="w", pady=(5, 0))
         _wrap_description(
-            generation, text="設定保存先: %s" % self.settings_path,
+            generation_details, text="設定保存先: %s" % self.settings_path,
             foreground="#666").grid(
                 row=4, column=0, columnspan=10, sticky="w", pady=(3, 0))
 
         # Two label/input pairs per row keep every field accessible at 1280px.
-        for widget in generation.winfo_children():
+        for widget in generation_details.winfo_children():
             position = widget.grid_info()
             row, column = int(position["row"]), int(position["column"])
             if row < 2:
@@ -567,8 +600,9 @@ class LayoutTxtGui(object):
             else:
                 widget.grid_configure(row=row + 3, columnspan=4, sticky="we")
         for column in range(10):
-            generation.columnconfigure(column, weight=1 if column in (1, 3) else 0)
+            generation_details.columnconfigure(column, weight=1 if column in (1, 3) else 0)
         _wrap_controls(flags)
+        generation_details.grid_remove()
 
         selector = ttk.LabelFrame(outer, text="FORM_IDを選択して内容を編集", padding=8)
         selector.grid(row=3, column=0, sticky="we", pady=(8, 0))
