@@ -1619,22 +1619,28 @@ def generate_layout_txt(excel_path: Path, output_dir: Path,
                         create_tar: bool = False, tar_name: str = "",
                         tar_only: bool = False,
                         default_value_column: str = "auto",
-                        coordinates_column: str = "auto") -> GenerationResult:
-    fields, actual_sheet, actual_header, columns = read_layout_fields(
-        excel_path=excel_path, sheet_name=sheet_name, header_row=header_row,
-        form_column=form_column, layout_column=layout_column,
-        field_column=field_column, item_column=item_column,
-        data_type_column=data_type_column, ime_column=ime_column,
-        max_digits_column=max_digits_column,
-        input_attribute_column=input_attribute_column,
-        input_rule_column=input_rule_column,
-        notes_column=notes_column,
-        output_example_column=output_example_column,
-        default_value_column=default_value_column,
-        coordinates_column=coordinates_column,
-        profile=profile, date_mode=date_mode,
-        coverage_form_id=coverage_form_id,
-        attribute_flag=attribute_flag, coordinates=coordinates)
+                        coordinates_column: str = "auto",
+                        prepared_fields: Optional[Sequence[LayoutField]] = None) -> GenerationResult:
+    if prepared_fields is None:
+        fields, actual_sheet, actual_header, columns = read_layout_fields(
+            excel_path=excel_path, sheet_name=sheet_name, header_row=header_row,
+            form_column=form_column, layout_column=layout_column,
+            field_column=field_column, item_column=item_column,
+            data_type_column=data_type_column, ime_column=ime_column,
+            max_digits_column=max_digits_column,
+            input_attribute_column=input_attribute_column,
+            input_rule_column=input_rule_column,
+            notes_column=notes_column,
+            output_example_column=output_example_column,
+            default_value_column=default_value_column,
+            coordinates_column=coordinates_column,
+            profile=profile, date_mode=date_mode,
+            coverage_form_id=coverage_form_id,
+            attribute_flag=attribute_flag, coordinates=coordinates)
+    else:
+        # テンプレートの確定値を元Excelの既定値で再生成しない。
+        fields = list(prepared_fields)
+        actual_sheet, actual_header, columns = sheet_name or "テンプレート", header_row or 1, {}
 
     fields = _filter_and_override_fields(
         fields, selected_form_ids=selected_form_ids,

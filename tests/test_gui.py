@@ -257,6 +257,55 @@ class LayoutPackageFilenameCase(unittest.TestCase):
             confirm.assert_not_called()
 
 
+@unittest.skipUnless(hasattr(tkinter, "Tk"), "Tk is required")
+class LayoutTemplateGuiCase(unittest.TestCase):
+    def test_save_load_preserves_form_edits_and_package_overrides(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = tkinter.Tk()
+            root.withdraw()
+            try:
+                with mock.patch.object(layout_txt_gui, 'default_settings_path',
+                                       return_value=Path(directory) / 'settings.json'):
+                    app = layout_txt_gui.LayoutTxtGui(root)
+                first = LayoutField('1001', '1', '1', '名前', '文字列', '', 10, '001', 3)
+                second = LayoutField('1002', '1', '1', '名前', '文字列', '', 10, '002', 4)
+                app.loaded_fields = [first, second]
+                app.form_fields = {'1001': [first], '1002': [second]}
+                app.form_var.set('1001')
+                app._show_selected_form()
+                app.tree.set('3:1', 'value', '編集後')
+                app.tree.set('3:1', 'include', '0')
+                app.form_var.set('1002')
+                app._show_selected_form()
+                app.form_var.set('1001')
+                app._show_selected_form()
+                self.assertEqual(app.tree.set('3:1', 'value'), '編集後')
+                item = layout_txt_gui.PackageItem(
+                    '001_', form_id='777', front_image_bytes=b'image',
+                    front_recognition_text='"1001","1","1","001","0","10,10,60,60"\r\n')
+                app._insert_package_item(item)
+                app.package_tree.set('package_00001', 'include', '0')
+                app.template_path = Path(directory) / 'templates.xlsx'
+                with mock.patch.object(layout_txt_gui.messagebox, 'showinfo'), \
+                        mock.patch.object(layout_txt_gui.messagebox, 'showerror') as error:
+                    app._save_template(name='正常')
+                    error.assert_not_called()
+                app.tree.set('3:1', 'value', '破棄')
+                app.package_form_id_var.set('999')
+                with mock.patch.object(layout_txt_gui.messagebox, 'askyesno', return_value=True), \
+                        mock.patch.object(layout_txt_gui.messagebox, 'showerror') as error:
+                    app._load_template()
+                    error.assert_not_called()
+                self.assertEqual(app.tree.set('3:1', 'value'), '編集後')
+                self.assertEqual(app.tree.set('3:1', 'include'), '0')
+                self.assertEqual(app.package_items['package_00001'].form_id, '777')
+                self.assertEqual(app.package_tree.set('package_00001', 'include'), '0')
+                self.assertTrue(app.template_mode)
+                root.update()
+            finally:
+                root.destroy()
+
+
 @unittest.skipUnless(os.name == "nt", "Actual Windows Tk layout check")
 class LayoutSmallScreenCase(unittest.TestCase):
     def test_controls_fit_without_page_horizontal_scrolling(self):
@@ -277,6 +326,10 @@ class LayoutSmallScreenCase(unittest.TestCase):
                             layout_txt_gui, "default_settings_path",
                             return_value=Path(directory) / "settings.json"):
                         app = layout_txt_gui.LayoutTxtGui(root)
+                    self.assertEqual(app.column_settings_frame.winfo_manager(), "")
+                    self.assertEqual(app.generation_settings_frame.winfo_manager(), "")
+                    app._toggle_column_settings()
+                    app._toggle_generation_settings()
                     root.report_callback_exception = mock.Mock()
                     root.geometry("%dx668+0+0" % width)
                     app.content_canvas.yview_moveto(0.0)

@@ -19,6 +19,9 @@ on:
       - "src/autotest/layout_txt.py"
       - "src/autotest/layout_txt_gui.py"
       - "src/autotest/layout_txt_settings.py"
+      - "src/autotest/layout_templates.py"
+      - "src/autotest/layout_template_gui.py"
+      - "tests/test_layout_templates.py"
       - "tests/test_layout_txt.py"
       - "tests/test_layout_tar.py"
       - "tests/test_gui.py"
@@ -64,6 +67,7 @@ jobs:
           python -m pytest
           tests\test_layout_txt.py
           tests\test_layout_tar.py
+          tests\test_layout_templates.py
           tests\test_gui.py
           tests\test_layout_txt_exe.py
           tests\test_pyinstaller_compat.py

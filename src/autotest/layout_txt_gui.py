@@ -16,6 +16,7 @@ except ImportError as exc:  # pragma: no cover - GUI無し環境
 
 from openpyxl import load_workbook
 from .layout_naming import with_random_prefix
+from .layout_template_gui import TemplateGuiMixin
 
 from .layout_txt import (
     FIELD_DEFAULTS_SHEET,
@@ -213,7 +214,7 @@ def _wrap_description(parent, **kwargs):
     return label
 
 
-class LayoutTxtGui(object):
+class LayoutTxtGui(TemplateGuiMixin):
     def __init__(self, root, initial_excel: Optional[Path] = None) -> None:
         self.root = root
         root.title("Layout TXT / TIF / TAR 生成ツール")
@@ -509,6 +510,7 @@ class LayoutTxtGui(object):
             foreground="#666").grid(
                 row=6, column=0, columnspan=8, sticky="w", pady=(6, 0))
         columns_frame.grid_remove()
+        self._build_template_controls(source)
 
         generation = ttk.LabelFrame(outer, text="生成・ファイル設定", padding=8)
         generation.grid(row=2, column=0, sticky="we", pady=(8, 0))
@@ -851,6 +853,9 @@ class LayoutTxtGui(object):
         self.sheet_var.set(selected if selected in names else active)
 
     def _definition_setting_changed(self, _event=None) -> None:
+        self.template_mode = False
+        self.editor_states = {}
+        self.displayed_form = None
         self.loaded_fields = []
         self.form_fields = OrderedDict()
         self.form_box.config(values=[])
@@ -919,6 +924,9 @@ class LayoutTxtGui(object):
                 messagebox.showerror("Excel定義エラー", str(exc), parent=self.root)
             return
         self.loaded_fields = fields
+        self.template_mode = False
+        self.editor_states = {}
+        self.displayed_form = None
         self.form_fields = OrderedDict()
         for field in fields:
             self.form_fields.setdefault(field.form_id, []).append(field)
@@ -944,6 +952,7 @@ class LayoutTxtGui(object):
             messagebox.showwarning("FORM_ID", "Excelに存在するFORM_IDを選択してください。",
                                    parent=self.root)
             return
+        self._capture_editor()
         self._clear_tree()
         fields = self.form_fields[form_id]
         for field in fields:
@@ -955,7 +964,9 @@ class LayoutTxtGui(object):
                 field.input_attribute, field.input_rule,
                 field.notes, field.output_example,
             )
+            values = self.editor_states.get(form_id, {}).get(field.instance_key, values)
             self.tree.insert("", "end", iid=field.instance_key, values=values)
+        self.displayed_form = form_id
         self.form_summary_var.set("%s: %d項目（ダブルクリックで編集）" % (form_id, len(fields)))
 
     def _apply_visible_columns(self, save=True) -> None:
@@ -1668,7 +1679,7 @@ class LayoutTxtGui(object):
     def _validate_paths(self):
         excel = Path(self.excel_var.get().strip())
         output_raw = self.output_var.get().strip()
-        if not excel.is_file():
+        if not excel.is_file() and not self.template_mode:
             raise LayoutTxtError("入力Excelを選択してください。")
         if not output_raw:
             raise LayoutTxtError("出力フォルダを選択してください。")
@@ -1705,6 +1716,14 @@ class LayoutTxtGui(object):
         self.status_var.set("生成中...")
         self.root.update_idletasks()
         try:
+            prepared_fields = None
+            if self.template_mode:
+                from .layout_txt import LayoutField
+                prepared_fields = []
+                for data in self._template_fields():
+                    include = data.pop('include')
+                    if include == '1':
+                        prepared_fields.append(LayoutField(**data))
             result = generate_layout_txt(
                 excel_path=excel, output_dir=output,
                 sheet_name=self.sheet_var.get() or None, header_row=self._header_row(),
@@ -1733,7 +1752,7 @@ class LayoutTxtGui(object):
                 tar_name=self.tar_name_var.get().strip(), tar_only=self.tar_only_var.get(),
                 output_format="raw",
                 encoding=self.encoding_var.get(), split_by_form=self.split_var.get(),
-                overwrite=self.overwrite_var.get())
+                overwrite=self.overwrite_var.get(), prepared_fields=prepared_fields)
         except LayoutTxtError as exc:
             self.status_var.set("生成できませんでした: %s" % exc)
             messagebox.showerror("設定エラー", str(exc), parent=self.root)
